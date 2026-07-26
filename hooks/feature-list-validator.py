@@ -49,9 +49,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from safety_common import stop_budget_consume, stop_budget_exhausted  # noqa: E402
+    from safety_common import (  # noqa: E402
+        stop_budget_consume,
+        stop_budget_exhausted,
+        untrusted_block,
+    )
 except ImportError:  # fail-open: keep the original one-shot behaviour
-    stop_budget_consume = stop_budget_exhausted = None  # type: ignore[assignment]
+    stop_budget_consume = stop_budget_exhausted = untrusted_block = None  # type: ignore[assignment]
 
 # Gate name for the shared Stop-hook rejection budget (safety_common).
 BUDGET_NAME = "feature-list"
@@ -67,6 +71,12 @@ def find_feature_list(cwd: Path):
     return None
 
 
+def _clip(value, limit: int = 60) -> str:
+    """Shorten a repository-supplied field before it reaches the block reason."""
+    text = str(value).replace("\n", " ").replace("\r", " ")
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
 def validate(data) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
@@ -78,20 +88,20 @@ def validate(data) -> list[str]:
     in_progress = [f for f in features
                    if isinstance(f, dict) and f.get("status") == "in-progress"]
     if len(in_progress) > 1:
-        ids = ", ".join(str(f.get("id", "?")) for f in in_progress)
+        ids = ", ".join(_clip(f.get("id", "?"), 40) for f in in_progress)
         errors.append(
             "WIP=1 violated: %d features in-progress (%s). Block one with "
-            "reason in evidence, or roll it back to not-started." % (len(in_progress), ids))
+            "reason in evidence, or roll it back to not-started." % (len(in_progress), _clip(ids, 240)))
 
     for f in features:
         if not isinstance(f, dict):
             errors.append("a feature entry is not an object")
             continue
-        fid = str(f.get("id", "?"))
+        fid = _clip(f.get("id", "?"), 40)
         st = f.get("status")
         if st not in VALID_STATUS:
-            errors.append("%s: invalid status %r (use %s)"
-                          % (fid, st, "/".join(sorted(VALID_STATUS))))
+            errors.append("%s: invalid status %s (use %s)"
+                          % (fid, _clip(repr(st), 40), "/".join(sorted(VALID_STATUS))))
         if st == "done":
             ev = (f.get("evidence") or "")
             ev = ev.strip() if isinstance(ev, str) else ""
@@ -160,12 +170,16 @@ def main() -> int:
         return 0
 
     rel = fl.relative_to(cwd) if cwd in fl.parents else fl
-    reason = ("feature_list.json (%s) has %d state violation(s) "
-              "(R1 resumable-context discipline):\n" % (rel, len(errors)))
-    for e in errors[:8]:
-        reason += "  - %s\n" % e
+    # The violation lines quote repository content (feature ids, statuses), so
+    # they are framed as data — a feature_list.json must not be able to address
+    # the agent through the block reason.
+    detail = "".join("  - %s\n" % e for e in errors[:8])
     if len(errors) > 8:
-        reason += "  ... and %d more\n" % (len(errors) - 8)
+        detail += "  ... and %d more\n" % (len(errors) - 8)
+    if untrusted_block is not None:
+        detail = untrusted_block(detail.rstrip("\n"), "quoted from feature_list.json")
+    reason = ("feature_list.json (%s) has %d state violation(s) "
+              "(R1 resumable-context discipline):\n%s\n" % (rel, len(errors), detail))
     reason += ("\nTo unblock: enforce WIP=1 (one in-progress), give every `done` "
                "feature real evidence, use only not-started/in-progress/blocked/done. "
                "Bypass: CLAUDE_SKIP_FEATURE_CHECK=1")
