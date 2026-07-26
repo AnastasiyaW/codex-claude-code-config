@@ -112,7 +112,12 @@ DESTRUCTIVE_INTENT = [
     # Git destructive (also covered by block_git_destructive)
     r"\bgit\s+reset\s+[^|]*--hard\b",
     r"\bgit\s+push\s+[^|]*(-f\b|--force\b)",
-    r"\bgit\s+branch\s+-D\b",
+    # -D must stay uppercase: any_match() applies re.IGNORECASE to every
+    # pattern, so a bare -D also caught the safe lowercase -d, which refuses
+    # to delete unmerged branches. Same fix as in git-destructive-guard.py.
+    r"\bgit\s+branch\s+(?-i:-D)\b",
+    r"\bgit\s+branch\s+.*--delete\b.*--force\b",
+    r"\bgit\s+branch\s+.*--force\b.*--delete\b",
     r"\bgit\s+clean\s+-[fdx]+",
     r"\bgit\s+filter-branch\b",
     r"\bgit\s+filter-repo\b",

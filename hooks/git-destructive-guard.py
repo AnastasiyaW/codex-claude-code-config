@@ -24,7 +24,15 @@ PATTERNS = [
     r"\bgit\s+reset\s+--hard\b",
     r"\bgit\s+(push\s+)?(-f|--force(?!-with-lease))\b",
     r"\bgit\s+push\s+.*--force(?!-with-lease)",
-    r"\bgit\s+branch\s+-D\b",
+    # any_match() runs every pattern with re.IGNORECASE, so a bare -D also
+    # matched the *safe* lowercase -d, which refuses to delete unmerged
+    # branches and is exactly what we recommend instead. Pin the case locally
+    # with (?-i:...) rather than dropping IGNORECASE globally — other guards
+    # rely on it for things like DROP TABLE.
+    r"\bgit\s+branch\s+(?-i:-D)\b",
+    # --delete --force is the same operation spelled out, in either order.
+    r"\bgit\s+branch\s+.*--delete\b.*--force\b",
+    r"\bgit\s+branch\s+.*--force\b.*--delete\b",
     r"\bgit\s+clean\s+-[fdxX]{2,}",
     r"\bgit\s+clean\s+-[fdx]\s+-[fdx]",
     r"\bgit\s+checkout\s+--\s+\.",
