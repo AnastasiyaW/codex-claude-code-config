@@ -48,6 +48,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from safety_common import (  # noqa: E402
+        stop_budget_consume,
+        stop_budget_exhausted,
+        untrusted_block,
+    )
+except ImportError:  # fail-open: keep the original one-shot behaviour
+    stop_budget_consume = stop_budget_exhausted = untrusted_block = None  # type: ignore[assignment]
+
+# Gate name for the shared Stop-hook rejection budget (safety_common).
+BUDGET_NAME = "kb-validate"
+
 VALIDATOR_REL = ("scripts", "validate_kb.py")
 TIMEOUT_SEC = 25
 MAX_REASON_CHARS = 1500
@@ -116,6 +129,11 @@ def evaluate(cwd: Path) -> str | None:
     body = (output or "").strip() or "validate_kb.py reported the KB is out of sync."
     if len(body) > MAX_REASON_CHARS:
         body = body[:MAX_REASON_CHARS] + "\n  ... (truncated)"
+    # validate_kb.py belongs to the repository being checked, and its stdout is
+    # delivered into the model's context as the block reason. Frame it as data
+    # so a repo cannot smuggle instructions through its own validator.
+    if untrusted_block is not None:
+        body = untrusted_block(body, "repository scripts/validate_kb.py stdout")
     return (
         "Knowledge base is out of sync with the code -- scripts/validate_kb.py "
         "failed. Fix the kb doc or the code reference before ending the session "
@@ -135,8 +153,10 @@ def main() -> int:
         event = json.loads(raw) if raw else {}
     except (json.JSONDecodeError, OSError):
         return 0
+    # Anti-loop with a budget, not a one-shot surrender (safety_common).
     if event.get("stop_hook_active"):
-        return 0
+        if stop_budget_exhausted is None or stop_budget_exhausted(BUDGET_NAME):
+            return 0
     if os.environ.get("CLAUDE_SKIP_KB_GATE"):
         return 0
 
@@ -151,6 +171,8 @@ def main() -> int:
     reason = reason_body + (
         "\n\nBypass: CLAUDE_SKIP_KB_GATE=1  or  touch .claude/.skip-kb-gate"
     )
+    if stop_budget_consume is not None:
+        stop_budget_consume(BUDGET_NAME, cwd)
     print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 

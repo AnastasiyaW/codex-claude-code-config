@@ -29,6 +29,7 @@ Register in ~/.claude/settings.json:
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 import time
@@ -37,6 +38,10 @@ from pathlib import Path
 
 # How many projects to show (latest handoff per project, full content)
 MAX_PROJECTS = 3
+# After a compaction the session is mid-work, not starting: re-inject only the
+# thread that was actually being worked on. Dumping every project's handoff
+# right after the context was squeezed spends the space compaction just freed.
+MAX_PROJECTS_AFTER_COMPACT = 1
 # Only show handoffs newer than this (hours)
 MAX_AGE_HOURS = 168  # 7 days
 
@@ -81,9 +86,29 @@ def scan_store(root: Path, store_label: str, now: float) -> list[dict]:
     return found
 
 
+def read_source() -> str:
+    """SessionStart `source`: startup | resume | clear | compact.
+
+    Reads the event JSON from stdin. Guarded by an isatty check so a manual
+    terminal run cannot block waiting for input, and fails open to "" so a
+    malformed event only costs the compact-specific behaviour.
+    """
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return ""
+        raw = sys.stdin.read().lstrip(chr(0xFEFF)).strip()
+        if not raw:
+            return ""
+        return str(json.loads(raw).get("source", "") or "")
+    except (json.JSONDecodeError, OSError, ValueError):
+        return ""
+
+
 def main() -> int:
     cwd = Path.cwd()
     claude_dir = cwd / ".claude"
+    source = read_source()
+    after_compact = source == "compact"
 
     # Reset per-session markers (so Stop hook can remind again this session)
     if claude_dir.exists():
@@ -91,6 +116,13 @@ def main() -> int:
             m = claude_dir / marker
             if m.exists():
                 m.unlink()
+        # Stop-gate rejection budgets (safety_common.stop_budget_*) are
+        # per-session: clear them so every gate starts with a full budget.
+        for budget in claude_dir.glob(".stop-budget-*"):
+            try:
+                budget.unlink()
+            except OSError:
+                pass
         # Re-create session-start marker with current time
         (claude_dir / ".session-start").touch()
 
@@ -157,14 +189,21 @@ def main() -> int:
         for items in groups.values():
             items.sort(key=lambda h: h["ts"], reverse=True)
         ordered = sorted(groups.items(), key=lambda kv: kv[1][0]["ts"], reverse=True)
-        shown = ordered[:MAX_PROJECTS]
-        rest = ordered[MAX_PROJECTS:]
+        limit = MAX_PROJECTS_AFTER_COMPACT if after_compact else MAX_PROJECTS
+        shown = ordered[:limit]
+        rest = ordered[limit:]
 
         lines.append("=" * 60)
-        lines.append(
-            f"SESSION HANDOFF(S) - {len(found)} found across "
-            f"{len(groups)} project(s), showing latest per project"
-        )
+        if after_compact:
+            lines.append(
+                f"POST-COMPACT STATE RE-INJECT - newest handoff of "
+                f"{len(groups)} project(s) with recent work"
+            )
+        else:
+            lines.append(
+                f"SESSION HANDOFF(S) - {len(found)} found across "
+                f"{len(groups)} project(s), showing latest per project"
+            )
         lines.append("=" * 60)
 
         for project, items in shown:
@@ -188,11 +227,20 @@ def main() -> int:
 
         lines.append("=" * 60)
         lines.append("")
-        lines.append(
-            "INSTRUCTION: List the handoff(s) briefly to the user "
-            "(project, timestamp, session ID, topic). Ask if they want to "
-            "continue one of them or start fresh."
-        )
+        if after_compact:
+            lines.append(
+                "INSTRUCTION: The context was just compacted mid-session — this "
+                "is state re-injection, not a session start. Resume the work "
+                "described above from where it stopped. Do NOT ask the user "
+                "which handoff to continue, and do NOT re-summarise the "
+                "handoff back to them."
+            )
+        else:
+            lines.append(
+                "INSTRUCTION: List the handoff(s) briefly to the user "
+                "(project, timestamp, session ID, topic). Ask if they want to "
+                "continue one of them or start fresh."
+            )
         lines.append("")
 
     if lines:

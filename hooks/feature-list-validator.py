@@ -47,6 +47,15 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from safety_common import stop_budget_consume, stop_budget_exhausted  # noqa: E402
+except ImportError:  # fail-open: keep the original one-shot behaviour
+    stop_budget_consume = stop_budget_exhausted = None  # type: ignore[assignment]
+
+# Gate name for the shared Stop-hook rejection budget (safety_common).
+BUDGET_NAME = "feature-list"
+
 VALID_STATUS = {"not-started", "in-progress", "blocked", "done"}
 MIN_EVIDENCE_CHARS = 12
 
@@ -127,8 +136,10 @@ def main() -> int:
     except (json.JSONDecodeError, OSError):
         return 0
 
+    # Anti-loop with a budget, not a one-shot surrender (safety_common).
     if event.get("stop_hook_active"):
-        return 0
+        if stop_budget_exhausted is None or stop_budget_exhausted(BUDGET_NAME):
+            return 0
     if os.environ.get("CLAUDE_SKIP_FEATURE_CHECK"):
         return 0
 
@@ -158,6 +169,8 @@ def main() -> int:
     reason += ("\nTo unblock: enforce WIP=1 (one in-progress), give every `done` "
                "feature real evidence, use only not-started/in-progress/blocked/done. "
                "Bypass: CLAUDE_SKIP_FEATURE_CHECK=1")
+    if stop_budget_consume is not None:
+        stop_budget_consume(BUDGET_NAME)
     print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 

@@ -73,9 +73,21 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from safety_common import (  # noqa: E402
+        stop_budget_consume,
+        stop_budget_exhausted,
+        untrusted_block,
+    )
+except ImportError:  # fail-open: keep the original one-shot behaviour
+    stop_budget_consume = stop_budget_exhausted = untrusted_block = None  # type: ignore[assignment]
+
 TEST_TIMEOUT_SEC = 180
 MAX_OUTPUT_BYTES = 4000
 MIN_SESSION_MINUTES = 2
+# Gate name for the shared Stop-hook rejection budget (safety_common).
+BUDGET_NAME = "test-gate"
 
 
 def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
@@ -89,7 +101,10 @@ def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
-            return (line.split(), f"override({line})")
+            # Label must NOT embed the file's contents: it is repository text
+            # and the label goes into the block reason outside the untrusted
+            # frame. The command itself is echoed inside that frame instead.
+            return (line.split(), "override(.claude/test-command)")
 
     pkg_json = cwd / "package.json"
     if pkg_json.exists():
@@ -163,13 +178,17 @@ def main() -> int:
     except (json.JSONDecodeError, OSError):
         return 0
 
+    cwd = Path.cwd()
+
+    # Anti-loop with a budget, not a one-shot surrender: keep enforcing while
+    # the gate still has rejections left, then yield so a stuck gate cannot
+    # deadlock the session. See safety_common.stop_budget_*.
     if event.get("stop_hook_active"):
-        return 0
+        if stop_budget_exhausted is None or stop_budget_exhausted(BUDGET_NAME, cwd):
+            return 0
 
     if os.environ.get("CLAUDE_SKIP_TEST_GATE"):
         return 0
-
-    cwd = Path.cwd()
 
     if (cwd / ".claude" / ".skip-test-gate").exists():
         return 0
@@ -219,11 +238,24 @@ def main() -> int:
     if len(output) > MAX_OUTPUT_BYTES:
         output = output[-MAX_OUTPUT_BYTES:]
 
+    # The runner's stdout goes into the model's context. Frame it as data so a
+    # repository cannot smuggle instructions in through a failing test.
+    # The command line is repository-controlled too (.claude/test-command,
+    # package.json scripts), so it goes inside the frame with the output.
+    payload = f"$ {' '.join(cmd)}\n\n{output}"
+    if untrusted_block is not None:
+        framed = untrusted_block(payload, f"{label} command + stdout/stderr, tail {MAX_OUTPUT_BYTES} bytes")
+    else:
+        framed = f"Output (tail {MAX_OUTPUT_BYTES} bytes):\n{payload}"
+
+    if stop_budget_consume is not None:
+        stop_budget_consume(BUDGET_NAME, cwd)
+
     reason = (
         f"Test gate failed ({label}, exit {result.returncode}). "
         f"Cannot complete task while tests are red. "
         f"Per no-pre-existing-evasion rule: tests must be green before 'done'.\n\n"
-        f"Output (tail {MAX_OUTPUT_BYTES} bytes):\n{output}\n\n"
+        f"{framed}\n\n"
         f"Options:\n"
         f"1. Fix the failures (preferred)\n"
         f"2. If failures are in genuinely unfixable area: add to PROBLEMS.md "
