@@ -101,6 +101,7 @@ See [AGENTS.md](AGENTS.md) for the procedure an agent follows after install,
 - **Feature rationale evaporates into git log after 6 weeks?** Three-tier KB (Global -> Layer -> Feature narrative) with ULTRAPACK-style task.md, auto-allocated F-NNN ID, hyperlinked invariants ([Feature-Layer Architecture](principles/28-feature-layer-architecture.md))
 - **Model collapses to "predict zero" on residual/delta tasks?** Traps and fixes for low-signal training (overlay maps, denoise deltas, color-correction residuals), from 4 rounds of real failure ([Low-Signal Residual Training](principles/12-low-signal-residual-training.md))
 - **Deep research results evaporate with the conversation?** Save structured findings to an incoming folder -> review -> knowledge base pipeline ([Research Pipeline](principles/13-research-pipeline.md))
+- **Need a human-browsable memory view without a second source of truth?** Use an optional Obsidian-compatible Markdown hub over the private archive ([Obsidian Mind adoption note](docs/research/obsidian-mind-adoption-2026-07-28.md))
 - **Building a brand-new agent and not sure what to decide first?** 15-section MVP blueprint: autonomy level -> tool risk classes -> permission matrix -> budgets -> evals -> release checklist ([MVP Agent Blueprint](principles/29-mvp-agent-blueprint.md))
 
 **Need smaller diagnostic command output?** The optional RTK integration is
