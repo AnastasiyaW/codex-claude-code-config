@@ -109,11 +109,11 @@ existing detailed skill/runbook when available.
   the default for scale-to-zero inference; a Pod is a persistent billed resource
   and needs an explicit reason plus a cleanup owner. Use the returned
   endpoint/job/pod ID as the identity for all later calls.
-- **Massed Compute:** use the Massed MCP tools and, when the compatibility skill is
-  installed, its `massed-compute-ops` `references/recipes.md` for provider-specific
-  recipes. Prefer read-only tools first; destructive tools may be absent from a
-  read-only key by design. Keep the MCP session and reconcile after any timeout
-  before considering a retry.
+- **Massed Compute:** use the Massed MCP tools and read
+  [massed-compute-recipes.md](references/massed-compute-recipes.md) for
+  provider-specific recipes. Prefer read-only tools first; destructive tools may
+  be absent from a read-only key by design. Keep the MCP session and reconcile
+  after any timeout before considering a retry.
 - **Owned or virtual server:** do not invent a cloud API. Reuse the verified SSH or
   tunnel route, batch probes, inspect the actual service/process/GPU/log state, and
   use the host's runbook for restart or shutdown decisions.

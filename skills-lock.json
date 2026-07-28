@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-07-28T19:34:34+00:00",
-  "skill_count": 38,
-  "aggregate_hash": "sha256:f1f0820afc2c2445ad2adb59ff0de87a9e150924fe6cf6068b8d8622dc8a86d2",
+  "generated_at": "2026-07-28T22:04:26+00:00",
+  "skill_count": 37,
+  "aggregate_hash": "sha256:515912a4cb20f4b2d29abdd88ff23e7544d4bb6a4e15362317f1d90139160e3d",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:747805abf1b6b3025fbd3ce87e23e2476dc3b8626b5c49fb1ab7471f70b063a5",
@@ -279,15 +279,6 @@
         "SKILL.md"
       ]
     },
-    "massed-compute-ops": {
-      "content_hash": "sha256:1940ea9f3685956ec10863800cfcb71a076bf82e250f14609eea29474f73e054",
-      "size_bytes": 6065,
-      "file_count": 2,
-      "files": [
-        "SKILL.md",
-        "references/recipes.md"
-      ]
-    },
     "operational/cross-harness-continuation": {
       "content_hash": "sha256:324cce6a93311d368fe472df732e9d5a8c72e70075fb54a0806a4dda11d164a6",
       "size_bytes": 5431,
@@ -337,11 +328,12 @@
       ]
     },
     "operational/remote-compute-ops": {
-      "content_hash": "sha256:1f35589a1ab0e9de18b2d5cee90866efe97c49301a7470108e9836d9f81e8908",
-      "size_bytes": 20885,
-      "file_count": 3,
+      "content_hash": "sha256:352b0a0c13c0df39ab2ee5f8bac3c42670b12e29928c4ea7e3e427185aec7070",
+      "size_bytes": 25149,
+      "file_count": 4,
       "files": [
         "SKILL.md",
+        "references/massed-compute-recipes.md",
         "references/provider-matrix.md",
         "references/transport-safety.md"
       ]
