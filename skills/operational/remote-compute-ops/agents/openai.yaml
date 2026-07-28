@@ -1,0 +1,4 @@
+interface:
+  display_name: "Remote Compute Ops"
+  short_description: "Operate remote GPU compute through reused bridges"
+  default_prompt: "Use $remote-compute-ops to inspect, operate, or monitor remote compute through the existing bridge with bounded API and SSH usage."

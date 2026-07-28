@@ -30,15 +30,19 @@ import sys
 # Each entry: pattern (regex, case-insensitive) → skill name + description
 # Patterns should be specific enough to avoid false positives on normal conversation
 ROUTES = [
-    # Massed Compute GPU cloud operations
+    # Provider-neutral remote compute: RunPod, Massed Compute, and owned servers.
+    # Keep provider names in the trigger set, but route all of them to the
+    # canonical skill so the transport/reconciliation policy is shared.
     {
         "patterns": [
-            r"\b(massed[ -]?compute|massedcompute|мас+ед[ -]?компьют|мас+копьют|массед[ -]?компьют)\b",
-            r"\b(gpu|гпу|видеокарт\w*|vm|виртуал\w* машин\w*)\b.*\b(massed|массед|маскопьют)\b",
+            r"\b(runpod|run pod|massed[ -]?compute|massedcompute|мас+ед[ -]?компьют|мас+копьют|массед[ -]?компьют)\b",
+            r"\b(remote|удал\w*|облач\w*)\b.{0,80}\b(gpu|гпу|видеокарт\w*|server|сервер\w*|vm|виртуал\w* машин\w*|compute|инфраструктур\w*|ssh|scp|bridge|мост\w*|tunnel|туннел\w*|bastion|tailscale|cloudflared)\b",
+            r"\b(ssh|scp|tailscale|cloudflared|bridge|мост\w*|tunnel|туннел\w*)\b.{0,100}\b(remote|удал\w*|server|сервер\w*|gpu|гпу|vm|машин\w*|compute|runpod|massed)\b",
+            r"\b(api|mcp|429|rate[ -]?limit|поллинг|polling|подключ\w*)\b.{0,100}\b(runpod|massed|remote|удал\w*|bridge|мост\w*|ssh|server|сервер\w*)\b",
         ],
-        "skill": "massed-compute-ops",
-        "description": "REQUIRED for Massed Compute GPU selection, VM lifecycle, SSH, billing, and spend control",
-        "refs": ["references/recipes.md"],
+        "skill": "remote-compute-ops",
+        "description": "REQUIRED for RunPod, Massed Compute, and owned-server GPU lifecycle, bridge reuse, bounded API/SSH usage, and spend control",
+        "refs": ["references/transport-safety.md", "references/provider-matrix.md"],
         "required": True,
     },
     # Retouch native variant experiments / measured implementation selection

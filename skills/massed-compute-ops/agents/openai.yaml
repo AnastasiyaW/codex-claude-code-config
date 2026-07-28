@@ -1,7 +1,7 @@
 interface:
-  display_name: "Massed Compute Ops"
-  short_description: "Manage GPU VMs safely through Massed Compute"
-  default_prompt: "Use $massed-compute-ops to inspect capacity, choose a GPU, launch safely, or audit Massed Compute spend."
+  display_name: "Massed Compute (legacy alias)"
+  short_description: "Legacy Massed adapter for remote-compute-ops"
+  default_prompt: "Use $remote-compute-ops for the canonical remote-compute workflow; load Massed recipes only when the target is Massed Compute."
 dependencies:
   tools:
     - type: "mcp"
