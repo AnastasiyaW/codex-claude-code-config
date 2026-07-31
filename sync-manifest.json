@@ -11,6 +11,7 @@
         "frontend-skill-routing.md",
         "secrets-as-data.md",
         "safety-hooks.md",
+        "verify-git-currency-first.md",
         "post-ui-change-review.md",
         "cross-harness-agents-md.md",
         "file-organization-cohesion.md",
