@@ -26,6 +26,17 @@ import json
 import re
 import sys
 
+# Routes whose skill is provided locally and is NOT shipped in this repository:
+# product-specific or private. The route stays because it is correct on a machine
+# that has the skill; the wiring audit reads this set so a checkout without them
+# is not reported as broken. Anything not listed here MUST exist in the repo --
+# that is what keeps the audit meaningful.
+LOCAL_ONLY_SKILLS = {
+    "native-cpp-memory",
+    "retouch-security-audit",
+    "investigate",
+}
+
 # ─── Keyword → Skill mapping ───
 # Each entry: pattern (regex, case-insensitive) → skill name + description
 # Patterns should be specific enough to avoid false positives on normal conversation
