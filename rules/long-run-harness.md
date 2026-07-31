@@ -1,3 +1,12 @@
+---
+paths:
+  - "**/feature_list.json"
+  - "**/feature_list.schema.json"
+  - "**/init.sh"
+  - "**/PROBLEMS.md"
+  - "**/BACKLOG.md"
+---
+
 ﻿# Long-Run Project Harness — feature_list.json + init.sh convention
 
 ## Принцип (2026-05-12)

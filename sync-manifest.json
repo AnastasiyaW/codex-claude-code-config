@@ -7,10 +7,8 @@
       "to": "rules",
       "deny": [
         "mashinki-server-journal.md",
-        "ssh-connection-discipline.md",
-        "frontend-design-catalog.md",
+        "connections.md",
         "frontend-skill-routing.md",
-        "billing-safety.md",
         "secrets-as-data.md",
         "safety-hooks.md",
         "post-ui-change-review.md",
@@ -22,7 +20,8 @@
       ],
       "add": [
         "rlm-context-as-program.md",
-        "agent-docs-freshness.md"
+        "agent-docs-freshness.md",
+        "safety.md"
       ]
     },
     {

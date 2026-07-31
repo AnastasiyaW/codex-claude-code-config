@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/MEMORY.md"
+  - "**/memory/*.md"
+  - "**/CLAUDE.md"
+  - "**/.claude/rules/*.md"
+---
+
 # Memory & Rules Maintenance — cross-links, provenance, delta-merge
 
 How durable memory/rules stay navigable, honest, and self-improving without rot. Three concerns:

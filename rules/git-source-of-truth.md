@@ -105,7 +105,7 @@ Thumbs.db
 6. Verify: `gh repo view <owner>/<name> --json visibility` (PRIVATE?), `git status -sb` (синхронизирован с origin?).
 
 ### Существующий проект
-- Перед работой в чужом/старом репо - billing-safety hermes.md pre-check (см. safety-billing.md).
+- Перед работой в чужом/старом репо - billing-safety hermes.md pre-check (см. safety.md).
 - Коммитим **регулярно** - после каждого осмысленного шага. Маленькие коммиты с понятными сообщениями вместо одного большого в конце.
 - Push не реже конца сессии. Локальный коммит без push - половина страховки (диск может умереть, машина смениться).
 
@@ -122,7 +122,7 @@ Thumbs.db
 ## Связь с другими правилами
 
 - **no-claude-attribution.md** - коммиты без `Co-Authored-By: Claude` и `Generated with Claude Code`
-- **safety-billing.md** - hermes.md pre-check перед работой в существующем репо
+- **safety.md** - hermes.md pre-check перед работой в существующем репо
 - **secrets-as-data.md** + `pre_push_public_repo_scan.py` - защита на выходной границе; приватные репо проходят push без скана, публичные - с 2-агентным сканом
 - **session-handoff.md** (project-level) - handoff = "что делать дальше", git = "что существует"; дополняют друг друга
 - **CLAUDE.md** "After making any change" пункт 3 (push to GitHub) - частный случай этого правила
