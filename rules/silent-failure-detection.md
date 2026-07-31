@@ -71,7 +71,7 @@ Example trace for the semgrep plugin:
 
 - [`system-verification-independent.md`](system-verification-independent.md) — the parent principle ("name ≠ behavior" for control systems).
 - [`no-guessing.md`](no-guessing.md) — the claim "this CLI exists" requires verification.
-- [`safety-hooks.md`](safety-hooks.md) — mechanical defence via hooks.
+- [`safety.md`](safety.md) — mechanical defence via hooks.
 
 ## What this does NOT cover
 

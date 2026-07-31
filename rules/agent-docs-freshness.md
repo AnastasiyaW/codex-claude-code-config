@@ -1,3 +1,12 @@
+---
+paths:
+  - "**/docs/kb/**"
+  - "**/docs/layers/**"
+  - "**/scripts/validate_kb.py"
+  - "**/openwiki/**"
+  - "**/.github/workflows/kb.yml"
+---
+
 # Agent-Docs Freshness — force repo docs to stay written AND current (mechanical)
 
 ## Principle (2026-07-07)
@@ -63,7 +72,7 @@ crash / timeout never wedges a session shut). Bypass: `CLAUDE_SKIP_KB_GATE=1` or
 ## Generation is opt-in and token-costed (NOT a hook)
 Auto-*generating* the wiki (OpenWiki `openwiki --init` / `--update`, or writing
 `docs/layers/`) needs LLM calls → external-provider tokens → **opt-in only**, with
-a spend cap, per `safety-billing.md §`. The hooks here **detect** staleness for
+a spend cap, per `safety.md §`. The hooks here **detect** staleness for
 free; they never spend tokens. Do not wire OpenWiki's daily GitHub Action until
 quality + cost are seen on a couple of manual runs. Note: OpenWiki is fresh
 (released ~2026-07-02); `min-release-age=7` in `~/.npmrc` gates `npm i -g openwiki`
@@ -100,7 +109,7 @@ repos without docs are caught by tier 2b instead.
 - `principles/21-knowledge-base-enforcement.md` — parent principle (validate_kb, kb-skeleton).
 - `principles/28-feature-layer-architecture.md` — `docs/layers/` anchor.
 - `long-run-harness.md` — adoption trigger; `long-run-detector.py` nudge.
-- `safety-billing.md` — generation token cost (OpenWiki providers, daily Action).
+- `safety.md` — generation token cost (OpenWiki providers, daily Action).
 - `git-source-of-truth.md` — git-based staleness signal.
 - `finish-the-task.md` / `no-pre-existing-evasion.md` — docs are part of "done", not deferred.
 - OpenWiki (MIT): https://github.com/langchain-ai/openwiki — the adapted tool.

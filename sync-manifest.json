@@ -7,10 +7,8 @@
       "to": "rules",
       "deny": [
         "mashinki-server-journal.md",
-        "ssh-connection-discipline.md",
-        "frontend-design-catalog.md",
+        "connections.md",
         "frontend-skill-routing.md",
-        "billing-safety.md",
         "secrets-as-data.md",
         "safety-hooks.md",
         "post-ui-change-review.md",
@@ -20,7 +18,7 @@
         "learn-from-corrections.md",
         "session-handoff.md"
       ],
-      "add": ["rlm-context-as-program.md", "agent-docs-freshness.md"]
+      "add": ["rlm-context-as-program.md", "agent-docs-freshness.md", "safety.md"]
     },
     { "from": "principles", "to": "principles", "deny": ["25-coordination-primitives-mapping.md", "02-proof-loop.md"], "add": [] },
     { "from": "templates", "to": "templates", "deny": ["README.md"], "add": [] },

@@ -33,4 +33,4 @@
 - `verify-deleted-guard.py` (PostToolUse) — проверяет, что destructive-операция реально завершилась.
 
 Связано: CLAUDE.md «Anti-Fabrication» («Deletion = re-verification»),
-`system-verification-independent.md`, `safety-hooks.md`.
+`system-verification-independent.md`, `safety.md`.
