@@ -45,6 +45,7 @@ import re
 import sys
 import time
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 # A handoff written within this window counts as "fresh" for this compaction.
@@ -310,15 +311,41 @@ Read this auto-draft, inspect the working tree and latest tool outputs, then wri
         return None
 
 
+# Handoff filenames carry their own timestamp: YYYY-MM-DD_HH-MM_<session>.md
+_FILENAME_TS = re.compile(r"(\d{4})-(\d{2})-(\d{2})[_T](\d{2})[-:](\d{2})")
+
+
+def _age_from_filename(path: Path) -> float | None:
+    """Minutes since the timestamp encoded in the filename, or None if absent."""
+    m = _FILENAME_TS.search(path.name)
+    if not m:
+        return None
+    try:
+        stamp = datetime(*(int(g) for g in m.groups()))
+    except ValueError:
+        return None
+    return (datetime.now() - stamp).total_seconds() / 60
+
+
 def newest_handoff_age_minutes(handoffs_dir: Path, handoff_old: Path) -> float | None:
-    """Minutes since the most recent handoff was written, or None if none."""
+    """Minutes since the most recent handoff was written, or None if none.
+
+    Age comes from the timestamp in the FILENAME where there is one. mtime is
+    forgeable by ordinary work: a merge, checkout or sync rewrites it on every
+    handoff it touches, and a restored handoff from months ago would then read
+    as just-written. Here that matters more than anywhere else -- this guard
+    runs while the conversation is being compacted, so a false "fresh" means
+    the session's state is discarded with nothing written down.
+    """
     now = time.time()
     best: float | None = None
     if handoffs_dir.exists():
         for p in handoffs_dir.rglob("*.md"):
             if p.name == "INDEX.md":
                 continue
-            age = (now - p.stat().st_mtime) / 60
+            age = _age_from_filename(p)
+            if age is None:
+                age = (now - p.stat().st_mtime) / 60
             if best is None or age < best:
                 best = age
     if handoff_old.exists():
