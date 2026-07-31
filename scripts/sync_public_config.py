@@ -27,10 +27,13 @@ thousands of false "differs".
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 import shutil
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +41,52 @@ MANIFEST = REPO_ROOT / "sync-manifest.json"
 
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 SKIP_DIRS = {"__pycache__", ".git"}
+
+
+# A file whose last commit is newer than the active copy's mtime is a revert.
+# The slack absorbs checkout/clock noise without hiding a real regression.
+MTIME_SLACK = 120
+# Removing this many lines without review is a stop, not a report line.
+MAX_UNREVIEWED_DELETION = 30
+
+
+def stamp(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def repo_commit_times() -> dict[str, float]:
+    """Last commit time per tracked path, in one pass over the log.
+
+    Per-file `git log` calls would make the sync unusable on a repo this size,
+    and a guard people disable for being slow protects nothing.
+    """
+    out: dict[str, float] = {}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "log", "--name-only", "--format=%ct", "--no-merges"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return out
+    if proc.returncode != 0:
+        return out
+    current: float | None = None
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.isdigit():
+            current = float(line)
+        elif current is not None:
+            out.setdefault(line, current)   # log is newest-first, so first wins
+    return out
+
+
+def lines_removed(old_text: str, new_text: str) -> int:
+    """Lines present in the repo version and absent from the incoming one."""
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    diff = difflib.ndiff(old_lines, new_lines)
+    return sum(1 for d in diff if d.startswith("- "))
 
 
 def norm_text(path: Path) -> str | None:
@@ -74,6 +123,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry-run)")
     ap.add_argument("--strict", action="store_true", help="exit 1 on any privacy-marker hit")
+    ap.add_argument("--allow-regressions", action="store_true",
+                    help="copy even when the repo version is newer or a large deletion is "
+                         "proposed. Read the diff of every refused file first.")
     ap.add_argument("--scan-repo", action="store_true", help="only scan repo tree for markers")
     args = ap.parse_args()
 
@@ -107,6 +159,8 @@ def main() -> int:
         return 2
 
     updated, candidates, stale, skipped_private = [], [], [], []
+    regressive: list[str] = []
+    repo_times = repo_commit_times()
 
     for mapping in cfg["mappings"]:
         src_dir = active_root / mapping["from"]
@@ -140,6 +194,28 @@ def main() -> int:
                 any_marker_hit = True
                 skipped_private.append(f"{mapping['from']}/{rel} :: {', '.join(hits)}")
                 continue
+            # Barrier 1 - freshness. The repository is declared the source of
+            # truth, but this tool treats the active tree as authoritative. Run
+            # it from a tree that has fallen behind and it silently reverts newer
+            # work, reporting the loss as an ordinary line under `updated`.
+            repo_rel = f"{mapping['to']}/{rel}"
+            repo_time = repo_times.get(repo_rel)
+            if (in_repo and not args.allow_regressions and repo_time is not None
+                    and sp.stat().st_mtime < repo_time - MTIME_SLACK):
+                regressive.append(f"{repo_rel} :: repo is newer "
+                                  f"(committed {stamp(repo_time)}, active file {stamp(sp.stat().st_mtime)})")
+                continue
+
+            # Barrier 2 - volume. mtime is forgeable: a checkout or merge rewrites
+            # it, so the first barrier can be fooled exactly when it matters. A
+            # large unreviewed deletion is therefore a stop in its own right.
+            if in_repo and d_text is not None and not args.allow_regressions:
+                removed = lines_removed(d_text, s_text)
+                if removed >= MAX_UNREVIEWED_DELETION:
+                    regressive.append(f"{repo_rel} :: would remove {removed} lines "
+                                      f"(limit {MAX_UNREVIEWED_DELETION})")
+                    continue
+
             updated.append(f"{mapping['to']}/{rel}")
             if args.apply:
                 target = dst_dir / rel
@@ -164,8 +240,17 @@ def main() -> int:
     print(f"-- SKIPPED, privacy markers ({len(skipped_private)}):")
     for x in skipped_private:
         print(f"   {x}")
+    print(f"-- REFUSED, would overwrite newer work ({len(regressive)}):")
+    for x in regressive:
+        print(f"   {x}")
+    if regressive:
+        print("   Run this from a tree that is up to date: git -C <active> pull, or copy")
+        print("   the repository's version over the active one, then sync again. Override")
+        print("   with --allow-regressions only after reading the diff of each file above.")
 
     if any_marker_hit and args.strict:
+        return 1
+    if regressive and args.strict:
         return 1
     return 0
 

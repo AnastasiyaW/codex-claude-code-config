@@ -17,17 +17,17 @@ Multiple Claude Code sessions working on the same project need to communicate: a
 
 ```
 .claude/mailbox/
-  ani/       <- inbox for agent "ani"
-  artem/     <- inbox for agent "artem"
-  nastya/    <- inbox for agent "nastya"
+  reviewer/       <- inbox for agent "reviewer"
+  builder/     <- inbox for agent "builder"
+  ops/    <- inbox for agent "ops"
   all/       <- broadcast (all agents read)
 ```
 
 Each message = markdown file with frontmatter:
 ```markdown
 ---
-from: artem
-to: ani
+from: builder
+to: reviewer
 priority: normal
 status: unread
 date: 2026-04-11 14:46
@@ -68,13 +68,13 @@ Throttled version uses a timestamp file to avoid checking on every tool call.
 
 ```bash
 # Send
-python mail.py send --from artem --to ani --topic "question" --body "text"
+python mail.py send --from builder --to reviewer --topic "question" --body "text"
 
 # Check inbox
-python mail.py check --who ani --unread-only
+python mail.py check --who reviewer --unread-only
 
 # Broadcast
-python mail.py broadcast --from ani --topic "architecture decision" --body "text"
+python mail.py broadcast --from reviewer --topic "architecture decision" --body "text"
 
 # Summary
 python mail.py summary
@@ -113,12 +113,12 @@ The original mailbox implementation covered basic send/receive/broadcast. Produc
 
 ```markdown
 ---
-from: artem
-to: ani
+from: builder
+to: reviewer
 subject: "Re: cmake libsodium question"
-message_id: 20260414-153100-artem-r1
-in_reply_to: 20260414-143000-ani-001
-references: [20260414-143000-ani-001]  # full thread chain for deep replies
+message_id: 20260414-153100-builder-r1
+in_reply_to: 20260414-143000-reviewer-001
+references: [20260414-143000-reviewer-001]  # full thread chain for deep replies
 ---
 ```
 

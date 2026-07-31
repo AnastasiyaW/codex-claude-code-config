@@ -20,35 +20,90 @@
         "learn-from-corrections.md",
         "session-handoff.md"
       ],
-      "add": ["rlm-context-as-program.md", "agent-docs-freshness.md"]
+      "add": [
+        "rlm-context-as-program.md",
+        "agent-docs-freshness.md"
+      ]
     },
-    { "from": "principles", "to": "principles", "deny": ["25-coordination-primitives-mapping.md", "02-proof-loop.md"], "add": [] },
-    { "from": "templates", "to": "templates", "deny": ["README.md"], "add": [] },
-    { "from": "agents", "to": "agents", "deny": [], "add": [] },
-    { "from": "alternatives", "to": "alternatives", "deny": ["README.md"], "add": [] },
+    {
+      "from": "principles",
+      "to": "principles",
+      "deny": [
+        "25-coordination-primitives-mapping.md",
+        "02-proof-loop.md"
+      ],
+      "add": []
+    },
+    {
+      "from": "templates",
+      "to": "templates",
+      "deny": [
+        "README.md"
+      ],
+      "add": []
+    },
+    {
+      "from": "agents",
+      "to": "agents",
+      "deny": [],
+      "add": []
+    },
+    {
+      "from": "alternatives",
+      "to": "alternatives",
+      "deny": [
+        "README.md"
+      ],
+      "add": []
+    },
     {
       "from": "claude-code-config/hooks",
       "to": "hooks",
-      "deny": ["mashinki-journal-reminder.py", "ssh-connection-guard.py"],
-      "add": ["long-run-detector.py", "feature-list-validator.py", "coord-claim-guard.py", "cyrillic-bash-guard.py", "handoff-resume-gate.py", "session-feedback-capture.py", "feedback-pending-show.py", "docs-staleness-guard.py", "kb-validate-gate.py"]
+      "deny": [
+        "mashinki-journal-reminder.py",
+        "ssh-connection-guard.py"
+      ],
+      "add": [
+        "long-run-detector.py",
+        "feature-list-validator.py",
+        "coord-claim-guard.py",
+        "cyrillic-bash-guard.py",
+        "handoff-resume-gate.py",
+        "session-feedback-capture.py",
+        "feedback-pending-show.py",
+        "docs-staleness-guard.py",
+        "kb-validate-gate.py"
+      ]
     },
     {
       "from": "workflows",
       "to": "workflows",
-      "deny": ["scrape-batch.js", "dataset-validate.js", "README.md"],
-      "add": ["rlm-explore.js"]
+      "deny": [
+        "scrape-batch.js",
+        "dataset-validate.js",
+        "README.md"
+      ],
+      "add": [
+        "rlm-explore.js"
+      ]
     },
     {
       "from": "skills/workflow-orchestration",
       "to": "skills/development/workflow-orchestration",
-      "deny": ["SKILL.md"],
+      "deny": [
+        "SKILL.md"
+      ],
       "add": []
     },
     {
       "from": "skills/distill-feedback",
       "to": "skills/development/distill-feedback",
-      "deny": ["SKILL.md"],
-      "add": ["scripts/extract_feedback_queue.py"]
+      "deny": [
+        "SKILL.md"
+      ],
+      "add": [
+        "scripts/extract_feedback_queue.py"
+      ]
     }
   ],
   "privacy_markers": [
@@ -74,6 +129,13 @@
     "happyin\\.app",
     "margins\\.club",
     "voice-learning-system",
-    "CODE_Claude"
-  ]
+    "CODE_Claude",
+    "happy_in_happy",
+    "Anastasiya1551",
+    "black\\.design",
+    "\\bnastya\\b",
+    "\\bartem\\b",
+    "\\bani\\b(?!mat|mation)"
+  ],
+  "_privacy_comment": "privacy_markers cover BOTH infrastructure (hosts, subnets, paths, product domains) AND identity (personal names, work handles, mail). The identity half was missing until 2026-07-31, when a sync proposed replacing a generalised credit line with a real surname and the scan passed it: the list knew hosts and did not know people. A name reaching a public repository is not recoverable by deleting the line afterwards."
 }
