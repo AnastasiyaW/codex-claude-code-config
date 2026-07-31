@@ -88,6 +88,24 @@ PHRASE_CATEGORIES: list[tuple[str, list[str]]] = [
         ],
     ),
     (
+        "deferral_via_indicative_proposal",
+        [
+            # The same deferral wearing a statement instead of a question:
+            # naming a cheap reversible improvement and leaving it undone.
+            # "limit: 50 is hardcoded, raising it is nearly free" ends a turn
+            # exactly as "shall I raise it?" does, and slips past the
+            # question-shaped patterns below. Deliberately narrow: it needs an
+            # explicit "this is cheap/easy" claim, which is what marks the
+            # change as one the agent was already authorised to make. A finding
+            # that genuinely needs a decision does not advertise itself as free.
+            r"(поднимается|правится|чинится|решается|делается)\s+(почти\s+)?(бесплатно|в одну строку|одной строкой|тривиально)",
+            r"(легко|тривиально|дёшево|дешево)\s+(поднять|поправить|починить|увеличить|исправить|заменить)",
+            r"(raising|bumping|fixing|changing) it is (nearly |almost )?free",
+            r"(trivial|cheap|easy) to (raise|bump|fix|increase|change)\b",
+            r"\bone-line (fix|change)\b[^.?!\n]{0,40}\b(would|could)\b",
+        ],
+    ),
+    (
         "deferral_via_next_step_question",
         [
             # Ending the turn by asking "what next" / offering a menu of options /
