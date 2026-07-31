@@ -24,14 +24,31 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 # Tunables
 SESSION_MIN_MINUTES = 15          # don't remind on short sessions
 HANDOFF_STALE_MINUTES = 30        # consider stale after this
 REMINDER_MARKER_NAME = ".handoff-reminded"
+
+# Handoff filenames carry their own timestamp: YYYY-MM-DD_HH-MM_<session>.md
+_FILENAME_TS = re.compile(r"(\d{4})-(\d{2})-(\d{2})[_T](\d{2})[-:](\d{2})")
+
+
+def _age_from_filename(path) -> float | None:
+    """Minutes since the timestamp encoded in the filename, or None if absent."""
+    m = _FILENAME_TS.search(path.name)
+    if not m:
+        return None
+    try:
+        stamp = datetime(*(int(g) for g in m.groups()))
+    except ValueError:
+        return None
+    return (datetime.now() - stamp).total_seconds() / 60
 
 
 def session_age_minutes(marker: Path) -> float:
@@ -72,12 +89,21 @@ def main() -> int:
     if handoff_old.exists():
         if (time.time() - handoff_old.stat().st_mtime) / 60 < HANDOFF_STALE_MINUTES:
             fresh = True
-    # New format: any .md in handoffs/ incl. per-project subdirs (except INDEX.md)
+    # New format: any .md in handoffs/ incl. per-project subdirs (except INDEX.md).
+    # Freshness comes from the timestamp in the FILENAME, not mtime: a merge,
+    # checkout or sync rewrites the mtime of every handoff it touches, and a
+    # restored handoff from months ago would otherwise read as "just written"
+    # and silence this reminder for the rest of the session. Observed 2026-07-31,
+    # when a merge restored handoffs from July 5th and 7th and they all reported
+    # an mtime of minutes ago.
     if not fresh and handoffs_dir.exists():
         for p in handoffs_dir.rglob("*.md"):
             if p.name.startswith("INDEX"):
                 continue
-            if (time.time() - p.stat().st_mtime) / 60 < HANDOFF_STALE_MINUTES:
+            age_min = _age_from_filename(p)
+            if age_min is None:
+                age_min = (time.time() - p.stat().st_mtime) / 60
+            if age_min < HANDOFF_STALE_MINUTES:
                 fresh = True
                 break
     if fresh:
