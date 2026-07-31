@@ -276,6 +276,21 @@ Structured 15-section flow for designing a brand-new agent from scratch in any d
 
 ---
 
+### [30 - Gates That Cannot Bootstrap Themselves](30-gates-that-cannot-bootstrap.md)
+
+A harness check that switches on only when its own artifact is already present protects every
+project except the ones that never set it up — and because the check is *designed* to be silent
+there, nothing ever reports the hole. Covers the three observed variants (an exemption for
+"aggregation" directories, an `allow()` for repositories that have not adopted the tool, and a
+freshness signal any merge can forge), the inverse failure of a trigger so broad it gets trained
+away, and five rules for writing gates that speak when adoption is missing.
+
+**When to use:** When adding any opt-in hook or validator; when auditing why a harness that
+"is installed" never said anything; when a shared directory used by many sessions behaves as if
+it had no supervision.
+
+---
+
 ## Decision Matrix
 
 Use this table to pick the right principle for your situation:
