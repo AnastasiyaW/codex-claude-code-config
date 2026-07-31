@@ -160,6 +160,7 @@ META_DISCUSSION_MARKERS = [
     "finish-the-task",
     "next-step-guard",
     "deferral_via_next_step",
+    "deferral_via_indicative_proposal",
     "не откладыва",
 ]
 
@@ -170,6 +171,7 @@ STRONG_META_MARKERS = [
     "stop-phrase-guard",
     "offer_and_defer",
     "deferral_via_next_step",
+    "deferral_via_indicative_proposal",
     "regression phrase guard",
     "phrase guard",
     "regression phrase",
