@@ -167,7 +167,12 @@ def audit(
     rows, hook_errors = hook_rows(hooks_config)
     route_count, route_targets, router_errors = load_router_targets(router_path)
     available = set(active["names"]) | set(source["names"])
-    missing_routes = sorted(set(route_targets) - available)
+    # A "plugin:skill" target is provided by an installed plugin, not by this
+    # repository, so its absence is a local install choice rather than broken
+    # wiring. Report it separately instead of failing the audit for everyone who
+    # has not installed that plugin.
+    plugin_routes = sorted(t for t in set(route_targets) - available if ":" in t)
+    missing_routes = sorted(t for t in set(route_targets) - available if ":" not in t)
     user_prompt_router = [
         row for row in rows if row["event"] == "UserPromptSubmit" and "keyword-skill-router" in row["command"]
     ]
@@ -193,6 +198,7 @@ def audit(
             "routes": route_count,
             "skill_targets": route_targets,
             "missing_skill_targets": missing_routes,
+            "plugin_provided_targets_not_installed": plugin_routes,
             "errors": router_errors,
         },
         "checks": checks,

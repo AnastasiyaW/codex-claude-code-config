@@ -214,6 +214,19 @@ ROUTES = [
         "skill": "lean-code",
         "description": "Strip over-engineering while preserving correctness and verification",
     },
+    # Site review / SEO. Target is plugin-namespaced: it resolves only where the
+    # plugin is installed, which is why the audit does not require it to exist.
+    {
+        "patterns": [
+            r"\b(seo|сео)\b",
+            r"\b(ревью|аудит|обзор|проверь|проверить|review|audit)\b.{0,40}\b(сайт\w*|страниц\w*|site|page|landing|лендинг)\b",
+            r"\b(сайт\w*|страниц\w*|site|page)\b.{0,40}\b(ревью|аудит|review|audit)\b",
+            r"\b(sitemap|robots\.txt|hreflang|canonical|structured data|микроразметк\w*|meta description|мета[- ]?описан\w*|core web vitals|индексац\w*|indexab\w*|crawlab\w*)\b",
+            r"\bschema\.org\b",
+        ],
+        "skill": "claude-seo:seo",
+        "description": "site review / SEO audit - technical SEO, schema, sitemaps, hreflang, Core Web Vitals, GEO/AEO. Use claude-seo:seo-page for one page, claude-seo:seo-audit for a full crawl",
+    },
     # Init new project
     {
         "patterns": [
