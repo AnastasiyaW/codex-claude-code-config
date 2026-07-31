@@ -68,6 +68,11 @@ See [AGENTS.md](AGENTS.md) for the procedure an agent follows after install,
 [HOW-IT-WORKS.md](HOW-IT-WORKS.md) for the mechanics of each layer, and
 [docs/runtime-wiring.md](docs/runtime-wiring.md) for the live verification contract.
 
+Moved the config to a new machine or account and most skills stopped being
+offered? Nothing raises an error when that happens — see
+[docs/skill-tree-recovery.md](docs/skill-tree-recovery.md) and run
+`python scripts/recover_skill_trees.py --report`.
+
 ---
 
 ## What This Gives You

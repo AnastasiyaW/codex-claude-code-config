@@ -39,6 +39,7 @@ pass.
 | Agent-doc freshness | `SessionStart` advisory + `Stop` gate | `SessionStart` advisory + `Stop` gate | hook self-tests |
 | Git source-of-truth setup | `Stop` for long-run projects | `Stop` for long-run projects | `test_lifecycle_hook_contracts.py` |
 | Skills availability | active skill directory | `~/.claude/skills` | `sync_skills_to_codex.py --check` and `skills-lock.json` |
+| Skills survive a machine/account move | active skill directory | `~/.claude/skills` | `recover_skill_trees.py --report` |
 | Optional RTK output compression | instruction-level (`AGENTS.md`) | native `PreToolUse` hook | `scripts/test_rtk_integration.py` plus pinned binary verification |
 
 Codex's current plugin loader accepts only a top-level `hooks` object in cached
@@ -57,6 +58,16 @@ There are two deliberately separate routing layers:
    advisory. It catches only high-confidence phrases and prints a suggestion;
    it does not inject a skill and must not become a second copy of the whole
    semantic catalog.
+
+A skill the loader cannot read is absent no matter how correct the routing is.
+After a machine or account move, verify the catalog itself before trusting either
+layer: dangling cross-profile links, empty directory shells and a UTF-8 BOM each
+hide a skill without producing an error. See
+[skill-tree-recovery.md](skill-tree-recovery.md).
+
+```bash
+python scripts/recover_skill_trees.py --report
+```
 
 Run the live boundary audit after changing either side:
 

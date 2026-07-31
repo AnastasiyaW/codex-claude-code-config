@@ -4,6 +4,28 @@ Changelog for claude-code-skills. Newest first.
 
 ---
 
+## 2026-07-31 (v3.34.0 - skill-tree recovery after a machine/account move)
+
+- Added `scripts/recover_skill_trees.py`: diagnoses and repairs skill trees that
+  a machine or account move left half-copied. Union fill — a directory that
+  already carries a `SKILL.md` is authoritative and is never overwritten, so the
+  run is idempotent; nothing is deleted.
+- Added [docs/skill-tree-recovery.md](docs/skill-tree-recovery.md) describing the
+  four ways a skill disappears without any error being raised: a dangling
+  cross-profile junction/symlink, an empty directory shell, a UTF-8 BOM before
+  the opening `---`, and a stale copy that lost its `name:` field.
+- The dangling-link case also breaks the *diagnosis*: `iterdir() + is_dir()`
+  follows the link, gets `False`, and drops the entry, so a tree of 107 dead
+  junctions reported "no problems". The script enumerates raw directory entries
+  and classifies non-resolving ones as `BROKEN_LINK`, printing where each pointed.
+- Documented how to merge two live trees that were edited independently: resolve
+  per file on evidence, because neither side is automatically newer, and never
+  propagate a line where a skill references its own `scripts/` directory.
+- Wired the check into [docs/runtime-wiring.md](docs/runtime-wiring.md) as a
+  runtime-contract row, and added the `обвязка` / `wiring` / `account-migration`
+  keywords. (GitHub topics reject non-ASCII, so the repo carries `harness`,
+  `agent-harness` and `wiring` there instead.)
+
 ## 2026-07-22 (v3.33.0 - grounded NotebookLM research)
 
 - Added `skills/ai-ml/notebooklm-grounded-research` for large stable
