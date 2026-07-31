@@ -127,6 +127,21 @@ def main():
 
     drift_found = []
 
+    def _display_path(config_file: str, cwd: str) -> str:
+        """Label a config file relative to cwd, absolute when that is impossible.
+
+        On Windows `os.path.relpath` RAISES when the two sit on different
+        drives (project on D:, global config under C:\\Users). That is not a
+        rare corner: it is every session whose project lives off the system
+        drive. An uncaught raise here kills the hook before it prints a
+        single finding — it stays listed in settings.json and silently
+        validates nothing.
+        """
+        try:
+            return os.path.relpath(config_file, cwd)
+        except ValueError:
+            return config_file
+
     for config_file in config_files:
         try:
             text = Path(config_file).read_text(encoding="utf-8", errors="ignore")
@@ -136,8 +151,7 @@ def main():
         paths = extract_paths(text)
         for path in paths:
             if resolve_path(path, config_file, cwd) is None:
-                rel_config = os.path.relpath(config_file, cwd)
-                drift_found.append(f"  {rel_config}: {path}")
+                drift_found.append(f"  {_display_path(config_file, cwd)}: {path}")
 
     if drift_found:
         print("[config-drift] Found stale references:")
