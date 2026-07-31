@@ -115,6 +115,35 @@ def detect(cwd: Path) -> list[str] | None:
     return None
 
 
+def hub_context_gap(cwd: Path) -> list[str] | None:
+    """An aggregation hub is exempt from the [LONG-RUN] mark, not from context.
+
+    detect() returns None for a hub because "mark this one project [LONG-RUN]"
+    is wrong advice for a directory holding dozens. Silence is wrong too: a hub
+    with no AGENTS.md and no plan leaves every agent that opens it with no
+    project context at all, and by construction nothing else is watching it.
+    Observed cost: a hub ran for weeks on a branch whose snapshot had dropped
+    AGENTS.md, feature_list.json, README.md and the health check, and the only
+    symptom was that the agent seemed to know nothing about the project.
+    """
+    hdir = cwd / ".claude" / "handoffs"
+    if not hdir.is_dir():
+        return None
+    try:
+        subdirs = sum(1 for d in hdir.iterdir() if d.is_dir() and d.name != "archive")
+    except OSError:
+        return None
+    if subdirs <= HUB_SUBDIR_LIMIT:
+        return None
+    missing = [
+        name for name in ("AGENTS.md", "CLAUDE.md", "feature_list.json")
+        if not (cwd / name).exists()
+    ]
+    if not missing:
+        return None
+    return [f"aggregation hub with {subdirs} project subdirs", "missing: " + ", ".join(missing)]
+
+
 def _recently_nudged(claude_dir: Path, now: float) -> bool:
     stamp = claude_dir / ".longrun-nudged"
     if not stamp.exists():
@@ -144,6 +173,19 @@ def main() -> int:
         return 0
     signals = detect(cwd)
     if not signals:
+        gap = hub_context_gap(cwd)
+        if gap:
+            print("=" * 60)
+            print("AGENT CONTEXT MISSING in this aggregation hub.")
+            print("  " + "; ".join(gap))
+            print("=" * 60)
+            print("INSTRUCTION: a hub is exempt from the [LONG-RUN] mark, not from")
+            print("carrying context. It needs AGENTS.md (canonical, harness-neutral),")
+            print("a thin CLAUDE.md importing it with @AGENTS.md, and feature_list.json")
+            print("holding the plan. If this repo has them on another branch they are")
+            print("almost certainly still there -- check before writing new ones:")
+            print("  git checkout origin/main -- AGENTS.md feature_list.json README.md")
+            _stamp(claude_dir)
         return 0
 
     docs_missing = not has_agent_docs(cwd)
@@ -212,6 +254,17 @@ def _self_test() -> int:
             (sd / f"2026-06-10_10-00_dead000{n}.md").write_text("h", encoding="utf-8")
         if detect(hub) is not None:
             print("SELF-TEST FAIL: aggregation hub should be silent")
+            ok = False
+        # ...but a hub with no agent context must still be reported
+        if hub_context_gap(hub) is None:
+            print("SELF-TEST FAIL: hub without AGENTS.md/CLAUDE.md/feature_list.json "
+                  "should report a context gap")
+            ok = False
+        # ...and must go quiet again once the context is there
+        for name in ("AGENTS.md", "CLAUDE.md", "feature_list.json"):
+            (hub / name).write_text("x", encoding="utf-8")
+        if hub_context_gap(hub) is not None:
+            print("SELF-TEST FAIL: hub with full context should be silent")
             ok = False
         # known-negative: trivial dir (no signals)
         triv = root / "triv"
