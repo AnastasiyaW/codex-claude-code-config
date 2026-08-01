@@ -242,7 +242,12 @@ def print_human(report: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--active-skills-root", type=Path, default=Path.home() / ".agents" / "skills")
+    # This audit is Codex-oriented -- see --hooks-config below. Its skills root must be
+    # the Codex skills root, or the pair describes two different harnesses and the report
+    # is about neither. It defaulted to ~/.agents/skills, which Codex does not read at all,
+    # so "active skills: 0" was reported as a finding rather than as a wrong root.
+    # Point it at a Claude tree explicitly to audit Claude Code instead.
+    parser.add_argument("--active-skills-root", type=Path, default=Path.home() / ".codex" / "skills")
     parser.add_argument("--source-skills-root", type=Path, default=repo_root / "skills")
     parser.add_argument("--hooks-config", type=Path, default=Path.home() / ".codex" / "hooks.json")
     parser.add_argument("--router", type=Path, default=repo_root / "hooks" / "keyword-skill-router.py")

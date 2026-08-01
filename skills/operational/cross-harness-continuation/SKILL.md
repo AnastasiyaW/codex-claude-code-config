@@ -1,6 +1,6 @@
 ---
 name: cross-harness-continuation
-description: "Use when work moves between Claude Code and Codex, a session resumes from a handoff, or an agent may rewrite an existing implementation. Loads the shared CONTINUITY.json contract, preserves accepted decisions, checks Git baseline and scope, and requires explicit replan mode for intentional redesign."
+description: "Use when work moves between Claude Code and Codex, a session resumes from a handoff, or an agent may rewrite an existing implementation. Loads the shared CONTINUITY.json contract, preserves accepted decisions, checks Git baseline and scope, and requires explicit replan mode for intentional redesign. Do NOT use for fresh work with no prior agent's decisions to preserve, for a single-harness session that no one else is continuing, or as a general handoff-writing helper (see the session-handoff rule); this skill governs the contract between agents, not the notes one agent leaves itself."
 ---
 
 # Cross-Harness Continuation

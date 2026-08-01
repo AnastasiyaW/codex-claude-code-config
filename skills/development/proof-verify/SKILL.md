@@ -1,4 +1,4 @@
-﻿---
+---
 name: proof-verify
 description: Plan-based verification - freeze acceptance criteria before building, then verify after with an independent fresh-context agent (the builder must not verify their own work). Use when - "verify against plan", "proof check", "independent review", "check the implementation", or confirming a feature built from a plan meets spec. Do NOT use for quick one-off checks with no plan, or for letting the builder self-verify.
 ---

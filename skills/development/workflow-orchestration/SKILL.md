@@ -1,4 +1,4 @@
-﻿---
+---
 name: workflow-orchestration
 description: "Написание и запуск Claude Code dynamic workflows (детерминированный JS-оркестратор субагентов, research preview 2026-05-28). Use when пишешь или запускаешь workflow, видишь keyword workflow в запросе, нужен fan-out на десятки-сотни агентов, codebase-wide аудит/миграция, cross-checked research, competency-review, batch-обработка списка элементов через стадии. Покрывает: примитивы phase/agent/parallel/pipeline/workflow, pipeline vs parallel, schema, budget, resume, quality-паттерны (adversarial verify, judge panel, loop-until-dry), и наши добавки к платформе (retry-обёртка, error policy, .runs observability, eval-harness, billing-дисциплина). Триггеры: workflow, воркфлоу, оркестратор, fan-out, ultracode, deep-research, 1000 агентов, детерминированный скрипт агентов. Do NOT use to design the agent/Generator-Evaluator architecture itself (use harness-design) or for a single one-shot subagent/review where no deterministic multi-stage script is needed; this writes the JS orchestrator, it is not for ad-hoc one-off agent calls."
 metadata:

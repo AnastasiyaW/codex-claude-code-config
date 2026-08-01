@@ -85,8 +85,14 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--source", type=Path, default=repo_root / "skills", help="repository skills directory")
-    parser.add_argument("--target", type=Path, default=Path.home() / ".agents" / "skills", help="active Codex skills directory")
-    parser.add_argument("--backup-root", type=Path, default=Path.home() / ".agents" / "skill-backups")
+    # Codex reads two roots: user-level ~/.codex/skills, and project-level .agents/skills
+    # found by walking up from the cwd to the repository root. A home-level ~/.agents/skills
+    # is neither, so syncing there reported "synchronized: N skill(s)" while Codex saw none
+    # of them. Measured 2026-08-01 on two machines independently. Pass --target for the
+    # project-level root of a specific repo.
+    parser.add_argument("--target", type=Path, default=Path.home() / ".codex" / "skills",
+                        help="active Codex skills directory (default: user-level ~/.codex/skills)")
+    parser.add_argument("--backup-root", type=Path, default=Path.home() / ".codex" / "skill-backups")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="report drift without writing (default)")
     mode.add_argument("--apply", action="store_true", help="copy source files and back up changed targets")
