@@ -1,4 +1,4 @@
-﻿# Safety Hooks — свод (mechanical enforcement)
+# Safety Hooks — свод (mechanical enforcement)
 
 Реальную защиту дают **hooks** — они срабатывают механически на каждый tool call. Это правило -
 объяснение ПОЧЕМУ и safe-альтернативы. Hook = закон, правило = объяснение.

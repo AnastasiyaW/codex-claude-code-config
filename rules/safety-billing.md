@@ -1,4 +1,4 @@
-﻿# Safety: Billing — Silent Subscription Overrides in Claude Code
+# Safety: Billing — Silent Subscription Overrides in Claude Code
 
 ## Правило (advice layer)
 

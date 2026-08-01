@@ -1,4 +1,4 @@
-﻿# No Claude Attribution в git / GitHub / Issues / PR
+# No Claude Attribution в git / GitHub / Issues / PR
 
 ## Принцип
 

@@ -1,4 +1,4 @@
-﻿# AGENTS.md
+# AGENTS.md
 
 This is a configuration system repository for AI coding agents, not an application. It collects battle-tested architectural principles, security hardening, and decision frameworks that any coding agent can drop into any project.
 

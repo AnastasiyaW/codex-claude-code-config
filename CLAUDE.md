@@ -1,4 +1,4 @@
-﻿# Claude Global Rules
+# Claude Global Rules
 
 ## Core Working Rules (always-on, mechanical)
 

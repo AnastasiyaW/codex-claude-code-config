@@ -1,4 +1,4 @@
-﻿# Edit Formats & Architect/Editor Tiering — токен-экономные правки + распределение по моделям
+# Edit Formats & Architect/Editor Tiering — токен-экономные правки + распределение по моделям
 
 ## Принцип (2026-06-09, из разбора Aider)
 

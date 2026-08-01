@@ -1,10 +1,21 @@
-﻿# Claude Code + Codex Agent Configuration System
+# Claude Code + Codex Agent Configuration System
 
 [![OKF v0.1 compliant](https://img.shields.io/badge/OKF-v0.1%20compliant-4285F4)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
 
 A practical configuration kit for Claude Code, Codex, and other coding agents. It contains architectural principles, enforcement hooks, skills, drop-in rules, starter templates, and dynamic-workflow commands. Drop the relevant parts into a project so the agent starts from verified working patterns instead of rediscovering them every session.
 
 This is not a collection of tips. It is a **system** that teaches your agent *how to work* - when to use one agent vs many, how to verify its own output, how to manage context across long sessions, how to not get poisoned by malicious packages.
+
+## Notes
+
+Write-ups of the incidents that produced a rule or a hook here. Each states what was measured,
+what is inference, and what the fix does not cover.
+
+| | |
+|---|---|
+| **[Starting from what you remember](docs/starting-from-what-you-remember.md)** | Why a brand-new project arrives years out of date, why an invented package name is now a security problem rather than a 404, and where a dependency check has to sit to catch either. Ships as [`hooks/dependency-currency-guard.py`](hooks/dependency-currency-guard.py). |
+| **[Why an agent circles instead of acting](docs/why-agents-circle-instead-of-acting.md)** | Two agents, identical rules, different gate shapes. Describing a fix instead of applying it turned out to be the only move with no gate on it. |
+| **[Gates that cannot bootstrap themselves](principles/30-gates-that-cannot-bootstrap.md)** | A check that only arms once the thing it checks for already exists will never arm. The failure looks exactly like compliance. |
 
 ---
 
@@ -331,21 +342,6 @@ from live `SKILL.md` frontmatter, so it cannot silently fall behind the source:
 python scripts/generate_skills_catalog.py --check
 python scripts/generate_skills_lock.py --check
 ```
-
----
-
-## Notes
-
-Longer write-ups of incidents that produced a rule or a hook here. Each states what was
-measured, what is inference, and what the fix does not cover.
-
-- **[Starting from what you remember](docs/starting-from-what-you-remember.md)** - why a
-  brand-new project arrives years out of date, why an invented package name is now a security
-  problem rather than a 404, and where a dependency check has to sit to catch either
-  ([`hooks/dependency-currency-guard.py`](hooks/dependency-currency-guard.py))
-- **[Why an agent circles instead of acting](docs/why-agents-circle-instead-of-acting.md)** -
-  two agents, identical rules, different gate shapes; describing a fix was the only move with
-  no gate on it
 
 ---
 

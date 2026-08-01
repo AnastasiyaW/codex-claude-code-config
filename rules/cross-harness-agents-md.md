@@ -1,4 +1,4 @@
-﻿# Cross-Harness Context — один AGENTS.md на проект (Claude + Gemini + Codex)
+# Cross-Harness Context — один AGENTS.md на проект (Claude + Gemini + Codex)
 
 ## Принцип (2026-06-10)
 

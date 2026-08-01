@@ -1,4 +1,4 @@
-﻿# Element Library Scaling Architecture (10,000+ elements)
+# Element Library Scaling Architecture (10,000+ elements)
 
 How to store, organize, search, and compose pixel-art elements at scale where a small agent can build beautiful animated scenes from text prompts. This goes beyond the v3.15 single-file approach (`elements.js`, 9 elements) to a tier-based growth path: 10 → 100 → 1,000 → 10,000+.
 
