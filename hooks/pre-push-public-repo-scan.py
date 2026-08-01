@@ -109,6 +109,11 @@ SECRET_PATTERNS = {
 #   override     : CLAUDE_PUBLIC_SCAN_NAMES=<path>
 # With no such file the two name-based checks are simply inactive, and the scanner says
 # so rather than reporting a clean scan it did not perform.
+# If a private config repo is present it already declares this list as its single
+# source of truth, and `privacy_markers` there is read by its own split guard. Use
+# it rather than starting a second list: one invariant kept in two places drifts,
+# and the half that drifts is the half nobody re-reads.
+PRIVATE_ROUTING = os.path.expanduser("~/.claude/claude-code-private/routing.json")
 PRIVATE_NAMES_FILE = os.environ.get(
     "CLAUDE_PUBLIC_SCAN_NAMES",
     os.path.expanduser("~/.claude/private-hooks/public-scan-private-names.txt"),
@@ -116,6 +121,15 @@ PRIVATE_NAMES_FILE = os.environ.get(
 
 
 def _load_private_names() -> list[str]:
+    if "CLAUDE_PUBLIC_SCAN_NAMES" not in os.environ:
+        try:
+            with open(PRIVATE_ROUTING, encoding="utf-8-sig") as fh:
+                markers = json.load(fh).get("privacy_markers") or []
+            if markers:
+                # already regexes by contract in that file
+                return [str(m) for m in markers]
+        except (OSError, ValueError):
+            pass
     try:
         with open(PRIVATE_NAMES_FILE, encoding="utf-8-sig") as fh:
             lines = fh.read().splitlines()
@@ -331,8 +345,11 @@ def main() -> int:
     # Say which checks are actually armed. A scan that reports clean while one of its
     # checks was never loaded is the silent-pass failure this whole guard exists against.
     if _PRIVATE_NAMES:
-        print(f"[pre-push] private-name check armed: {len(_PRIVATE_NAMES)} name(s) "
-              f"from {PRIVATE_NAMES_FILE}", file=sys.stderr)
+        source = (PRIVATE_NAMES_FILE if "CLAUDE_PUBLIC_SCAN_NAMES" in os.environ
+                  else (PRIVATE_ROUTING if os.path.exists(PRIVATE_ROUTING)
+                        else PRIVATE_NAMES_FILE))
+        print(f"[pre-push] private-name check armed: {len(_PRIVATE_NAMES)} pattern(s) "
+              f"from {source}", file=sys.stderr)
     else:
         print(f"[pre-push] NOTE: private-name check INACTIVE - no list at "
               f"{PRIVATE_NAMES_FILE}. Host and internal script names will not be "
@@ -417,15 +434,22 @@ def self_test() -> int:
         listing = os.path.join(td, "names.txt")
         with open(listing, "w", encoding="utf-8") as fh:
             fh.write("# comment\nexample-host\nrunner_tool.py\nre:node-\\d+\n\n")
-        # _load_private_names reads the module-level path, so exercise the parser
-        # through a temporary override of that path.
+        # The loader prefers the private routing file unless an explicit override is
+        # set, so the override must be set here or this exercises the wrong branch --
+        # which is exactly what the first version of this self-test did.
         global PRIVATE_NAMES_FILE
         saved = PRIVATE_NAMES_FILE
+        saved_env = os.environ.get("CLAUDE_PUBLIC_SCAN_NAMES")
         try:
+            os.environ["CLAUDE_PUBLIC_SCAN_NAMES"] = listing
             PRIVATE_NAMES_FILE = listing
             names = _load_private_names()
         finally:
             PRIVATE_NAMES_FILE = saved
+            if saved_env is None:
+                os.environ.pop("CLAUDE_PUBLIC_SCAN_NAMES", None)
+            else:
+                os.environ["CLAUDE_PUBLIC_SCAN_NAMES"] = saved_env
 
         print("parsing:")
         check("comments and blanks dropped", len(names), 3)
@@ -438,11 +462,25 @@ def self_test() -> int:
         check("unrelated text clean", bool(pat.search("nothing to see")), False)
 
         print("absent list:")
+        saved_env = os.environ.get("CLAUDE_PUBLIC_SCAN_NAMES")
         try:
-            PRIVATE_NAMES_FILE = os.path.join(td, "does-not-exist.txt")
+            missing = os.path.join(td, "does-not-exist.txt")
+            os.environ["CLAUDE_PUBLIC_SCAN_NAMES"] = missing
+            PRIVATE_NAMES_FILE = missing
             check("missing file yields no names", _load_private_names(), [])
         finally:
             PRIVATE_NAMES_FILE = saved
+            if saved_env is None:
+                os.environ.pop("CLAUDE_PUBLIC_SCAN_NAMES", None)
+            else:
+                os.environ["CLAUDE_PUBLIC_SCAN_NAMES"] = saved_env
+
+        print("source preference:")
+        if os.path.exists(PRIVATE_ROUTING):
+            check("private routing wins when no override is set",
+                  len(_load_private_names()) > 0, True)
+        else:
+            print("  [skip] no private routing file on this machine")
 
     print("baseline patterns present:")
     for name in ("ssh_private_paths", "home_user_path", "ssh_ports_internal"):
