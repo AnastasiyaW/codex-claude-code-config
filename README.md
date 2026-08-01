@@ -334,6 +334,21 @@ python scripts/generate_skills_lock.py --check
 
 ---
 
+## Notes
+
+Longer write-ups of incidents that produced a rule or a hook here. Each states what was
+measured, what is inference, and what the fix does not cover.
+
+- **[Starting from what you remember](docs/starting-from-what-you-remember.md)** - why a
+  brand-new project arrives years out of date, why an invented package name is now a security
+  problem rather than a 404, and where a dependency check has to sit to catch either
+  ([`hooks/dependency-currency-guard.py`](hooks/dependency-currency-guard.py))
+- **[Why an agent circles instead of acting](docs/why-agents-circle-instead-of-acting.md)** -
+  two agents, identical rules, different gate shapes; describing a fix was the only move with
+  no gate on it
+
+---
+
 ## Complementary Tools
 
 These work well alongside the principles:
