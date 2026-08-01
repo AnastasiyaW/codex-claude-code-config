@@ -38,7 +38,7 @@ def scan(cache: Path) -> tuple[list[Finding], list[str]]:
     errors: list[str] = []
     for path in hook_configs(cache):
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
             errors.append(f"{path}: invalid JSON ({exc})")
             continue
@@ -63,7 +63,7 @@ def repair(findings: list[Finding]) -> tuple[list[Path], list[str]]:
             )
             continue
         try:
-            data = json.loads(finding.path.read_text(encoding="utf-8"))
+            data = json.loads(finding.path.read_text(encoding="utf-8-sig"))
             backup = finding.path.with_name(f"{finding.path.name}.bak")
             if not backup.exists():
                 shutil.copy2(finding.path, backup)
