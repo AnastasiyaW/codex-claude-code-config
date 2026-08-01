@@ -98,14 +98,51 @@ SECRET_PATTERNS = {
     "generic_long_bearer": r"(?i)\bbearer\s+([A-Za-z0-9._\-=]{40,})",
 }
 
+# Your own host names, internal script names and similar identifiers cannot live in
+# this file: it is itself published to a public repository, and a scanner that carries
+# the list of names it defends is a leak with extra steps. This is not hypothetical --
+# an earlier revision hardcoded them, and the scanner blocked its own publication.
+#
+# So the names are loaded from a local file that is never committed. One token per line,
+# `#` for comments. Regex metacharacters are escaped, so plain names are safe to write.
+#   default path : ~/.claude/private-hooks/public-scan-private-names.txt
+#   override     : CLAUDE_PUBLIC_SCAN_NAMES=<path>
+# With no such file the two name-based checks are simply inactive, and the scanner says
+# so rather than reporting a clean scan it did not perform.
+PRIVATE_NAMES_FILE = os.environ.get(
+    "CLAUDE_PUBLIC_SCAN_NAMES",
+    os.path.expanduser("~/.claude/private-hooks/public-scan-private-names.txt"),
+)
+
+
+def _load_private_names() -> list[str]:
+    try:
+        with open(PRIVATE_NAMES_FILE, encoding="utf-8-sig") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for ln in lines:
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        # `re:` prefix passes the rest through as a regex, for families like a
+        # numbered host series. Everything else is a literal name and gets escaped,
+        # so a dot in a filename cannot quietly become "any character".
+        out.append(ln[3:].strip() if ln.startswith("re:") else re.escape(ln))
+    return out
+
+
 # Personal data patterns (for public repos)
 PII_PATTERNS = {
     "ssh_private_paths": r"(~/\.ssh/id_[a-z0-9_]+(?!\.pub))",
     "home_user_path": r"(/home/[a-z0-9_-]+/|C:\\Users\\[a-zA-Z0-9_-]+\\|/Users/[a-zA-Z0-9_-]+/)",
-    "server_hostnames_known": r"\b(faln-\d+|fal-h200-\d+|h200-\d+|vast-glam|gpu-h100|happy0[0-9]-lan)\b",
     "ssh_ports_internal": r"\bssh\s+.*-p\s+(2222|4000[0-7])\b",
-    "internal_script_names": r"\b(h200_manager\.py|sni_tunnel\.py|wasabi-proxy)\b",
 }
+
+_PRIVATE_NAMES = _load_private_names()
+if _PRIVATE_NAMES:
+    PII_PATTERNS["private_names"] = r"\b(" + "|".join(_PRIVATE_NAMES) + r")\b"
 
 
 @dataclass
@@ -291,6 +328,16 @@ def main() -> int:
         unknown_visibility = False
         print(f"[pre-push] {owner}/{repo} is PUBLIC - running 2-agent scan...", file=sys.stderr)
 
+    # Say which checks are actually armed. A scan that reports clean while one of its
+    # checks was never loaded is the silent-pass failure this whole guard exists against.
+    if _PRIVATE_NAMES:
+        print(f"[pre-push] private-name check armed: {len(_PRIVATE_NAMES)} name(s) "
+              f"from {PRIVATE_NAMES_FILE}", file=sys.stderr)
+    else:
+        print(f"[pre-push] NOTE: private-name check INACTIVE - no list at "
+              f"{PRIVATE_NAMES_FILE}. Host and internal script names will not be "
+              f"detected. Create the file (one name per line) to arm it.", file=sys.stderr)
+
     # Read stdin for push refs; find SHAs
     push_lines = sys.stdin.read().splitlines()
     if not push_lines:
@@ -351,7 +398,65 @@ def main() -> int:
     return 0
 
 
+def self_test() -> int:
+    """Prove the name check arms, escapes literals, and stays absent without a list.
+
+    A guard installed from a repository has to be verifiable on the machine that
+    installed it -- "the file is present" is not the same as "the check runs".
+    """
+    import tempfile
+
+    failures = []
+
+    def check(label, got, want):
+        if got != want:
+            failures.append(f"{label}: got {got!r}, want {want!r}")
+        print(f"  [{'ok ' if got == want else 'FAIL'}] {label}")
+
+    with tempfile.TemporaryDirectory() as td:
+        listing = os.path.join(td, "names.txt")
+        with open(listing, "w", encoding="utf-8") as fh:
+            fh.write("# comment\nexample-host\nrunner_tool.py\nre:node-\\d+\n\n")
+        # _load_private_names reads the module-level path, so exercise the parser
+        # through a temporary override of that path.
+        global PRIVATE_NAMES_FILE
+        saved = PRIVATE_NAMES_FILE
+        try:
+            PRIVATE_NAMES_FILE = listing
+            names = _load_private_names()
+        finally:
+            PRIVATE_NAMES_FILE = saved
+
+        print("parsing:")
+        check("comments and blanks dropped", len(names), 3)
+        pat = re.compile(r"\b(" + "|".join(names) + r")\b")
+        print("matching:")
+        check("plain name matches", bool(pat.search("ssh example-host uptime")), True)
+        check("filename matches", bool(pat.search("./runner_tool.py")), True)
+        check("re: family matches", bool(pat.search("node-42 is down")), True)
+        check("dot is escaped, not any-char", bool(pat.search("runner_toolXpy")), False)
+        check("unrelated text clean", bool(pat.search("nothing to see")), False)
+
+        print("absent list:")
+        try:
+            PRIVATE_NAMES_FILE = os.path.join(td, "does-not-exist.txt")
+            check("missing file yields no names", _load_private_names(), [])
+        finally:
+            PRIVATE_NAMES_FILE = saved
+
+    print("baseline patterns present:")
+    for name in ("ssh_private_paths", "home_user_path", "ssh_ports_internal"):
+        check(name, name in PII_PATTERNS, True)
+
+    print("\nSELF-TEST:", "PASS" if not failures else "FAIL")
+    for f in failures:
+        print("  -", f)
+    return 0 if not failures else 1
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        sys.exit(self_test())
     try:
         sys.exit(main())
     except Exception as e:
