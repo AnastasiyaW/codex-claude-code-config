@@ -313,14 +313,14 @@ UPDATED HOW-IT-WORKS.md, alternatives/agent-mailbox-system.md, principles/19-int
 - Sanitization: replaced specific deployment name + 3 person-name role assignments with generic role descriptions (planner / executor / reviewer). The pattern stays intact; the case study just becomes provider-neutral.
 
 UPDATED rules/no-guessing.md, rules/verify-at-consumer.md
-- Replaced "Илюхина's Claude" attribution with "a collaborator's parallel Claude session" (idea attribution preserved, person name removed)
+- Replaced a personal-name attribution with "a collaborator's parallel Claude session" (idea attribution preserved, person name removed)
 
 UPDATED rules/long-run-harness.md
 - Replaced 3 broken author-workspace `.claude/rules/...` cross-refs with `project-level .claude/rules/...` (in the public repo they read as broken pointers)
 
 UPDATED UPDATES.md (historic entries)
 - v3.7.1 entry: replaced 3 specific project mentions with generic descriptors
-- v3.20.x entry: "Илюхина's Claude" attribution updated
+- v3.20.x entry: personal-name attribution updated
 - Inter-Agent Mail v3.18 entry: production validation reference made provider-neutral
 
 **Local-only changes (not in public repo, documented here for reference):**
