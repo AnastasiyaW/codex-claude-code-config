@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "mode": "continuation",
-  "project": "retouch-app",
+  "project": "example-app",
   "goal": "Finish one verified implementation slice without replacing accepted work.",
   "baseline": {
     "repo_root": "C:/path/to/repo",

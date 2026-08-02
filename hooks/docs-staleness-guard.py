@@ -54,7 +54,7 @@ SKIP_NAME = ".skip-docs-staleness"
 def _project_anchors(cwd: Path) -> tuple[str, ...]:
     """Default anchors + optional per-project extras from .claude/.docs-anchors.
 
-    Lets a repo whose agent-KB lives elsewhere (e.g. retouch-app's kb/docs
+    Lets a repo whose agent-KB lives elsewhere (e.g. a kb/docs
     MkDocs tree) opt its real docs root into freshness tracking. Lines starting
     with '#' are comments; paths are repo-relative.
     """

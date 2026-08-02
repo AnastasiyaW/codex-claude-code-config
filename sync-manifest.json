@@ -135,7 +135,10 @@
     "black\\.design",
     "\\bnastya\\b",
     "\\bartem\\b",
-    "\\bani\\b(?!mat|mation)"
+    "\\bani\\b(?!mat|mation)",
+    "happyin",
+    "retouch-app",
+    "ois-gold"
   ],
   "_privacy_comment": "privacy_markers cover BOTH infrastructure (hosts, subnets, paths, product domains) AND identity (personal names, work handles, mail). The identity half was missing until 2026-07-31, when a sync proposed replacing a generalised credit line with a real surname and the scan passed it: the list knew hosts and did not know people. A name reaching a public repository is not recoverable by deleting the line afterwards."
 }

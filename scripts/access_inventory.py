@@ -10,7 +10,7 @@ That is not a knowledge problem, it is a lookup problem, so it gets a lookup.
 
     python access_inventory.py                # everything we hold, grouped
     python access_inventory.py cloudflare     # only what matches
-    python access_inventory.py staging happyin
+    python access_inventory.py staging myproduct
 
 Prints NAMES, files and sizes only -- never a value. Reading a secret to use it
 is normal work here; printing one into a transcript is not.

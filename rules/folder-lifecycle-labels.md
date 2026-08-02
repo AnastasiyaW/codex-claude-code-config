@@ -19,7 +19,7 @@ The marker file is `.folder-meta.json` in the directory root.
 ```json
 {
   "label": "TEMP_REPRODUCIBLE",
-  "project": "retouch-app",
+  "project": "example-app",
   "created_by": "codex",
   "created_at": "2026-07-03",
   "safe_to_delete": true,

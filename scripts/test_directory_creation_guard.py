@@ -48,8 +48,8 @@ def main() -> int:
     assert_allowed("mkdir reports/hook-evidence/run-001", tool="Bash")
     assert_blocked("New-Item -ItemType Directory -Path random-new-folder", "project root")
     assert_allowed(
-        "New-Item -ItemType Directory -Path retouch-app; "
-        "Set-Content -Path retouch-app/.folder-meta.json -Value '{\"label\":\"PROJECT_ROOT\"}'"
+        "New-Item -ItemType Directory -Path example-app; "
+        "Set-Content -Path example-app/.folder-meta.json -Value '{\"label\":\"PROJECT_ROOT\"}'"
     )
     assert_blocked("mkdir .tmp/probe-run", "lifecycle marker")
     assert_allowed(
