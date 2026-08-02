@@ -16,6 +16,7 @@ what is inference, and what the fix does not cover.
 | **[Starting from what you remember](docs/starting-from-what-you-remember.md)** | Why a brand-new project arrives years out of date, why an invented package name is now a security problem rather than a 404, and where a dependency check has to sit to catch either. Ships as [`hooks/dependency-currency-guard.py`](hooks/dependency-currency-guard.py). |
 | **[Why an agent circles instead of acting](docs/why-agents-circle-instead-of-acting.md)** | Two agents, identical rules, different gate shapes. Describing a fix instead of applying it turned out to be the only move with no gate on it. |
 | **[Gates that cannot bootstrap themselves](principles/30-gates-that-cannot-bootstrap.md)** | A check that only arms once the thing it checks for already exists will never arm. The failure looks exactly like compliance. |
+| **[Nine skills, one skeleton, and nobody reaching for them](docs/skills-organised-by-author.md)** | Nine architecture skills existed and one was reachable — the one arguing for less code. How a one-sided advisory becomes a ratchet toward monoliths, and why filing knowledge by source book makes it unreachable. |
 
 ---
 
