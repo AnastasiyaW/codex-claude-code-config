@@ -244,8 +244,32 @@ ROUTES = [
             r"\b(спроектируй|архитектур\w*|design the|architecture|структур\w* проекта|project structure)\b",
             r"\b(куда положить|где должен жить|where should .{0,20}(live|go))\b",
         ],
-        "skill": "clean-architecture",
-        "description": "Decide the seams BEFORE the first file: dependency rule, module boundaries, where each layer lives",
+        "skill": "architecture-first",
+        "description": "Decide the seams BEFORE the first file: dependency rule, module boundaries, domain contexts, where each thing lives",
+    },
+    # Will it hold, and where does the data live. Kept separate from the layout question
+    # on purpose: capacity and storage are a different decision moment, and merging them
+    # into the layout route made both answers vaguer.
+    {
+        "patterns": [
+            r"\b(выдержит|нагрузк\w*|масштаб\w*|will it (hold|scale)|scal(e|ing)|throughput|capacity)\b",
+            r"\b(как(ую|ой)|выбрать|choose|which)\b.{0,24}\b(баз\w* данных|бд|database|db|кеш|cache|очеред\w*|queue)\b",
+            r"\b(шард\w*|sharding|партиционир\w*|partition\w*|реплик\w*|replica\w*|consistency|консистентн\w*)\b",
+            r"\b(медленн\w*|slow)\b.{0,30}\b(запрос\w*|quer(y|ies)|под нагрузкой|at scale|in production)\b",
+        ],
+        "skill": "system-and-data-design",
+        "description": "Estimate before drawing: load numbers, then storage engine, replication, partitioning, consistency",
+    },
+    # Unit-level comprehensibility while the code is being written.
+    {
+        "patterns": [
+            r"\b(отревьюй|проверь|review)\b.{0,20}\b(код|code|функци\w*|класс\w*|модул\w*)\b",
+            r"\b(тяжело читать|не понятно|hard to (read|follow)|unreadable|convoluted)\b",
+            r"\b(имен\w*|назв\w*|naming|name this)\b.{0,20}\b(функци\w*|переменн\w*|метод\w*|function|variable|method)\b",
+            r"\b(дубл\w*|duplicat\w*|too many (parameters|arguments)|pass-through|god (function|method))\b",
+        ],
+        "skill": "code-complexity",
+        "description": "Deep modules, information hiding, honest names, error paths that do not swallow",
     },
     # Shape of an EXISTING thing that has grown. Distinct from the route above: that one
     # is about starting, this one is about a module that already outgrew its shape.
@@ -256,8 +280,8 @@ ROUTES = [
             r"\b(слишком (большой|длинный)|too (big|long|large)|god (object|class|module)|ball of mud)\b",
             r"\b(связност\w*|связи|coupling|cohesion|circular (import|dependency))\b",
         ],
-        "skill": "software-design-philosophy",
-        "description": "Deep modules, information hiding: find the seam that removes the most coupling per cut",
+        "skill": "refactoring-safely",
+        "description": "Characterization tests first, then one named transformation at a time: constants, then owned state, then whole slices",
     },
     # Site review / SEO. Target is plugin-namespaced: it resolves only where the
     # plugin is installed, which is why the audit does not require it to exist.
