@@ -35,6 +35,10 @@ LOCAL_ONLY_SKILLS = {
     "native-cpp-memory",
     "retouch-security-audit",
     "investigate",
+    # Claude-only by content, not by policy: it references ~/.claude paths and tools
+    # Codex does not have, so copying it there would look installed and could not work.
+    # Declaring it is the honest version of the same statement.
+    "harness-audit",
 }
 
 # ─── Keyword → Skill mapping ───
