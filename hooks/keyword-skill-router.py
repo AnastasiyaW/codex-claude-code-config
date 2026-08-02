@@ -225,6 +225,36 @@ ROUTES = [
         "skill": "lean-code",
         "description": "Strip over-engineering while preserving correctness and verification",
     },
+    # Shape of a NEW thing. This route exists because the pressure on code shape was
+    # one-sided: `lean-code` above was the only architecture-adjacent skill the router
+    # could reach, and it argues for less. clean-architecture declares "AUTO-APPLY on
+    # ANY coding process" in its own description, and nothing auto-applied it -- a claim
+    # in prose is not a wire. Measured consequence on one project: a single backend
+    # module at 8823 lines with 190 route handlers and 13 shared mutable objects,
+    # reached in increments that were each individually the smallest correct change.
+    {
+        "patterns": [
+            r"\b(нов(ый|ая|ое)|new)\b.{0,20}\b(проект|сервис|сайт|приложени\w*|project|service|site|app|api)\b",
+            r"\b(сделай|создай|напиши|построй|build|create|make|set up|scaffold)\b.{0,30}"
+            r"\b(сервис|сайт|бэкенд|бекенд|фронтенд|приложени\w*|микросервис|service|backend|frontend|app|api|dashboard)\b",
+            r"\b(спроектируй|архитектур\w*|design the|architecture|структур\w* проекта|project structure)\b",
+            r"\b(куда положить|где должен жить|where should .{0,20}(live|go))\b",
+        ],
+        "skill": "clean-architecture",
+        "description": "Decide the seams BEFORE the first file: dependency rule, module boundaries, where each layer lives",
+    },
+    # Shape of an EXISTING thing that has grown. Distinct from the route above: that one
+    # is about starting, this one is about a module that already outgrew its shape.
+    {
+        "patterns": [
+            r"\b(разбей|раздели|вынеси|split|extract|break up|decompose)\b.{0,30}"
+            r"\b(модул\w*|файл\w*|класс\w*|module|file|class|monolith|монолит)\b",
+            r"\b(слишком (большой|длинный)|too (big|long|large)|god (object|class|module)|ball of mud)\b",
+            r"\b(связност\w*|связи|coupling|cohesion|circular (import|dependency))\b",
+        ],
+        "skill": "software-design-philosophy",
+        "description": "Deep modules, information hiding: find the seam that removes the most coupling per cut",
+    },
     # Site review / SEO. Target is plugin-namespaced: it resolves only where the
     # plugin is installed, which is why the audit does not require it to exist.
     {
