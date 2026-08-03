@@ -47,7 +47,7 @@ Six areas for building reliable, scalable distributed systems:
 | **Architecture review** | Walk reviewers through the four steps sequentially | Present scope, high-level diagram, deep-dive on the riskiest component, open questions |
 | **Incident postmortem** | Trace the failure back through the four-step lens | Which requirement was missed? Which building block failed? What tradeoff bit us? |
 
-See: [references/four-step-process.md](references/four-step-process.md)
+See: [system-design/four-step-process.md](system-design/four-step-process.md)
 
 ### 2. Back-of-the-Envelope Estimation
 
@@ -71,7 +71,7 @@ See: [references/four-step-process.md](references/four-step-process.md)
 | **Storage budgeting** | Estimate per-record size and multiply by volume and retention | 500M tweets/day x 300 bytes x 365 days = ~55 TB/year |
 | **SLA definition** | Convert availability nines to allowed downtime | Four nines (99.99%) = ~52 minutes downtime per year |
 
-See: [references/estimation-numbers.md](references/estimation-numbers.md)
+See: [system-design/estimation-numbers.md](system-design/estimation-numbers.md)
 
 ### 3. Building Blocks
 
@@ -96,7 +96,7 @@ See: [references/estimation-numbers.md](references/estimation-numbers.md)
 | **Global users** | Place a CDN in front of static assets | Serve JS/CSS/images from edge; origin only serves API |
 | **Uneven load** | Use consistent hashing for shard assignment | Add a node and only ~1/n keys need to move |
 
-See: [references/building-blocks.md](references/building-blocks.md)
+See: [system-design/building-blocks.md](system-design/building-blocks.md)
 
 ### 4. Database Design and Scaling
 
@@ -121,7 +121,7 @@ See: [references/building-blocks.md](references/building-blocks.md)
 | **Analytics dashboard** | Denormalize into read-optimized materialized views | Pre-join and aggregate nightly; serve dashboards from the materialized table |
 | **Multi-region app** | Multi-leader replication with conflict resolution | Each region has a leader; last-write-wins or application-level merge |
 
-See: [references/database-scaling.md](references/database-scaling.md)
+See: [system-design/database-scaling.md](system-design/database-scaling.md)
 
 ### 5. Common System Designs
 
@@ -147,7 +147,7 @@ See: [references/database-scaling.md](references/database-scaling.md)
 | **Social feed** | Hybrid fanout: push for normal users, pull for celebrities | Pre-compute feeds for accounts with < 10K followers; merge at read time for celebrity posts |
 | **Distributed IDs** | Snowflake: timestamp + datacenter + machine + sequence | 64-bit, time-sortable, no coordination required between generators |
 
-See: [references/common-designs.md](references/common-designs.md)
+See: [system-design/common-designs.md](system-design/common-designs.md)
 
 ### 6. Reliability and Operations
 
@@ -172,7 +172,7 @@ See: [references/common-designs.md](references/common-designs.md)
 | **Failure detection** | Liveness and readiness probes | `/healthz` returns 200 if alive; `/ready` returns 200 if database connected and cache warm |
 | **Data safety** | Define RPO/RTO and implement accordingly | RPO = 1 hour means hourly backups; RTO = 5 min means automated failover |
 
-See: [references/reliability-operations.md](references/reliability-operations.md)
+See: [system-design/reliability-operations.md](system-design/reliability-operations.md)
 
 ## Common Mistakes
 
@@ -202,12 +202,12 @@ See: [references/reliability-operations.md](references/reliability-operations.md
 
 ## Reference Files
 
-- [four-step-process.md](references/four-step-process.md): The complete four-step process with time allocation, example questions, and tips for each stage
-- [estimation-numbers.md](references/estimation-numbers.md): Powers of two, latency numbers, availability nines, QPS/storage/bandwidth estimation with worked examples
-- [building-blocks.md](references/building-blocks.md): DNS, CDN, load balancers, caching strategies, message queues, consistent hashing
-- [database-scaling.md](references/database-scaling.md): SQL vs NoSQL, replication, sharding strategies, denormalization, database selection guide
-- [common-designs.md](references/common-designs.md): URL shortener, rate limiter, news feed, chat system, search autocomplete, web crawler, unique ID generator
-- [reliability-operations.md](references/reliability-operations.md): Health checks, monitoring, logging, deployment strategies, disaster recovery, autoscaling
+- [four-step-process.md](system-design/four-step-process.md): The complete four-step process with time allocation, example questions, and tips for each stage
+- [estimation-numbers.md](system-design/estimation-numbers.md): Powers of two, latency numbers, availability nines, QPS/storage/bandwidth estimation with worked examples
+- [building-blocks.md](system-design/building-blocks.md): DNS, CDN, load balancers, caching strategies, message queues, consistent hashing
+- [database-scaling.md](system-design/database-scaling.md): SQL vs NoSQL, replication, sharding strategies, denormalization, database selection guide
+- [common-designs.md](system-design/common-designs.md): URL shortener, rate limiter, news feed, chat system, search autocomplete, web crawler, unique ID generator
+- [reliability-operations.md](system-design/reliability-operations.md): Health checks, monitoring, logging, deployment strategies, disaster recovery, autoscaling
 
 ## Further Reading
 

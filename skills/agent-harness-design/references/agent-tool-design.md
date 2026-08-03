@@ -263,8 +263,8 @@ for a in top_5:
 - Секция 5 (Tool Visibility) — `connector_exec` это один `base` tool вместо 50 `connector` tools
 - Секция 6 (Deferred Loading) — внутри sandbox, не requires deferred loading на model уровне
 - Секция 7 (Hosted vs Client) — sandbox = client tool **always** (private credentials, custom audit)
-- `~/.claude/rules/agent-budgets.md` — sandbox имеет свои budgets отдельно от model loop budgets
-- `~/.claude/rules/agent-observability.md` — egress log как trace fields обязательно
+- `agent-budgets.md` — sandbox имеет свои budgets отдельно от model loop budgets
+- `agent-observability.md` — egress log как trace fields обязательно
 
 ## Mechanical enforcement
 
@@ -293,9 +293,9 @@ for a in top_5:
 - `rules/no-guessing.md` - `next_valid_actions` снижает гадание модели о следующем шаге
 - `principles/01-harness-design.md` - этот rule operationализирует "tool guardrails" слой harness
 - `principles/10-agent-security.md` - permission decision object и draft/commit pattern - часть defence-in-depth
-- `rules/agent-approval-records.md` - approval token format, scope, expiration
-- `rules/agent-observability.md` - tool_calls / permission_decisions - обязательные trace fields
-- `rules/agent-event-model.md` - tool_call / tool_result events как persistence model
+- `agent-approval-records.md` - approval token format, scope, expiration
+- `agent-observability.md` - tool_calls / permission_decisions - обязательные trace fields
+- `agent-event-model.md` - tool_call / tool_result events как persistence model
 
 ## Источники
 

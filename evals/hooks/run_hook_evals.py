@@ -3,7 +3,7 @@
 
 Why: 28 wired hooks had zero tests; a false-positive bug in
 session-drift-validator lived unnoticed from install until 2026-06-09.
-Per rules/agent-evals.md every mechanical guard needs fixtures with
+Per skills/agent-harness-design/references/agent-evals.md every mechanical guard needs fixtures with
 mechanical pass/fail checks.
 
 Each case in cases.json:

@@ -48,7 +48,7 @@ Seven meta-principles for building software that lasts:
 | **Business logic** | Domain module | Tax calculation in one module, not scattered across controllers |
 | **Database schema** | Migration-driven | Schema defined in migrations, ORM models generated from DB |
 
-See: [references/dry-orthogonality.md](references/dry-orthogonality.md)
+See: [pragmatic-programmer/dry-orthogonality.md](pragmatic-programmer/dry-orthogonality.md)
 
 ### 2. Orthogonality
 
@@ -73,7 +73,7 @@ See: [references/dry-orthogonality.md](references/dry-orthogonality.md)
 | **Configuration** | Environment-driven | Feature flags in config, not `if` branches in business logic |
 | **Deployment** | Independent services | Deploy auth service without redeploying payment service |
 
-See: [references/dry-orthogonality.md](references/dry-orthogonality.md)
+See: [pragmatic-programmer/dry-orthogonality.md](pragmatic-programmer/dry-orthogonality.md)
 
 ### 3. Tracer Bullets and Prototypes
 
@@ -98,7 +98,7 @@ See: [references/dry-orthogonality.md](references/dry-orthogonality.md)
 | **Microservice** | Walking skeleton | Deploy a hello-world service through the full CI/CD pipeline |
 | **Data pipeline** | End-to-end flow | One record from ingestion through transformation to output |
 
-See: [references/tracer-bullets.md](references/tracer-bullets.md)
+See: [pragmatic-programmer/tracer-bullets.md](pragmatic-programmer/tracer-bullets.md)
 
 ### 4. Design by Contract and Assertive Programming
 
@@ -124,7 +124,7 @@ See: [references/tracer-bullets.md](references/tracer-bullets.md)
 | **API boundary** | Schema validation | Validate request body against schema before processing |
 | **Data pipeline** | Stage assertions | Assert row count after ETL transform matches expectation |
 
-See: [references/contracts-assertions.md](references/contracts-assertions.md)
+See: [pragmatic-programmer/contracts-assertions.md](pragmatic-programmer/contracts-assertions.md)
 
 ### 5. The Broken Window Theory
 
@@ -149,7 +149,7 @@ See: [references/contracts-assertions.md](references/contracts-assertions.md)
 | **New team member** | Clean onboarding path | First task: fix a broken window to learn the codebase |
 | **Monitoring** | Entropy metrics | Track linting violations, test coverage trends over time |
 
-See: [references/broken-windows.md](references/broken-windows.md)
+See: [pragmatic-programmer/broken-windows.md](pragmatic-programmer/broken-windows.md)
 
 ### 6. Reversibility and Flexibility
 
@@ -174,7 +174,7 @@ See: [references/broken-windows.md](references/broken-windows.md)
 | **Architecture** | Event-driven decoupling | Services communicate via events, not direct HTTP calls |
 | **Deployment** | Container abstraction | Dockerized app runs on AWS, GCP, or bare metal unchanged |
 
-See: [references/reversibility.md](references/reversibility.md)
+See: [pragmatic-programmer/reversibility.md](pragmatic-programmer/reversibility.md)
 
 ### 7. Estimation and Knowledge Portfolio
 
@@ -199,7 +199,7 @@ See: [references/reversibility.md](references/reversibility.md)
 | **Learning** | Weekly investment | 1 hour/week on a new language, tool, or domain |
 | **Career growth** | Portfolio diversification | Mix of depth (expertise) and breadth (adjacent skills) |
 
-See: [references/estimation-portfolio.md](references/estimation-portfolio.md)
+See: [pragmatic-programmer/estimation-portfolio.md](pragmatic-programmer/estimation-portfolio.md)
 
 ## Common Mistakes
 
@@ -227,12 +227,12 @@ See: [references/estimation-portfolio.md](references/estimation-portfolio.md)
 
 ## Reference Files
 
-- [references/dry-orthogonality.md](references/dry-orthogonality.md) -- DRY knowledge vs. code duplication, four types of duplication, orthogonality in design and testing
-- [references/tracer-bullets.md](references/tracer-bullets.md) -- Tracer bullet vs. prototype development, building walking skeletons, iterating on tracer code
-- [references/contracts-assertions.md](references/contracts-assertions.md) -- Design by Contract, preconditions/postconditions/invariants, assertive programming patterns
-- [references/broken-windows.md](references/broken-windows.md) -- Software entropy, broken window theory, stone soup strategy, fighting degradation
-- [references/reversibility.md](references/reversibility.md) -- Flexible architecture, decoupling strategies, avoiding vendor lock-in, forking road decisions
-- [references/estimation-portfolio.md](references/estimation-portfolio.md) -- PERT estimation, decomposition techniques, knowledge portfolio management
+- [pragmatic-programmer/dry-orthogonality.md](pragmatic-programmer/dry-orthogonality.md) -- DRY knowledge vs. code duplication, four types of duplication, orthogonality in design and testing
+- [pragmatic-programmer/tracer-bullets.md](pragmatic-programmer/tracer-bullets.md) -- Tracer bullet vs. prototype development, building walking skeletons, iterating on tracer code
+- [pragmatic-programmer/contracts-assertions.md](pragmatic-programmer/contracts-assertions.md) -- Design by Contract, preconditions/postconditions/invariants, assertive programming patterns
+- [pragmatic-programmer/broken-windows.md](pragmatic-programmer/broken-windows.md) -- Software entropy, broken window theory, stone soup strategy, fighting degradation
+- [pragmatic-programmer/reversibility.md](pragmatic-programmer/reversibility.md) -- Flexible architecture, decoupling strategies, avoiding vendor lock-in, forking road decisions
+- [pragmatic-programmer/estimation-portfolio.md](pragmatic-programmer/estimation-portfolio.md) -- PERT estimation, decomposition techniques, knowledge portfolio management
 
 ## Further Reading
 

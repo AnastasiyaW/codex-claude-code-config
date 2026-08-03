@@ -93,9 +93,9 @@ Eval — это **harness test**, не model test. Проверяем не «м�
 
 ## Связь с другими правилами
 
-- `~/.claude/rules/agent-tool-design.md` — eval категория 4 (permission correctness) проверяет permission engine из этого rule
+- `agent-tool-design.md` — eval категория 4 (permission correctness) проверяет permission engine из этого rule
 - `~/.claude/rules/context-trust-labels.md` — eval категория 6 (prompt injection) проверяет trust label enforcement
-- `~/.claude/rules/agent-budgets.md` — eval категория 11 (cost/latency) проверяет budget enforcement
+- `agent-budgets.md` — eval категория 11 (cost/latency) проверяет budget enforcement
 - `~/.claude/skills/agents-best-practices/references/security-evals-observability.md` — полный source
 - principle 21 (Knowledge Base Enforcement) — каждое incident finding → regression eval
 - principle 02 (Proof Loop) — eval result = durable artifact, не self-claim

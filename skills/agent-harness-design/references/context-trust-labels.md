@@ -109,7 +109,7 @@ PostToolUse hook idea (для будущих версий harness): scan model c
 ## Связь с другими правилами
 
 - `rules/safety-secrets.md` - outbound защита (utечки secrets); этот rule - inbound защита (prompt injection)
-- `rules/agent-tool-design.md` - `next_valid_actions` помогают модели не угадывать на основе untrusted content
+- `agent-tool-design.md` - `next_valid_actions` помогают модели не угадывать на основе untrusted content
 - `rules/no-guessing.md` - правды живут в trusted источниках, untrusted = data only
 - `principles/10-agent-security.md` - этот rule - один слой defence-in-depth, реализующий "content isolation" компонент
 

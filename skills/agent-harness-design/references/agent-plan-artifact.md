@@ -146,9 +146,9 @@ User approves → approval token attached to plan_id + version. Если plan **
 
 ## Связь с другими правилами
 
-- `~/.claude/rules/agent-tool-design.md` — permission engine enforces planning mode tool restrictions
-- `~/.claude/rules/agent-approval-records.md` — approval JSON schema (parallel rule)
-- `~/.claude/rules/agent-budgets.md` — plan execution budget; planning mode само имеет budget на гадание
+- `agent-tool-design.md` — permission engine enforces planning mode tool restrictions
+- `agent-approval-records.md` — approval JSON schema (parallel rule)
+- `agent-budgets.md` — plan execution budget; planning mode само имеет budget на гадание
 - `~/.claude/rules/no-guessing.md` — Validate шаг 3 = source-of-truth verification
 - `~/.claude/skills/agents-best-practices/references/planning-and-goals.md` — full source
 - principle 02 (Proof Loop) — execute step → validate → durable artifact = same pattern

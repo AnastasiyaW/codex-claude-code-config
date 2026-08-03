@@ -108,9 +108,9 @@
 
 ## Связь с другими правилами
 
-- `~/.claude/rules/agent-evals.md` — grading questions overlap; evals = pre-launch, observability = post-launch
-- `~/.claude/rules/agent-tool-design.md` — `risk_class` field in trace per tool call
-- `~/.claude/rules/agent-budgets.md` — cost/latency fields в trace = budget enforcement
+- `agent-evals.md` — grading questions overlap; evals = pre-launch, observability = post-launch
+- `agent-tool-design.md` — `risk_class` field in trace per tool call
+- `agent-budgets.md` — cost/latency fields в trace = budget enforcement
 - `~/.claude/skills/agents-best-practices/references/security-evals-observability.md` — full source
 - principle 02 (Proof Loop) — trace = durable artifact для verifier
 - principle 16 (Project Chronicles) — incident summary в chronicle когда incident response завершён

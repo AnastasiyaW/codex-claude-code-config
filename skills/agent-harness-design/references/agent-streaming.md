@@ -89,8 +89,8 @@ Default рекомендация: **post-buffer** для всех output кот�
 
 ## Связь с другими правилами
 
-- `~/.claude/rules/agent-tool-design.md` — validate_args + permission_engine вызываются ПОСЛЕ полного buffer (правило 2 выше)
-- `~/.claude/rules/agent-observability.md` — log streaming events (start, abort, complete) как trace fields
+- `agent-tool-design.md` — validate_args + permission_engine вызываются ПОСЛЕ полного buffer (правило 2 выше)
+- `agent-observability.md` — log streaming events (start, abort, complete) как trace fields
 - `~/.claude/rules/safety-secrets.md` — output guardrail для secrets через post-buffer mode
 - `~/.claude/skills/agents-best-practices/references/provider-api-patterns.md` — full source
 

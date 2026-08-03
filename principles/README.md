@@ -1,6 +1,6 @@
 # Architectural Principles for AI Agent Systems
 
-A collection of 29 battle-tested principles for building reliable, high-quality AI agent workflows. Each principle is self-contained and can be adopted independently, but they compose well together.
+A collection of 30 battle-tested principles for building reliable, high-quality AI agent workflows. Each principle is self-contained and can be adopted independently, but they compose well together.
 
 ---
 
@@ -14,8 +14,8 @@ Start here if you are installing claude-code-config into a specific project. Eac
 | **Web app (React, Vue, Next.js)** | 04, 05 Structured Reasoning, 09, 10 Agent Security | 08 Skills Best Practices, 11 Documentation Integrity |
 | **ML / training / inference pipeline** | 03 Autoresearch, 04, 09, 12 Low-Signal Residual Training | 05, 13 Research Pipeline, 16 Project Chronicles |
 | **Library / published package** | 04, 08 Skills Best Practices, 09, 10 | 11, 17 DBS Skill Creation |
-| **New custom AI agent (any domain)** | 29 MVP Agent Blueprint, rules/agent-tool-design.md, rules/agent-budgets.md, rules/agent-evals.md, rules/agent-event-model.md | 01 Harness Design, 02 Proof Loop, 10 Agent Security, rules/agent-observability.md, rules/agent-plan-artifact.md, rules/agent-approval-records.md, rules/agent-streaming.md, rules/agent-skill-install-checklist.md |
-| **Agent that ingests external content** | 10 Agent Security, rules/context-trust-labels.md | 29 MVP Agent Blueprint, 02 Proof Loop, rules/agent-evals.md |
+| **New custom AI agent (any domain)** | 29 MVP Agent Blueprint, skills/agent-harness-design/references/agent-tool-design.md, skills/agent-harness-design/references/agent-budgets.md, skills/agent-harness-design/references/agent-evals.md, skills/agent-harness-design/references/agent-event-model.md | 01 Harness Design, 02 Proof Loop, 10 Agent Security, skills/agent-harness-design/references/agent-observability.md, skills/agent-harness-design/references/agent-plan-artifact.md, skills/agent-harness-design/references/agent-approval-records.md, skills/agent-harness-design/references/agent-streaming.md, skills/agent-harness-design/references/agent-skill-install-checklist.md |
+| **Agent that ingests external content** | 10 Agent Security, rules/context-trust-labels.md | 29 MVP Agent Blueprint, 02 Proof Loop, skills/agent-harness-design/references/agent-evals.md |
 | **Multi-agent / parallel sessions** | 01 Harness Design, 06 Multi-Agent Decomposition, 09, 18 Multi-Session Coordination, 19 Inter-Agent Communication | 02 Proof Loop, 14 Managed Agents, 22 Visual Context Pattern |
 | **Long-running project (weeks+)** | 02 Proof Loop, 07 Codified Context, 16 Project Chronicles | 11 Documentation Integrity, 21 Knowledge Base Enforcement |
 | **Security-sensitive codebase** | 09 Supply Chain Defense, 10 Agent Security, 15 Red Lines, 20 Vulnerability Detection Pipeline | 02 Proof Loop, 21 Knowledge Base Enforcement |
@@ -270,7 +270,7 @@ Three-layer enforcement stack for preventing LLM regression to generic defaults:
 
 Structured 15-section flow for designing a brand-new agent from scratch in any domain. Covers domain intake, autonomy level selection (5 levels), core loop, tool registry with risk classes, permission matrix, planning mode, goal-like loop, context/memory/compaction, skills/connectors, prompt caching, observability, build order, and first release checklist. Complements principle 01 (Harness Design) which assumes an agent already exists.
 
-**When to use:** When building a NEW agent for a specific domain (support, finance, ops, sales, research, any workflow automation) — not when improving an existing one. Use for new Agent SDK apps, custom Python orchestrators, new MCP servers, new Cloudflare Workers with tool calls. Pairs with the `rules/agent-tool-design.md`, `rules/context-trust-labels.md`, and `rules/agent-budgets.md` operational rules.
+**When to use:** When building a NEW agent for a specific domain (support, finance, ops, sales, research, any workflow automation) — not when improving an existing one. Use for new Agent SDK apps, custom Python orchestrators, new MCP servers, new Cloudflare Workers with tool calls. Pairs with the `skills/agent-harness-design/references/agent-tool-design.md`, `rules/context-trust-labels.md`, and `skills/agent-harness-design/references/agent-budgets.md` operational rules.
 
 **Source:** Denis Sergeevitch -- "agents-best-practices" skill (MIT, https://github.com/DenisSergeevitch/agents-best-practices), `references/mvp-agent-blueprint.md`. Adapted to our stack with cross-references to principles 01, 07, 10, 21 and the three new operational rules.
 
@@ -335,18 +335,18 @@ Use this table to pick the right principle for your situation:
 | "Agent output keeps defaulting to Inter / SELECT * / bare except" | 23 Anti-pattern as Config | 04 Deterministic Orchestration |
 | "Cloud design tool vs terminal-first design workflow?" | 22 Visual Context Pattern | alternatives/design-md-pattern.md |
 | "Need to design a brand-new agent from scratch" | 29 MVP Agent Blueprint | 01 Harness Design, 10 Agent Security |
-| "What tool risk classes / permission decisions should I model?" | 29 MVP Agent Blueprint | rules/agent-tool-design.md |
+| "What tool risk classes / permission decisions should I model?" | 29 MVP Agent Blueprint | skills/agent-harness-design/references/agent-tool-design.md |
 | "External webhook content might inject instructions" | rules/context-trust-labels.md | 10 Agent Security |
-| "Agent loop has no budget and runs away" | rules/agent-budgets.md | 29 MVP Agent Blueprint |
-| "What test cases must my agent pass before launch?" | rules/agent-evals.md | 02 Proof Loop, 21 KB Enforcement |
-| "How do I trace and debug agent behavior in production?" | rules/agent-observability.md | rules/agent-evals.md |
-| "How should plans for risky actions be structured?" | rules/agent-plan-artifact.md | rules/agent-approval-records.md |
-| "How do I record approvals so they're audit-able and scope-bounded?" | rules/agent-approval-records.md | rules/agent-plan-artifact.md |
-| "Implementing streaming tool calls without partial execution bugs" | rules/agent-streaming.md | rules/agent-tool-design.md |
+| "Agent loop has no budget and runs away" | skills/agent-harness-design/references/agent-budgets.md | 29 MVP Agent Blueprint |
+| "What test cases must my agent pass before launch?" | skills/agent-harness-design/references/agent-evals.md | 02 Proof Loop, 21 KB Enforcement |
+| "How do I trace and debug agent behavior in production?" | skills/agent-harness-design/references/agent-observability.md | skills/agent-harness-design/references/agent-evals.md |
+| "How should plans for risky actions be structured?" | skills/agent-harness-design/references/agent-plan-artifact.md | skills/agent-harness-design/references/agent-approval-records.md |
+| "How do I record approvals so they're audit-able and scope-bounded?" | skills/agent-harness-design/references/agent-approval-records.md | skills/agent-harness-design/references/agent-plan-artifact.md |
+| "Implementing streaming tool calls without partial execution bugs" | skills/agent-harness-design/references/agent-streaming.md | skills/agent-harness-design/references/agent-tool-design.md |
 | "Should I use Anthropic Managed Agents or build my own harness?" | 14 Managed Agents | 01 Harness Design, 29 MVP Agent Blueprint |
-| "How to persist agent state for replay / audit / compaction?" | rules/agent-event-model.md | rules/agent-observability.md |
-| "Installing a 3rd-party skill — what should I verify first?" | rules/agent-skill-install-checklist.md | 09 Supply Chain Defense, 10 Agent Security |
-| "MCP server has 50+ tools and burns context on every call" | rules/agent-tool-design.md section 9 (connector code-exec) | rules/agent-tool-design.md section 6 (deferred loading) |
+| "How to persist agent state for replay / audit / compaction?" | skills/agent-harness-design/references/agent-event-model.md | skills/agent-harness-design/references/agent-observability.md |
+| "Installing a 3rd-party skill — what should I verify first?" | skills/agent-harness-design/references/agent-skill-install-checklist.md | 09 Supply Chain Defense, 10 Agent Security |
+| "MCP server has 50+ tools and burns context on every call" | skills/agent-harness-design/references/agent-tool-design.md section 9 (connector code-exec) | skills/agent-harness-design/references/agent-tool-design.md section 6 (deferred loading) |
 
 ### Composition Patterns
 

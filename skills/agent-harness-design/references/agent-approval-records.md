@@ -115,10 +115,10 @@ Audit query: «who approved external sends to customer X в last 30 days?» = gr
 
 ## Связь с другими правилами
 
-- `~/.claude/rules/agent-tool-design.md` — permission decision object types include `approval_required`; этот rule описывает что записывается когда approval_required triggers
-- `~/.claude/rules/agent-plan-artifact.md` — plan version bump = approval invalidation
-- `~/.claude/rules/agent-observability.md` — approval_requests / approval_results — обязательные trace fields
-- `~/.claude/rules/agent-evals.md` — eval категория 5 (approval_correctness) проверяет это правило
+- `agent-tool-design.md` — permission decision object types include `approval_required`; этот rule описывает что записывается когда approval_required triggers
+- `agent-plan-artifact.md` — plan version bump = approval invalidation
+- `agent-observability.md` — approval_requests / approval_results — обязательные trace fields
+- `agent-evals.md` — eval категория 5 (approval_correctness) проверяет это правило
 - `~/.claude/skills/agents-best-practices/references/security-evals-observability.md` — original source
 
 ## Source

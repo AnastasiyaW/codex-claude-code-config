@@ -199,14 +199,14 @@ Caveat documented: prompt caching makes always-loaded content cheap but not harm
 
 Preventive close of the 3 remaining items from the v3.23.0 evaluation. We previously took 85% of upstream content (the parts with immediate use case). This release takes the remaining 15% (forward-looking) so the integration is complete and future surface-area additions only add NEW concepts, not catch-up on existing ones.
 
-NEW rules/agent-event-model.md (10th operational rule)
+NEW skills/agent-harness-design/references/agent-event-model.md (10th operational rule)
 - 13 canonical event types for harness state persistence: user_message, assistant_message, tool_call, tool_result, approval_request, approval_result, plan_update, goal_update, skill_invocation, memory_load, context_compaction, connector_call, error, final_answer
 - Append-only `events.jsonl` storage layout with separate artifacts/ folder for bulky payloads referenced by `evidence_ref`
 - Cross-event correlation via `parent_event_id` (tool_result → tool_call, approval_result → approval_request)
 - 5 operations made trivial with event model vs without (replay, audit, compaction, eval grading, cost analysis)
 - "Implement by trigger, not upfront" guidance: start with 5 minimal events, add others as production surfaces the need
 
-NEW rules/agent-skill-install-checklist.md (11th operational rule)
+NEW skills/agent-harness-design/references/agent-skill-install-checklist.md (11th operational rule)
 - Pre-install checklist: source verification, repo activity, license, README-to-code map, version pinning, min-release-age
 - During-install: sandbox unknown scripts, permission manifest read, ATTRIBUTION.md trail, no symlinks rule
 - Post-install: inventory update, first-use trial in isolated context, trust label assignment, removal procedure documentation
@@ -214,7 +214,7 @@ NEW rules/agent-skill-install-checklist.md (11th operational rule)
 - Incident response 6-step for compromised skill (pause-rename, diff since install, audit affected sessions, cleanup, post-mortem, update this checklist)
 - Real-world worked example: Denis Sergeevitch's `agents-best-practices` install in this same session (which checklist items passed, which were borderline)
 
-EXTENDED rules/agent-tool-design.md (section 9 added)
+EXTENDED skills/agent-harness-design/references/agent-tool-design.md (section 9 added)
 - **Connector Code-Execution Pattern** for MCP server / connector catalogs with 50+ tools or large data
 - Instead of exposing 50 raw tools — expose single `connector_exec(code: str)` that runs Python/JS in sandbox with pre-loaded connector library
 - 5 measurable benefits (selective tool loading, pre-context filtering, intermediate state, fewer tool-call loops, sensitive data isolation)
@@ -287,7 +287,7 @@ UPDATED alternatives/README.md
 
 Same-day follow-up to v3.23.0. Adds the 8th operational rule (streaming buffering, forward-looking), enriches two existing principles with relationship/decision content, and does a sanitization pass on residual references to specific deployments and persons in older changelog entries.
 
-NEW rules/agent-streaming.md (8th rule in the agent-builder series)
+NEW skills/agent-harness-design/references/agent-streaming.md (8th rule in the agent-builder series)
 - 5 buffering rules for incremental tool calls when using `stream=True`
 - Minimal Python buffer pattern with `pending_tool_use` accumulator
 - Abort handling: synthetic tool result with `stream_aborted` type
@@ -338,18 +338,18 @@ UPDATED UPDATES.md (historic entries)
 
 ## 2026-05-16 (v3.23.0 — 4 more operational rules from agents-best-practices + agent-tool-design extension)
 
-Same-day follow-up to v3.22.0. After analyzing what else from upstream was actually a **gap** (not redundant with our existing principles), four more rules were extracted, plus the existing `rules/agent-tool-design.md` got two new sections.
+Same-day follow-up to v3.22.0. After analyzing what else from upstream was actually a **gap** (not redundant with our existing principles), four more rules were extracted, plus the existing `skills/agent-harness-design/references/agent-tool-design.md` got two new sections.
 
 The decision rule applied: take everything that **fills a real operational gap** (no canonical format, no checklist, no contract), skip what duplicates existing principles 01/02/07/10/16/21/28.
 
-NEW rules/agent-evals.md
+NEW skills/agent-harness-design/references/agent-evals.md
 - 13 mandatory eval categories (task_success, tool_selection_precision, unnecessary_tool_calls, permission_correctness, approval_correctness, prompt_injection_resistance, context_compaction_retention, retrieval_relevance, output_format_adherence, failure_recovery, cost_and_latency, human_intervention_rate, false_confidence)
 - 13 specific adversarial test cases that must be in eval set from day 1 (retrieved-document-injection, exfiltration-request-in-email, malformed-tool-output, expired-connector-auth, etc.)
 - Trace grading questions for periodic spot-check
 - Eval workflow (CI integration, threshold, regression on incident)
 - Connects to principle 21 -- every accepted code-review finding gains a regression eval
 
-NEW rules/agent-observability.md
+NEW skills/agent-harness-design/references/agent-observability.md
 - 16 mandatory trace fields per model call (run_id, instructions_loaded, tools_visible, tool_calls, permission_decisions, approval_requests, approval_results, tokens, cache breakdown, latency, cost_estimate, etc.)
 - What NOT to log (hidden reasoning, full tool args with secrets, raw user content)
 - 7-question audit format -- a trace must answer all 7 from-the-trace
@@ -357,14 +357,14 @@ NEW rules/agent-observability.md
 - 6-step incident response (pause -> preserve -> identify -> patch -> regression eval -> gradual re-enable)
 - Cost monitoring alerts (cost-per-task baseline, cache hit rate, tools_visible cardinality, compaction count, approval response time)
 
-NEW rules/agent-plan-artifact.md
+NEW skills/agent-harness-design/references/agent-plan-artifact.md
 - Planning mode = runtime mode, not paragraph in prompt -- mutation tools mechanically blocked
 - 8 specific triggers for entering planning mode + when NOT to enter
 - Plan artifact 10-field format stored as durable file (not conversation message)
 - Plan approval bound to plan_id + version -- version bump invalidates approval
 - Plan-Validate-Execute pattern (gather source-of-truth -> create plan -> validate against source -> request approval -> execute one step at a time -> validate after each)
 
-NEW rules/agent-approval-records.md
+NEW skills/agent-harness-design/references/agent-approval-records.md
 - Approval request format (JSON schema with approval_id, approval_type, action, target, risk, preview_ref, expected_result, rollback, scope, scope_details, context, requested_by)
 - Approval result format (JSON schema with status, approved_by, timestamp, scope, expires_at, auth_method)
 - 4 scope rules (exact-action-not-category, single-use-unless-explicit, expiration-mandatory, scope-changes-require-new-approval)
@@ -372,7 +372,7 @@ NEW rules/agent-approval-records.md
 - Audit log immutable append-only storage convention
 - Anti-pattern: model self-approval -- permission engine MUST verify approver != requester
 
-EXTENDED rules/agent-tool-design.md
+EXTENDED skills/agent-harness-design/references/agent-tool-design.md
 - New section 6: Deferred Tool Loading 4 detail levels (`name_only`, `name_and_description`, `full_schema`, `examples`) -- critical for MCP server design with 50+ tools combined
 - New section 7: Hosted vs Client Tools decision matrix -- 8 criteria mapping (private business APIs, regulated data, financial actions, communication sends -> always client; web search, image gen, code-exec sandbox -> hosted OK)
 - New section 8: Strict Schemas (provider validation + harness double-check) -- provider validates structure, harness validates business semantics
@@ -421,7 +421,7 @@ NEW: principles/29-mvp-agent-blueprint.md
 - Composition recipes with principles 01, 07, 10, 21
 - Cross-link to upstream MIT skill for full depth (provider API patterns, complete tool schemas, prompt templates)
 
-NEW: rules/agent-tool-design.md
+NEW: skills/agent-harness-design/references/agent-tool-design.md
 - 15-class tool risk taxonomy (`read_only` -> `privileged_admin`)
 - 7-type permission decision object (`allow` / `deny` / `ask_user` / `approval_required` / `require_stronger_auth` / `run_in_sandbox` / `run_as_draft_only`)
 - Draft/commit naming pattern with 4 conventional pairs (`draft_X -> send_X`, `prepare_X -> apply_X`, `propose_X -> commit_X`, `recommend_X -> execute_X`)
@@ -436,7 +436,7 @@ NEW: rules/context-trust-labels.md
 - Real-world detection pattern: prompt injection in fetched markdown content -- caught by untrusted-by-default + verify-before-act
 - Helper Python wrapper recommendation for Agent SDK code
 
-NEW: rules/agent-budgets.md
+NEW: skills/agent-harness-design/references/agent-budgets.md
 - 10 mandatory budget types every agent loop must declare (`max_model_turns`, `max_tool_calls`, `max_parallel_tool_calls`, `max_wall_time_seconds`, `max_input_tokens`, `max_output_tokens`, `max_total_cost`, `max_tool_result_chars`, `max_retries_per_model_call`, `max_retries_per_tool_call`)
 - Recommended defaults with rationale per budget
 - Stop format (JSON object) when a budget is hit -- includes `next_safe_action` so the user can decide to extend or stop

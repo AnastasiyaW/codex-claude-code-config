@@ -48,7 +48,7 @@ Seven domains for reasoning about data-intensive systems:
 | **Financial ledger with joins** | Relational model for referential integrity | PostgreSQL with foreign keys between accounts, transactions, and entries |
 | **Mixed access patterns** | Polyglot persistence | PostgreSQL for transactions + Elasticsearch for full-text search + Redis for caching |
 
-See: [references/data-models.md](references/data-models.md)
+See: [ddia-systems/data-models.md](ddia-systems/data-models.md)
 
 ### 2. Storage Engines
 
@@ -72,7 +72,7 @@ See: [references/data-models.md](references/data-models.md)
 | **Analytical queries on large datasets** | Column-oriented storage | ClickHouse or Parquet files for scanning billions of rows with few columns |
 | **Low-latency caching** | In-memory store | Redis for sub-millisecond lookups; Memcached for simple key-value caching |
 
-See: [references/storage-engines.md](references/storage-engines.md)
+See: [ddia-systems/storage-engines.md](ddia-systems/storage-engines.md)
 
 ### 3. Replication
 
@@ -97,7 +97,7 @@ See: [references/storage-engines.md](references/storage-engines.md)
 | **Shopping cart availability** | Leaderless with merge | DynamoDB with last-writer-wins or application-level merge for cart conflicts |
 | **Collaborative editing** | CRDTs for conflict-free merging | Yjs or Automerge for real-time collaborative document editing |
 
-See: [references/replication.md](references/replication.md)
+See: [ddia-systems/replication.md](ddia-systems/replication.md)
 
 ### 4. Partitioning
 
@@ -122,7 +122,7 @@ See: [references/replication.md](references/replication.md)
 | **Global search index** | Global secondary index | Elasticsearch index sharded independently from primary data store |
 | **Celebrity/hot-key problem** | Key splitting with random suffix | Append random digit to hot partition key, fan-out reads across 10 sub-partitions |
 
-See: [references/partitioning.md](references/partitioning.md)
+See: [ddia-systems/partitioning.md](ddia-systems/partitioning.md)
 
 ### 5. Transactions and Consistency
 
@@ -147,7 +147,7 @@ See: [references/partitioning.md](references/partitioning.md)
 | **Read-heavy dashboards** | Snapshot isolation for consistent reads | PostgreSQL MVCC provides point-in-time snapshot without blocking writers |
 | **Cross-service operations** | Saga pattern instead of distributed transactions | Compensating transactions: charge card, reserve inventory, on failure refund card |
 
-See: [references/transactions.md](references/transactions.md)
+See: [ddia-systems/transactions.md](ddia-systems/transactions.md)
 
 ### 6. Batch and Stream Processing
 
@@ -172,7 +172,7 @@ See: [references/transactions.md](references/transactions.md)
 | **Syncing search index** | Change data capture | Debezium captures PostgreSQL WAL changes, publishes to Kafka, Elasticsearch consumer updates index |
 | **Audit trail / event replay** | Event sourcing | Store `OrderPlaced`, `OrderShipped`, `OrderRefunded` events; rebuild current state by replaying |
 
-See: [references/batch-stream.md](references/batch-stream.md)
+See: [ddia-systems/batch-stream.md](ddia-systems/batch-stream.md)
 
 ### 7. Reliability and Fault Tolerance
 
@@ -197,7 +197,7 @@ See: [references/batch-stream.md](references/batch-stream.md)
 | **Data pipeline reliability** | Idempotent operations + checkpointing | Kafka consumer commits offset only after successful processing |
 | **Graceful degradation** | Circuit breaker pattern | Hystrix/Resilience4j: open circuit after 50% failures in 10-second window |
 
-See: [references/fault-tolerance.md](references/fault-tolerance.md)
+See: [ddia-systems/fault-tolerance.md](ddia-systems/fault-tolerance.md)
 
 ## Common Mistakes
 
@@ -225,13 +225,13 @@ See: [references/fault-tolerance.md](references/fault-tolerance.md)
 
 ## Reference Files
 
-- [data-models.md](references/data-models.md): Relational vs document vs graph models, schema-on-read vs schema-on-write, query languages, polyglot persistence
-- [storage-engines.md](references/storage-engines.md): LSM trees vs B-trees, write amplification, compaction, column-oriented storage, in-memory databases
-- [replication.md](references/replication.md): Single-leader, multi-leader, leaderless replication, replication lag, conflict resolution, CRDTs
-- [partitioning.md](references/partitioning.md): Key-range vs hash partitioning, secondary indexes, rebalancing, request routing, hotspots
-- [transactions.md](references/transactions.md): ACID, isolation levels, write skew, two-phase locking, SSI, distributed transactions
-- [batch-stream.md](references/batch-stream.md): MapReduce, dataflow engines, event sourcing, CDC, stream-table duality, exactly-once semantics
-- [fault-tolerance.md](references/fault-tolerance.md): Faults vs failures, reliability metrics, timeouts, consensus, safety and liveness guarantees
+- [data-models.md](ddia-systems/data-models.md): Relational vs document vs graph models, schema-on-read vs schema-on-write, query languages, polyglot persistence
+- [storage-engines.md](ddia-systems/storage-engines.md): LSM trees vs B-trees, write amplification, compaction, column-oriented storage, in-memory databases
+- [replication.md](ddia-systems/replication.md): Single-leader, multi-leader, leaderless replication, replication lag, conflict resolution, CRDTs
+- [partitioning.md](ddia-systems/partitioning.md): Key-range vs hash partitioning, secondary indexes, rebalancing, request routing, hotspots
+- [transactions.md](ddia-systems/transactions.md): ACID, isolation levels, write skew, two-phase locking, SSI, distributed transactions
+- [batch-stream.md](ddia-systems/batch-stream.md): MapReduce, dataflow engines, event sourcing, CDC, stream-table duality, exactly-once semantics
+- [fault-tolerance.md](ddia-systems/fault-tolerance.md): Faults vs failures, reliability metrics, timeouts, consensus, safety and liveness guarantees
 
 ## Further Reading
 

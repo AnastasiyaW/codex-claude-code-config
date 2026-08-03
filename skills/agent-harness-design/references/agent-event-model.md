@@ -75,10 +75,10 @@ Cross-references через `parent_event_id`:
 
 ## Связь с другими правилами
 
-- `~/.claude/rules/agent-observability.md` — 16 trace fields per model call — это **summary** view; event model — **detailed** view (один model call = много events)
-- `~/.claude/rules/agent-plan-artifact.md` — `plan_update` event фиксирует version bump в audit log
-- `~/.claude/rules/agent-approval-records.md` — `approval_request` / `approval_result` events — это persistence для approval records формата
-- `~/.claude/rules/agent-evals.md` — eval categories могут проверяться напрямую на event stream
+- `agent-observability.md` — 16 trace fields per model call — это **summary** view; event model — **detailed** view (один model call = много events)
+- `agent-plan-artifact.md` — `plan_update` event фиксирует version bump в audit log
+- `agent-approval-records.md` — `approval_request` / `approval_result` events — это persistence для approval records формата
+- `agent-evals.md` — eval categories могут проверяться напрямую на event stream
 - `~/.claude/skills/agents-best-practices/references/architecture.md` — original source
 
 ## Когда применяется

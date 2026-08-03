@@ -119,7 +119,7 @@ Real install 2026-05-16: Denis Sergeevitch's `agents-best-practices` skill clone
 ## Связь с другими правилами
 
 - `~/.claude/rules/context-trust-labels.md` — trust level assignment for installed skill content
-- `~/.claude/rules/agent-tool-design.md` — risk classification если skill expose tools
+- `agent-tool-design.md` — risk classification если skill expose tools
 - principle 08 (Skills Best Practices) — что делает skill **хорошим** (как пользователь content)
 - principle 09 (Supply Chain Defense) — общая защита от malicious packages
 - principle 10 (Agent Security) — threat model полностью

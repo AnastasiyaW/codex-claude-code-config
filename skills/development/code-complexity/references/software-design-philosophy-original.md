@@ -48,7 +48,7 @@ Six principles for managing complexity and producing systems that are easy to un
 | **Dependency management** | Minimize cross-module coupling | Pass data through well-defined interfaces, not shared global state |
 | **Obscurity reduction** | Name things precisely | `numBytesReceived` not `n`; `retryDelayMs` not `delay` |
 
-See: [references/complexity-symptoms.md](references/complexity-symptoms.md)
+See: [software-design-philosophy/complexity-symptoms.md](software-design-philosophy/complexity-symptoms.md)
 
 ### 2. Deep vs Shallow Modules
 
@@ -75,7 +75,7 @@ See: [references/complexity-symptoms.md](references/complexity-symptoms.md)
 | **Method depth** | Methods should do something substantial | A `delete(key)` that handles locking, logging, cache invalidation, and rebalancing |
 | **Interface simplicity** | Fewer parameters, fewer methods | `config.get(key)` with sensible defaults, not 15 constructor parameters |
 
-See: [references/deep-modules.md](references/deep-modules.md)
+See: [software-design-philosophy/deep-modules.md](software-design-philosophy/deep-modules.md)
 
 ### 3. Information Hiding and Leakage
 
@@ -101,7 +101,7 @@ See: [references/deep-modules.md](references/deep-modules.md)
 | **Protocol leakage** | Abstract protocol details | A `MessageBus.send(event)` hides whether transport is HTTP, gRPC, or queue |
 | **Decorator leakage** | Use deep wrappers sparingly | Prefer adding buffering inside the file class over wrapping it externally |
 
-See: [references/information-hiding.md](references/information-hiding.md)
+See: [software-design-philosophy/information-hiding.md](software-design-philosophy/information-hiding.md)
 
 ### 4. General-Purpose vs Special-Purpose Modules
 
@@ -127,7 +127,7 @@ See: [references/information-hiding.md](references/information-hiding.md)
 | **Avoid over-specialization** | Remove use-case-specific methods | One `store(key, value, options)` instead of `storeUser()`, `storeProduct()`, `storeOrder()` |
 | **Somewhat general** | General interface, specific implementation | A `Datastore` interface that currently backs onto PostgreSQL but does not expose SQL concepts |
 
-See: [references/general-vs-special.md](references/general-vs-special.md)
+See: [software-design-philosophy/general-vs-special.md](software-design-philosophy/general-vs-special.md)
 
 ### 5. Comments as Design Documentation
 
@@ -154,7 +154,7 @@ See: [references/general-vs-special.md](references/general-vs-special.md)
 | **Cross-module comment** | Link related design decisions | "// This timeout must match the retry interval in RetryPolicy.java" |
 | **Comment-driven design** | Write the interface comment before the code | Draft the function's contract and behavior first, then implement |
 
-See: [references/comments-as-design.md](references/comments-as-design.md)
+See: [software-design-philosophy/comments-as-design.md](software-design-philosophy/comments-as-design.md)
 
 ### 6. Strategic vs Tactical Programming
 
@@ -182,7 +182,7 @@ See: [references/comments-as-design.md](references/comments-as-design.md)
 | **Incremental improvement** | Fix one design issue per PR | Each pull request improves at least one abstraction or eliminates one piece of complexity |
 | **Design reviews** | Evaluate structure, not just correctness | Code reviews should ask "does this make the system simpler?" not just "does it work?" |
 
-See: [references/strategic-programming.md](references/strategic-programming.md)
+See: [software-design-philosophy/strategic-programming.md](software-design-philosophy/strategic-programming.md)
 
 ## Common Mistakes
 
@@ -212,12 +212,12 @@ See: [references/strategic-programming.md](references/strategic-programming.md)
 
 ## Reference Files
 
-- [complexity-symptoms.md](references/complexity-symptoms.md): Three symptoms of complexity, two causes, measuring complexity, the incremental nature of complexity
-- [deep-modules.md](references/deep-modules.md): Deep vs shallow modules, interface-to-functionality ratio, classitis, designing for depth
-- [information-hiding.md](references/information-hiding.md): Information hiding principle, information leakage red flags, temporal decomposition, decorator pitfalls
-- [general-vs-special.md](references/general-vs-special.md): Somewhat general-purpose approach, pushing complexity down, configuration parameter antipattern
-- [comments-as-design.md](references/comments-as-design.md): Four comment types, comment-driven design, self-documenting code myth, maintaining comments
-- [strategic-programming.md](references/strategic-programming.md): Strategic vs tactical mindset, tactical tornado, investment approach, startup considerations
+- [complexity-symptoms.md](software-design-philosophy/complexity-symptoms.md): Three symptoms of complexity, two causes, measuring complexity, the incremental nature of complexity
+- [deep-modules.md](software-design-philosophy/deep-modules.md): Deep vs shallow modules, interface-to-functionality ratio, classitis, designing for depth
+- [information-hiding.md](software-design-philosophy/information-hiding.md): Information hiding principle, information leakage red flags, temporal decomposition, decorator pitfalls
+- [general-vs-special.md](software-design-philosophy/general-vs-special.md): Somewhat general-purpose approach, pushing complexity down, configuration parameter antipattern
+- [comments-as-design.md](software-design-philosophy/comments-as-design.md): Four comment types, comment-driven design, self-documenting code myth, maintaining comments
+- [strategic-programming.md](software-design-philosophy/strategic-programming.md): Strategic vs tactical mindset, tactical tornado, investment approach, startup considerations
 
 ## Further Reading
 

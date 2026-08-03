@@ -79,7 +79,7 @@ Output структурирован так:
 [System/developer/user instructions + scoped memory + trust labels (см. rules/context-trust-labels.md)]
 
 ## 6. Tool registry
-[Минимальный typed registry. Risk class на каждый tool (см. rules/agent-tool-design.md). Draft/commit для irreversible.]
+[Минимальный typed registry. Risk class на каждый tool (см. skills/agent-harness-design/references/agent-tool-design.md). Draft/commit для irreversible.]
 
 ## 7. Planning behavior
 [Когда planning mode активен; что заблокировано; plan artifact format]
@@ -116,9 +116,9 @@ Output структурирован так:
 ```text
 1.  manual model-tool-observation loop
 2.  strict tool schemas + local validation
-3.  runtime permission checks (см. rules/agent-tool-design.md)
+3.  runtime permission checks (см. skills/agent-harness-design/references/agent-tool-design.md)
 4.  structured tool results + error observations
-5.  step/cost/time budgets (см. rules/agent-budgets.md)
+5.  step/cost/time budgets (см. skills/agent-harness-design/references/agent-budgets.md)
 6.  tracing
 7.  prompt-cache-aware context ordering + cache telemetry
 8.  planning mode для high-risk tasks
@@ -152,7 +152,7 @@ Output структурирован так:
 ```text
 - one giant prompt вместо typed sections
 - one giant tool типа execute_anything()
-- unbounded autonomous loop (см. rules/agent-budgets.md)
+- unbounded autonomous loop (см. skills/agent-harness-design/references/agent-budgets.md)
 - autonomous external sends в первом релизе
 - no approval state
 - no durable plans/goals

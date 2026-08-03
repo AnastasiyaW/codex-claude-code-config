@@ -50,7 +50,7 @@ Six areas of focus for systematically improving code structure:
 | **Method uses another object's data** | Move Method | Move `calculateDiscount()` to the `Customer` class |
 | **Copy-pasted logic** | Extract Method + Pull Up Method | Share via a common method or base class |
 
-See: [references/smell-catalog.md](references/smell-catalog.md)
+See: [refactoring-patterns/smell-catalog.md](refactoring-patterns/smell-catalog.md)
 
 ### 2. Composing Methods
 
@@ -77,7 +77,7 @@ See: [references/smell-catalog.md](references/smell-catalog.md)
 | **Trivial delegating method** | Inline Method | Inline `moreThanFiveDeliveries()` if it's `return deliveries > 5` and only used once |
 | **Complex method with many locals** | Replace Method with Method Object | Move the method into its own class where locals become fields |
 
-See: [references/composing-methods.md](references/composing-methods.md)
+See: [refactoring-patterns/composing-methods.md](refactoring-patterns/composing-methods.md)
 
 ### 3. Moving Features Between Objects
 
@@ -105,7 +105,7 @@ See: [references/composing-methods.md](references/composing-methods.md)
 | **Client calls a.getB().getC()** | Hide Delegate | Add `a.getCThroughB()` so client doesn't know about C |
 | **Class only forwards calls** | Remove Middle Man | Let client call the delegate directly |
 
-See: [references/moving-features.md](references/moving-features.md)
+See: [refactoring-patterns/moving-features.md](refactoring-patterns/moving-features.md)
 
 ### 4. Organizing Data
 
@@ -132,7 +132,7 @@ See: [references/moving-features.md](references/moving-features.md)
 | **`int typeCode` with switch** | Replace Type Code with Subclasses | `Employee` -> `Engineer`, `Manager`, `Salesperson` |
 | **Duplicated customer records** | Change Value to Reference | Share one `Customer` instance via a registry |
 
-See: [references/organizing-data.md](references/organizing-data.md)
+See: [refactoring-patterns/organizing-data.md](refactoring-patterns/organizing-data.md)
 
 ### 5. Simplifying Conditional Logic
 
@@ -159,7 +159,7 @@ See: [references/organizing-data.md](references/organizing-data.md)
 | **`if (customer == null)` everywhere** | Introduce Special Case | Create `NullCustomer` with default behavior |
 | **Hidden assumption in code** | Introduce Assertion | `assert quantity > 0` at method entry |
 
-See: [references/simplifying-conditionals.md](references/simplifying-conditionals.md)
+See: [refactoring-patterns/simplifying-conditionals.md](refactoring-patterns/simplifying-conditionals.md)
 
 ### 6. Safe Refactoring Workflow
 
@@ -188,7 +188,7 @@ See: [references/simplifying-conditionals.md](references/simplifying-conditional
 | **Large API change in production** | Branch by Abstraction | Introduce abstraction layer, migrate callers, remove old path |
 | **Renaming a widely-used method** | Parallel Change | Add new name, deprecate old, migrate callers, remove old |
 
-See: [references/refactoring-workflow.md](references/refactoring-workflow.md)
+See: [refactoring-patterns/refactoring-workflow.md](refactoring-patterns/refactoring-workflow.md)
 
 ## Common Mistakes
 
@@ -218,12 +218,12 @@ See: [references/refactoring-workflow.md](references/refactoring-workflow.md)
 
 ## Reference Files
 
-- [smell-catalog.md](references/smell-catalog.md): Comprehensive catalog of code smells organized by family -- Bloaters, Object-Orientation Abusers, Change Preventers, Dispensables, and Couplers -- with detection heuristics and fix mappings
-- [composing-methods.md](references/composing-methods.md): Extract Method, Inline Method, Extract Variable, Inline Variable, Replace Temp with Query, Split Temporary Variable, Remove Assignments to Parameters, Replace Method with Method Object -- motivation, mechanics, and examples
-- [moving-features.md](references/moving-features.md): Move Method, Move Field, Extract Class, Inline Class, Hide Delegate, Remove Middle Man -- when and how to redistribute responsibilities between objects
-- [organizing-data.md](references/organizing-data.md): Replace Data Value with Object, Change Value to Reference, Replace Array with Object, Replace Magic Number, Encapsulate Field, Encapsulate Collection, Replace Type Code with Class/Subclasses/Strategy
-- [simplifying-conditionals.md](references/simplifying-conditionals.md): Decompose Conditional, Consolidate Conditional, Replace Nested Conditional with Guard Clauses, Replace Conditional with Polymorphism, Introduce Special Case, Introduce Assertion -- with before/after examples
-- [refactoring-workflow.md](references/refactoring-workflow.md): The refactoring cycle, when to refactor, when NOT to refactor, refactoring and performance, Branch by Abstraction, Parallel Change
+- [smell-catalog.md](refactoring-patterns/smell-catalog.md): Comprehensive catalog of code smells organized by family -- Bloaters, Object-Orientation Abusers, Change Preventers, Dispensables, and Couplers -- with detection heuristics and fix mappings
+- [composing-methods.md](refactoring-patterns/composing-methods.md): Extract Method, Inline Method, Extract Variable, Inline Variable, Replace Temp with Query, Split Temporary Variable, Remove Assignments to Parameters, Replace Method with Method Object -- motivation, mechanics, and examples
+- [moving-features.md](refactoring-patterns/moving-features.md): Move Method, Move Field, Extract Class, Inline Class, Hide Delegate, Remove Middle Man -- when and how to redistribute responsibilities between objects
+- [organizing-data.md](refactoring-patterns/organizing-data.md): Replace Data Value with Object, Change Value to Reference, Replace Array with Object, Replace Magic Number, Encapsulate Field, Encapsulate Collection, Replace Type Code with Class/Subclasses/Strategy
+- [simplifying-conditionals.md](refactoring-patterns/simplifying-conditionals.md): Decompose Conditional, Consolidate Conditional, Replace Nested Conditional with Guard Clauses, Replace Conditional with Polymorphism, Introduce Special Case, Introduce Assertion -- with before/after examples
+- [refactoring-workflow.md](refactoring-patterns/refactoring-workflow.md): The refactoring cycle, when to refactor, when NOT to refactor, refactoring and performance, Branch by Abstraction, Parallel Change
 
 ## Further Reading
 

@@ -57,7 +57,7 @@ Six disciplines for writing code that communicates clearly and adapts to change:
 | **Constants** | Searchable, all-caps with context | `MAX_RETRY_ATTEMPTS = 3` not `3` inline |
 | **Collections** | Plural nouns or descriptive phrases | `activeUsers` not `list` or `data` |
 
-See: [references/naming-conventions.md](references/naming-conventions.md)
+See: [clean-code/naming-conventions.md](clean-code/naming-conventions.md)
 
 ### 2. Functions
 
@@ -85,7 +85,7 @@ See: [references/naming-conventions.md](references/naming-conventions.md)
 | **Many arguments** | Introduce parameter object | `new DateRange(start, end)` not `report(start, end, format, locale)` |
 | **Side effects** | Make effects explicit | Rename `checkPassword()` to `checkPasswordAndInitSession()` or separate |
 
-See: [references/functions-and-methods.md](references/functions-and-methods.md)
+See: [clean-code/functions-and-methods.md](clean-code/functions-and-methods.md)
 
 ### 3. Comments and Formatting
 
@@ -115,7 +115,7 @@ See: [references/functions-and-methods.md](references/functions-and-methods.md)
 | **Related code** | Group vertically | Keep caller near callee in the same file |
 | **Team formatting** | Agree on rules once | Use automated formatters (Prettier, Black, gofmt) |
 
-See: [references/comments-formatting.md](references/comments-formatting.md)
+See: [clean-code/comments-formatting.md](clean-code/comments-formatting.md)
 
 ### 4. Error Handling
 
@@ -144,7 +144,7 @@ See: [references/comments-formatting.md](references/comments-formatting.md)
 | **Special cases** | Null Object pattern | `GuestUser` with default behavior instead of null checks |
 | **Context in errors** | Include operation + state | `"Failed to save invoice #1234 for customer 'Acme'"` |
 
-See: [references/error-handling.md](references/error-handling.md)
+See: [clean-code/error-handling.md](clean-code/error-handling.md)
 
 ### 5. Unit Testing
 
@@ -172,7 +172,7 @@ See: [references/error-handling.md](references/error-handling.md)
 | **Flaky tests** | Remove external dependencies | Mock time, network, file system |
 | **Test readability** | Domain-specific helpers | `assertThatInvoice(inv).isPaidInFull()` |
 
-See: [references/testing-principles.md](references/testing-principles.md)
+See: [clean-code/testing-principles.md](clean-code/testing-principles.md)
 
 ### 6. Code Smells and Heuristics
 
@@ -200,7 +200,7 @@ See: [references/testing-principles.md](references/testing-principles.md)
 | **Magic numbers** | Named constants | `MAX_LOGIN_ATTEMPTS = 5` not bare `5` |
 | **Shotgun surgery** | Consolidate related changes | Group scattered logic into a single module |
 
-See: [references/code-smells.md](references/code-smells.md)
+See: [clean-code/code-smells.md](clean-code/code-smells.md)
 
 ## Common Mistakes
 
@@ -236,12 +236,12 @@ Audit any codebase:
 
 ## Reference Files
 
-- [naming-conventions.md](references/naming-conventions.md): Intention-revealing names, avoiding disinformation, class vs. method naming, before/after examples
-- [functions-and-methods.md](references/functions-and-methods.md): Small functions, argument counts, command-query separation, the step-down rule, side effects
-- [comments-formatting.md](references/comments-formatting.md): Good vs. bad comments, the newspaper metaphor, vertical formatting, team rules
-- [error-handling.md](references/error-handling.md): Exceptions over return codes, null handling, Special Case pattern, wrapping third-party APIs
-- [testing-principles.md](references/testing-principles.md): TDD laws, F.I.R.S.T. principles, clean test patterns, test readability
-- [code-smells.md](references/code-smells.md): Comprehensive smell catalog organized by category, with targeted refactorings
+- [naming-conventions.md](clean-code/naming-conventions.md): Intention-revealing names, avoiding disinformation, class vs. method naming, before/after examples
+- [functions-and-methods.md](clean-code/functions-and-methods.md): Small functions, argument counts, command-query separation, the step-down rule, side effects
+- [comments-formatting.md](clean-code/comments-formatting.md): Good vs. bad comments, the newspaper metaphor, vertical formatting, team rules
+- [error-handling.md](clean-code/error-handling.md): Exceptions over return codes, null handling, Special Case pattern, wrapping third-party APIs
+- [testing-principles.md](clean-code/testing-principles.md): TDD laws, F.I.R.S.T. principles, clean test patterns, test readability
+- [code-smells.md](clean-code/code-smells.md): Comprehensive smell catalog organized by category, with targeted refactorings
 
 ## Further Reading
 

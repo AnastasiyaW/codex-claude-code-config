@@ -131,16 +131,16 @@ External systems (web fw, CLI, DB engine, msg bus)   ← outermost, most volatil
 - **Composition root** (CLI script / app factory / endpoint) is the only place concrete
   classes meet: build repo → build request → call use case → serialize response.
 - Full patterns + prod wiring (gunicorn/Nginx, env-var config, Alembic, named volumes):
-  `references/python-implementation.md`.
+  `clean-architecture/python-implementation.md`.
 
 ## 6. References map (load on demand)
 
 | File | Load when |
 |---|---|
-| `references/solid-and-components.md` | Designing classes/modules; SOLID questions; deciding component grouping; dependency metrics (I, A, D), cycles |
-| `references/boundaries-and-layers.md` | Drawing/reviewing architecture; boundaries, Humble Object, Main, services vs components, test architecture, embedded/SDK coupling |
-| `references/details-and-code-organization.md` | DB/web/framework adoption decisions; package-by-layer/feature/component choice; enforcement via visibility; rewrite/fork/schedule traps |
-| `references/python-implementation.md` | Implementing any of this in Python; web adapter, error mgmt, real-DB integration testing, production deployment |
+| `clean-architecture/solid-and-components.md` | Designing classes/modules; SOLID questions; deciding component grouping; dependency metrics (I, A, D), cycles |
+| `clean-architecture/boundaries-and-layers.md` | Drawing/reviewing architecture; boundaries, Humble Object, Main, services vs components, test architecture, embedded/SDK coupling |
+| `clean-architecture/details-and-code-organization.md` | DB/web/framework adoption decisions; package-by-layer/feature/component choice; enforcement via visibility; rewrite/fork/schedule traps |
+| `clean-architecture/python-implementation.md` | Implementing any of this in Python; web adapter, error mgmt, real-DB integration testing, production deployment |
 
 ## Gotchas
 

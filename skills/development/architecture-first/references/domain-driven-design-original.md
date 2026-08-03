@@ -44,7 +44,7 @@ Framework for tackling software complexity by modeling code around the business 
 | Module structure | Organize by domain concept | `shipping/`, `billing/`, not `controllers/`, `services/` |
 | Code review | Reject technical-only names | Flag `Manager`, `Helper`, `Processor`, `Utils` as naming smells |
 
-See: [references/ubiquitous-language.md](references/ubiquitous-language.md)
+See: [domain-driven-design/ubiquitous-language.md](domain-driven-design/ubiquitous-language.md)
 
 ### 2. Bounded Contexts and Context Mapping
 
@@ -70,7 +70,7 @@ See: [references/ubiquitous-language.md](references/ubiquitous-language.md)
 | API design | Open Host Service + Published Language | Expose a well-documented REST API with a canonical schema |
 | Module boundaries | Separate packages per context | `myapp.shipping` and `myapp.billing` packages with explicit translation |
 
-See: [references/bounded-contexts.md](references/bounded-contexts.md)
+See: [domain-driven-design/bounded-contexts.md](domain-driven-design/bounded-contexts.md)
 
 ### 3. Entities, Value Objects, and Aggregates
 
@@ -97,7 +97,7 @@ See: [references/bounded-contexts.md](references/bounded-contexts.md)
 | Cross-aggregate reference | Reference by ID | `Order` stores `customerId`, not a `Customer` object |
 | Concurrency control | Optimistic locking on root | Version field on `Order`; conflict if two edits race |
 
-See: [references/building-blocks.md](references/building-blocks.md)
+See: [domain-driven-design/building-blocks.md](domain-driven-design/building-blocks.md)
 
 ### 4. Domain Events
 
@@ -123,7 +123,7 @@ See: [references/building-blocks.md](references/building-blocks.md)
 | Eventual consistency | Async event handlers | `InventoryReserved` handler updates stock asynchronously after `OrderPlaced` |
 | Event sourcing | Rebuild state from events | Replay all `Account*` events to derive current account balance |
 
-See: [references/domain-events.md](references/domain-events.md)
+See: [domain-driven-design/domain-events.md](domain-driven-design/domain-events.md)
 
 ### 5. Repositories and Factories
 
@@ -149,7 +149,7 @@ See: [references/domain-events.md](references/domain-events.md)
 | Reconstitution | Repository loads aggregate | Repository assembles `Order` + `OrderLines` from DB rows into a complete aggregate |
 | Ports and adapters | Interface in domain, impl in infra | `interface OrderRepository` in domain; `PostgresOrderRepository` in infrastructure |
 
-See: [references/repositories-factories.md](references/repositories-factories.md)
+See: [domain-driven-design/repositories-factories.md](domain-driven-design/repositories-factories.md)
 
 ### 6. Strategic Design and Distillation
 
@@ -176,7 +176,7 @@ See: [references/repositories-factories.md](references/repositories-factories.md
 | Simplification | Distill core concepts | Extract a `PolicyRatingEngine` from a monolithic `InsuranceService` |
 | Documentation | Domain Vision Statement | One-page doc: "Our competitive advantage is real-time risk scoring using..." |
 
-See: [references/strategic-design.md](references/strategic-design.md)
+See: [domain-driven-design/strategic-design.md](domain-driven-design/strategic-design.md)
 
 ## Common Mistakes
 
@@ -204,12 +204,12 @@ See: [references/strategic-design.md](references/strategic-design.md)
 
 ## Reference Files
 
-- [ubiquitous-language.md](references/ubiquitous-language.md): Building a shared language, glossary maintenance, naming in code, language evolution
-- [bounded-contexts.md](references/bounded-contexts.md): Context boundaries, nine mapping patterns, team relationships, integration strategies
-- [building-blocks.md](references/building-blocks.md): Entities, Value Objects, Aggregates, aggregate design rules, consistency boundaries
-- [domain-events.md](references/domain-events.md): Event naming, event sourcing, event-driven architecture, integration events
-- [repositories-factories.md](references/repositories-factories.md): Repository pattern, Factory pattern, Specification pattern, ports and adapters
-- [strategic-design.md](references/strategic-design.md): Core Domain, Generic and Supporting Subdomains, distillation, build vs. buy
+- [ubiquitous-language.md](domain-driven-design/ubiquitous-language.md): Building a shared language, glossary maintenance, naming in code, language evolution
+- [bounded-contexts.md](domain-driven-design/bounded-contexts.md): Context boundaries, nine mapping patterns, team relationships, integration strategies
+- [building-blocks.md](domain-driven-design/building-blocks.md): Entities, Value Objects, Aggregates, aggregate design rules, consistency boundaries
+- [domain-events.md](domain-driven-design/domain-events.md): Event naming, event sourcing, event-driven architecture, integration events
+- [repositories-factories.md](domain-driven-design/repositories-factories.md): Repository pattern, Factory pattern, Specification pattern, ports and adapters
+- [strategic-design.md](domain-driven-design/strategic-design.md): Core Domain, Generic and Supporting Subdomains, distillation, build vs. buy
 
 ## Further Reading
 

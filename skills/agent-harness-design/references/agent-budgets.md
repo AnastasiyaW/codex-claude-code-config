@@ -78,7 +78,7 @@ User видит что закончилось, может explicitly допус�
 
 ## Связь с другими правилами
 
-- `rules/agent-tool-design.md` - `max_tool_result_chars` enforce'ит structured result + external storage pattern
+- `agent-tool-design.md` - `max_tool_result_chars` enforce'ит structured result + external storage pattern
 - `rules/no-pre-existing-evasion.md` - budget hit ≠ permission "stop with TODO"; нужен explicit user check
 - `principles/01-harness-design.md` - budgets - часть harness boundary, не optional
 - `principles/03-autoresearch.md` - iterative loops особенно требуют budget enforcement
