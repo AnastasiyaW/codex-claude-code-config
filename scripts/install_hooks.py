@@ -37,7 +37,7 @@ Opt-in extras (use --extras):
   - handoff-closure-audit-guard  PreToolUse    blocks handoff writes without closure audit
   - continuity-contract-guard    PreToolUse    protects incremental edits across Claude/Codex
   - continuity-session-check     SessionStart  surfaces the shared continuation contract
-  - test-gate-stop-hook          Stop          blocks closing a session with red tests
+  - test-gate-stop-hook          Stop          selects fast/integration tests by Git-visible risk and blocks red/unproven evidence
   - problems-md-validator        Stop          blocks closing with unresolved OPEN problems
   - plan-gate                    UserPromptSubmit  plan-artifact discipline for risky asks
   - conversation-history-capture Stop          archives and indexes local Codex session JSONL histories

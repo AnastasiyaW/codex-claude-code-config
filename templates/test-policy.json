@@ -1,0 +1,5 @@
+{
+  "fast": ["python", "-m", "pytest", "-q", "tests/unit"],
+  "integration": ["python", "-m", "pytest", "-q", "tests/integration"],
+  "release": ["python", "-m", "pytest", "-q"]
+}

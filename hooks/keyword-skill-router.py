@@ -157,6 +157,17 @@ ROUTES = [
         "skill": "deep-review",
         "description": "Parallel competency-based code review (security, perf, arch)",
     },
+    # Testing strategy: select evidence by changed boundary and risk.
+    {
+        "patterns": [
+            r"\b(план тестирован|стратеги.{0,20}тестирован|как тестирова|уровн.{0,20}тест|матриц.{0,20}тест)",
+            r"\b(test strategy|testing strategy|which tests|what tests|test matrix|test levels)\b",
+            r"\b(unit|integration|contract|end[- ]to[- ]end|e2e|property[- ]based|mutation)\b.{0,60}\b(test|testing|тест)",
+            r"\b(agent eval|agent evaluation|coding agent|trajectory evaluation|agent.{0,20}trajectory|eval suite|оценк.{0,20}агент|тест.{0,20}агент)\b",
+        ],
+        "skill": "testing-strategy",
+        "description": "Choose the smallest evidence set by change risk: fast, focused, boundary, release, and agent-eval checks",
+    },
     # Monitoring and observability
     {
         "patterns": [

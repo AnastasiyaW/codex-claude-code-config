@@ -82,6 +82,24 @@ class AuditSkillHookWiringTests(unittest.TestCase):
         self.assertIn("curated_route_targets_available", report["failures"])
         self.assertEqual(report["router"]["missing_skill_targets"], ["missing-skill"])
 
+    def test_executable_hook_target_is_checked(self) -> None:
+        temp, paths = self.make_fixture()
+        with temp:
+            executable = paths["hooks"].parent / "tool.exe"
+            executable.write_bytes(b"fixture")
+            data = json.loads(paths["hooks"].read_text(encoding="utf-8"))
+            data["hooks"]["Stop"] = [
+                {"hooks": [{"command": f'{executable} hook'}]}
+            ]
+            paths["hooks"].write_text(json.dumps(data), encoding="utf-8")
+            report = audit(
+                active_skills_root=paths["active"],
+                source_skills_root=paths["source"],
+                hooks_config=paths["hooks"],
+                router_path=paths["router"],
+            )
+        self.assertTrue(report["checks"]["all_hook_targets_exist"])
+
 
 if __name__ == "__main__":
     unittest.main()

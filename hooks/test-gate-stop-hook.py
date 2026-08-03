@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Stop hook: block task completion until tests are green.
+"""Stop hook: block task completion until selected tests are green.
 
 Behavioural enforcement layer for the "fix or ticket" pattern. CLAUDE.md
-rules can be ignored under context pressure (compliance decay; Jaroslawicz
-et al. 2025). This hook works at the structural layer: it runs the project
-test suite at every Stop event and blocks if anything is red. The agent
-cannot say "done" while tests fail — that claim is now physically false.
+rules can be ignored under context pressure. This hook works at the structural
+layer: it runs a fast/default suite only when Git-visible source or test files
+changed, and adds an integration command for high-risk changes when the project
+declares one. The agent cannot say "done" while selected tests fail.
 
 Companion to stop-phrase-guard.py (phrase-level detection) and
 problems-md-validator.py (PROBLEMS.md ticket discipline). Together they
@@ -19,6 +19,10 @@ implement Layer 2-4 of the no-pre-existing-evasion stack.
 4. Rust via `Cargo.toml`
 5. Go via `go.mod`
 
+If `.claude/test-policy.json` exists, its tokenized `fast` command is preferred;
+`integration` is added for high-risk changes. `release` is intentionally not
+automatic, so a large release suite does not become a per-edit tax.
+
 If none detected → silent pass (graceful for non-code dirs).
 
 ## Behaviour
@@ -27,7 +31,9 @@ If none detected → silent pass (graceful for non-code dirs).
 - Returncode != 0 → emit JSON `{"decision": "block", "reason": "..."}` with
   the tail of the test output. The agent must fix or explicitly bypass.
 - `stop_hook_active=true` → silent pass (anti-loop guard, REQUIRED)
-- Timeout reached → log + silent pass (don't trap user in long suites)
+- Timeout reached → block with an explicit unproven-evidence reason. Scope the
+  automatic command in `.claude/test-policy.json` instead of silently claiming
+  completion.
 
 ## Bypass
 
@@ -67,10 +73,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -88,6 +96,121 @@ MAX_OUTPUT_BYTES = 4000
 MIN_SESSION_MINUTES = 2
 # Gate name for the shared Stop-hook rejection budget (safety_common).
 BUDGET_NAME = "test-gate"
+
+CODE_SUFFIXES = {
+    ".c", ".cc", ".cpp", ".cxx", ".cs", ".go", ".h", ".hpp", ".java",
+    ".js", ".jsx", ".json", ".kt", ".m", ".mm", ".mjs", ".py", ".pyi",
+    ".ps1", ".rs", ".sh", ".sql", ".swift", ".ts", ".tsx", ".vue",
+}
+TEST_MARKERS = ("test", "tests", "spec", "specs", "__tests__")
+HIGH_RISK_MARKERS = (
+    "auth", "credential", "permission", "security", "migration", "migrate",
+    "schema", "database", "db", "transaction", "concurr", "thread", "async",
+    "lock", "deploy", "release", "workflow", "api", "contract",
+)
+IGNORED_PATH_PARTS = {".git", "node_modules", "dist", "build", ".venv", "__pycache__"}
+IGNORED_CONFIG_PATHS = {".claude/test-policy.json", ".claude/test-command"}
+
+
+@dataclass(frozen=True)
+class ChangeScope:
+    name: str
+    reason: str
+    should_run: bool
+
+
+def _is_test_path(path: str) -> bool:
+    parts = {part.lower() for part in Path(path).parts}
+    lowered = path.lower()
+    return bool(parts & set(TEST_MARKERS)) or any(
+        lowered.endswith(suffix)
+        for suffix in ("_test.py", ".test.js", ".test.ts", ".spec.js", ".spec.ts")
+    )
+
+
+def _is_ignored_path(path: str) -> bool:
+    return bool(set(Path(path).parts) & IGNORED_PATH_PARTS)
+
+
+def classify_paths(paths: list[str]) -> ChangeScope:
+    """Classify a Git-visible change set without running repository code."""
+    relevant = [
+        path.replace("\\", "/")
+        for path in paths
+        if not _is_ignored_path(path)
+        and path.replace("\\", "/").lower() not in IGNORED_CONFIG_PATHS
+    ]
+    if not relevant:
+        return ChangeScope("docs-only", "no relevant source or test files changed", False)
+    code = [path for path in relevant if Path(path).suffix.lower() in CODE_SUFFIXES]
+    tests = [path for path in code if _is_test_path(path)]
+    source = [path for path in code if path not in tests]
+    if not code:
+        return ChangeScope("docs-only", "only documentation or non-code files changed", False)
+    if not source:
+        return ChangeScope("tests-only", "test files changed", True)
+    risk_segments = [
+        segment
+        for path in source
+        for segment in re.split(r"[/\\_.-]+", path.lower())
+        if segment
+    ]
+    if any(
+        segment == marker or segment.startswith(marker)
+        for segment in risk_segments
+        for marker in HIGH_RISK_MARKERS
+    ):
+        return ChangeScope(
+            "high-risk",
+            "boundary or operational code changed; focused plus integration evidence is recommended",
+            True,
+        )
+    return ChangeScope("source", "source code changed; fast and focused evidence is required", True)
+
+
+def changed_paths(cwd: Path) -> list[str] | None:
+    """Return working-tree paths, or None when cwd is not a Git checkout."""
+    try:
+        root_result = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+        if root_result.returncode != 0:
+            return None
+        root = Path(root_result.stdout.strip())
+        result = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+        )
+        if result.returncode != 0:
+            return None
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        raw = line[3:] if len(line) >= 4 else ""
+        if " -> " in raw:
+            raw = raw.rsplit(" -> ", 1)[-1]
+        if raw:
+            paths.append(raw.strip('"'))
+    return paths
+
+
+def load_policy_commands(cwd: Path) -> dict[str, list[str]]:
+    """Load optional tokenized commands; invalid policy fails closed to fallback."""
+    policy = cwd / ".claude" / "test-policy.json"
+    if not policy.is_file():
+        return {}
+    try:
+        data = json.loads(policy.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    commands: dict[str, list[str]] = {}
+    for name in ("fast", "integration", "release"):
+        value = data.get(name)
+        if isinstance(value, list) and value and all(isinstance(item, str) and item for item in value):
+            commands[name] = value
+    return commands
 
 
 def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
@@ -164,6 +287,22 @@ def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
     return None
 
 
+def detect_test_commands(cwd: Path, scope: ChangeScope) -> list[tuple[list[str], str]]:
+    """Choose the smallest configured suite that matches the change risk."""
+    policy = load_policy_commands(cwd)
+    if policy:
+        selected: list[tuple[list[str], str]] = []
+        if "fast" in policy:
+            selected.append((policy["fast"], "policy.fast"))
+        if scope.name == "high-risk" and "integration" in policy:
+            selected.append((policy["integration"], "policy.integration"))
+        if selected:
+            return selected
+
+    detected = detect_test_command(cwd)
+    return [detected] if detected else []
+
+
 def session_age_minutes(claude_dir: Path) -> float:
     marker = claude_dir / ".session-start"
     if marker.exists():
@@ -197,72 +336,86 @@ def main() -> int:
     if claude_dir.exists() and session_age_minutes(claude_dir) < MIN_SESSION_MINUTES:
         return 0
 
-    detected = detect_test_command(cwd)
-    if detected is None:
+    paths = changed_paths(cwd)
+    scope = (
+        classify_paths(paths)
+        if paths is not None
+        else ChangeScope("unknown", "Git status unavailable; using the legacy project test detector", True)
+    )
+    if paths is not None and not scope.should_run:
         return 0
 
-    cmd, label = detected
-
-    try:
-        # CI=1 forces watch-capable runners (vitest, jest, playwright) into
-        # run-once non-interactive mode, preventing a watch-mode hang that would
-        # otherwise sit until TEST_TIMEOUT_SEC. FORCE_COLOR=0 keeps output clean.
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            timeout=TEST_TIMEOUT_SEC,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env={**os.environ, "CI": "1", "FORCE_COLOR": "0"},
-        )
-    except subprocess.TimeoutExpired:
-        print(f"[test-gate] {label} timeout after {TEST_TIMEOUT_SEC}s - skipping",
-              file=sys.stderr)
-        return 0
-    except (FileNotFoundError, OSError) as e:
-        print(f"[test-gate] {label} unavailable: {e}", file=sys.stderr)
+    commands = detect_test_commands(cwd, scope)
+    if not commands:
         return 0
 
-    if result.returncode == 0:
+    print(
+        f"[test-gate] scope={scope.name}; {scope.reason}; "
+        f"running {len(commands)} selected suite(s)",
+        file=sys.stderr,
+    )
+
+    failures: list[str] = []
+    for cmd, label in commands:
+        try:
+            # CI=1 forces watch-capable runners into run-once non-interactive
+            # mode. FORCE_COLOR=0 keeps evidence compact and comparable.
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                timeout=TEST_TIMEOUT_SEC,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env={**os.environ, "CI": "1", "FORCE_COLOR": "0"},
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(
+                f"{label}: timeout after {TEST_TIMEOUT_SEC}s; no green evidence was produced"
+            )
+            continue
+        except (FileNotFoundError, OSError) as e:
+            failures.append(f"{label} unavailable: {e}; no green evidence was produced")
+            continue
+
+        if result.returncode == 0:
+            continue
+
+        # pytest exit 5 = no tests collected: a scaffold is not a red suite.
+        is_pytest = label.startswith("pytest") or "pytest" in label
+        if is_pytest and result.returncode == 5:
+            continue
+
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        if len(output) > MAX_OUTPUT_BYTES:
+            output = output[-MAX_OUTPUT_BYTES:]
+        payload = f"$ {' '.join(cmd)}\n\n{output}"
+        if untrusted_block is not None:
+            framed = untrusted_block(
+                payload,
+                f"{label} command + stdout/stderr, tail {MAX_OUTPUT_BYTES} bytes",
+            )
+        else:
+            framed = f"Output (tail {MAX_OUTPUT_BYTES} bytes):\n{payload}"
+        failures.append(f"{label} exit {result.returncode}:\n{framed}")
+
+    if not failures:
         return 0
-
-    # pytest exit 5 = "no tests collected" - silent pass (project has scaffold but
-    # no tests yet; gate auto-activates when first real test exists).
-    is_pytest = label.startswith("pytest") or "pytest" in label
-    if is_pytest and result.returncode == 5:
-        return 0
-
-    output = (result.stdout or "") + "\n" + (result.stderr or "")
-    if len(output) > MAX_OUTPUT_BYTES:
-        output = output[-MAX_OUTPUT_BYTES:]
-
-    # The runner's stdout goes into the model's context. Frame it as data so a
-    # repository cannot smuggle instructions in through a failing test.
-    # The command line is repository-controlled too (.claude/test-command,
-    # package.json scripts), so it goes inside the frame with the output.
-    payload = f"$ {' '.join(cmd)}\n\n{output}"
-    if untrusted_block is not None:
-        framed = untrusted_block(payload, f"{label} command + stdout/stderr, tail {MAX_OUTPUT_BYTES} bytes")
-    else:
-        framed = f"Output (tail {MAX_OUTPUT_BYTES} bytes):\n{payload}"
 
     if stop_budget_consume is not None:
         stop_budget_consume(BUDGET_NAME, cwd)
 
     reason = (
-        f"Test gate failed ({label}, exit {result.returncode}). "
-        f"Cannot complete task while tests are red. "
+        f"Test gate failed for change scope '{scope.name}'. "
+        f"Cannot complete task while selected tests are red or unproven. "
         f"Per no-pre-existing-evasion rule: tests must be green before 'done'.\n\n"
-        f"{framed}\n\n"
-        f"Options:\n"
-        f"1. Fix the failures (preferred)\n"
-        f"2. If failures are in genuinely unfixable area: add to PROBLEMS.md "
-        f"with one of 5-exception reasons (missing-data, missing-dep, "
-        f"arch-decision, scope-explosion, inaccessible-repo) and create "
-        f".claude/.skip-test-gate for this session\n"
-        f"3. Bypass: CLAUDE_SKIP_TEST_GATE=1 (only for emergency)"
+        + "\n\n".join(failures)
+        + "\n\nOptions:\n"
+        "1. Fix the failures (preferred)\n"
+        "2. If failures are genuinely unfixable: record a valid exception in "
+        "PROBLEMS.md and use .claude/.skip-test-gate for this session\n"
+        "3. Bypass: CLAUDE_SKIP_TEST_GATE=1 (emergency only)"
     )
 
     print(json.dumps({"decision": "block", "reason": reason}))

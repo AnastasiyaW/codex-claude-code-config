@@ -41,7 +41,11 @@ Env vars через inline `FOO=1 cmd` НЕ видны хуку — нужен m
 - `over-engineering-advisor.py` (PostToolUse Write|Edit|MultiEdit) — advisory: большое добавление в код / новая зависимость → нудж «это минимум?» (`quality-code.md`), НЕ блок; bypass `CLAUDE_ALLOW_BLOAT=1`.
 - `git-auto-backup.py` (PreToolUse) — перед bypass'нутой destructive git-операцией создаёт ветку `claude-backup-<ts>` / stash.
 - `stop-phrase-guard.py` (Stop) — блок завершения при фразах-отговорках («на следующую сессию» и т.п.) → `finish-the-task.md`.
-- `test-gate-stop-hook.py` (Stop) — не даёт закрыть с красными тестами.
+- `test-gate-stop-hook.py` (Stop) — выбирает минимальный test scope по Git-visible
+  изменению: docs-only пропускает, source/tests запускают fast suite, а
+  auth/DB/API/concurrency/deploy boundary добавляет `integration` из
+  `.claude/test-policy.json`. Timeout считается отсутствием proof и блокирует,
+  вместо того чтобы молча пропускать завершение.
 - `problems-md-validator.py` (Stop) — блок при OPEN-пунктах в PROBLEMS.md без 5-exception тикета.
 - `session-handoff-reminder.py` (Stop) — напоминает написать handoff в конце длинной сессии.
 - `handoff-closure-audit-guard.py` (PreToolUse) — блокирует запись handoff-файла без `## Closure Audit`: primary task status, acceptance checks, related/scope-adjacent tasks, unfinished related tasks, почему не продолжаем сейчас.

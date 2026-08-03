@@ -36,6 +36,10 @@ CASES = [
     # unchanged neighbours
     ("упрости этот код", "lean-code"),
     ("почему падает тест, что не так, разберись", "investigate"),
+    # testing strategy
+    ("составь план тестирования для этой фичи", "testing-strategy"),
+    ("which tests should run for this API change", "testing-strategy"),
+    ("how should we evaluate the coding agent trajectory", "testing-strategy"),
     ("привет, как дела", None),
 ]
 

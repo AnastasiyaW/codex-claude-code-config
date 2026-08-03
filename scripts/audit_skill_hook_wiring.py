@@ -25,7 +25,11 @@ FRONTMATTER_RE = re.compile(
 # A hook command may run any interpreter, not only Python. Matching .py alone
 # reported a real, wired .js hook as a missing target and failed the whole audit
 # on a false positive -- the loud-gate failure, in a validator.
-HOOK_PATH_RE = re.compile(r"[\"']([^\"']+\.(?:py|js|mjs|cjs|ts|ps1|sh|cmd|bat))[\"']", re.IGNORECASE)
+HOOK_EXTENSIONS = r"(?:py|js|mjs|cjs|ts|ps1|sh|cmd|bat|exe)"
+HOOK_PATH_RE = re.compile(
+    rf"(?:[\"']([^\"']+\.{HOOK_EXTENSIONS})[\"']|((?:[A-Za-z]:[\\/]|/)[^\s\"']+\.{HOOK_EXTENSIONS}))",
+    re.IGNORECASE,
+)
 
 
 def frontmatter_value(body: str, key: str) -> str:
@@ -122,11 +126,12 @@ def hook_rows(config_path: Path) -> tuple[list[dict[str, Any]], list[str]]:
                     continue
                 command = str(hook.get("command") or "")
                 match = HOOK_PATH_RE.search(command)
-                target = Path(match.group(1)) if match else None
+                target_raw = (match.group(1) or match.group(2)) if match else None
+                target = Path(target_raw) if target_raw else None
                 if target is not None and not target.is_absolute():
                     target = config_path.parent / target
                 if target is None:
-                    errors.append(f"{event}[{group_index}][{hook_index}]: no quoted .py target")
+                    errors.append(f"{event}[{group_index}][{hook_index}]: no supported hook target")
                 elif not target.is_file():
                     errors.append(f"{event}[{group_index}][{hook_index}]: missing target {target}")
                 rows.append(

@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-07-28T22:04:26+00:00",
-  "skill_count": 37,
-  "aggregate_hash": "sha256:515912a4cb20f4b2d29abdd88ff23e7544d4bb6a4e15362317f1d90139160e3d",
+  "generated_at": "2026-08-03T09:43:00+00:00",
+  "skill_count": 42,
+  "aggregate_hash": "sha256:d72c1bd67c08dd4134c206269bb87b6f6bac0d64e08f8a06c143d2a3dc16d456",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:747805abf1b6b3025fbd3ce87e23e2476dc3b8626b5c49fb1ab7471f70b063a5",
@@ -124,8 +124,8 @@
       ]
     },
     "creative/pixel-art-storyboard": {
-      "content_hash": "sha256:e59e74f16a90aae4ebca5701d153ae22744747b4fadcd6fc642e55268470d8e2",
-      "size_bytes": 146952,
+      "content_hash": "sha256:e77b55712f96bf2ae175515c3a08acc6f3435bcb318a9fa906cbe594b79285b5",
+      "size_bytes": 146949,
       "file_count": 11,
       "files": [
         "SKILL.md",
@@ -195,6 +195,55 @@
         "scripts/render.py"
       ]
     },
+    "development/architecture-first": {
+      "content_hash": "sha256:82cd5989ecf718b20616fdce2537ffc6e7d4621d5309d21f141a52a8215e6789",
+      "size_bytes": 339297,
+      "file_count": 13,
+      "files": [
+        "SKILL.md",
+        "references/clean-architecture-original.md",
+        "references/clean-architecture/boundaries-and-layers.md",
+        "references/clean-architecture/details-and-code-organization.md",
+        "references/clean-architecture/python-implementation.md",
+        "references/clean-architecture/solid-and-components.md",
+        "references/domain-driven-design-original.md",
+        "references/domain-driven-design/bounded-contexts.md",
+        "references/domain-driven-design/building-blocks.md",
+        "references/domain-driven-design/domain-events.md",
+        "references/domain-driven-design/repositories-factories.md",
+        "references/domain-driven-design/strategic-design.md",
+        "references/domain-driven-design/ubiquitous-language.md"
+      ]
+    },
+    "development/code-complexity": {
+      "content_hash": "sha256:af2afd43f050f372e46dc37ef8f206fdfc52e9bcc7dd3648f9e66b081fbd2c23",
+      "size_bytes": 303226,
+      "file_count": 22,
+      "files": [
+        "SKILL.md",
+        "references/clean-code-original.md",
+        "references/clean-code/code-smells.md",
+        "references/clean-code/comments-formatting.md",
+        "references/clean-code/error-handling.md",
+        "references/clean-code/functions-and-methods.md",
+        "references/clean-code/naming-conventions.md",
+        "references/clean-code/testing-principles.md",
+        "references/pragmatic-programmer-original.md",
+        "references/pragmatic-programmer/broken-windows.md",
+        "references/pragmatic-programmer/contracts-assertions.md",
+        "references/pragmatic-programmer/dry-orthogonality.md",
+        "references/pragmatic-programmer/estimation-portfolio.md",
+        "references/pragmatic-programmer/reversibility.md",
+        "references/pragmatic-programmer/tracer-bullets.md",
+        "references/software-design-philosophy-original.md",
+        "references/software-design-philosophy/comments-as-design.md",
+        "references/software-design-philosophy/complexity-symptoms.md",
+        "references/software-design-philosophy/deep-modules.md",
+        "references/software-design-philosophy/general-vs-special.md",
+        "references/software-design-philosophy/information-hiding.md",
+        "references/software-design-philosophy/strategic-programming.md"
+      ]
+    },
     "development/deep-review": {
       "content_hash": "sha256:c7ed6cb83d9315bc213e4fd0376425e2c58057c8e4466fbc24d7f41d0a2696f4",
       "size_bytes": 13068,
@@ -213,12 +262,27 @@
       ]
     },
     "development/proof-verify": {
-      "content_hash": "sha256:fd384377ef1373a4cdeaeb678e82a3d86d4916081c733f0cc20fd39e18d5c69a",
-      "size_bytes": 10315,
+      "content_hash": "sha256:3eb9ed403436dfe54958bfc4195be293c71fe1ba25cbbe2c59362e551da35046",
+      "size_bytes": 10312,
       "file_count": 2,
       "files": [
         "SKILL.md",
         "references/kb-aware-verification.md"
+      ]
+    },
+    "development/refactoring-safely": {
+      "content_hash": "sha256:e1fc7473dc40c329f70cc146047313782105a7dab08d655aeb9f3501d5ddb9ff",
+      "size_bytes": 106312,
+      "file_count": 8,
+      "files": [
+        "SKILL.md",
+        "references/refactoring-patterns-original.md",
+        "references/refactoring-patterns/composing-methods.md",
+        "references/refactoring-patterns/moving-features.md",
+        "references/refactoring-patterns/organizing-data.md",
+        "references/refactoring-patterns/refactoring-workflow.md",
+        "references/refactoring-patterns/simplifying-conditionals.md",
+        "references/refactoring-patterns/smell-catalog.md"
       ]
     },
     "development/repo-map": {
@@ -230,9 +294,40 @@
         "scripts/repo_map.py"
       ]
     },
+    "development/system-and-data-design": {
+      "content_hash": "sha256:2cc6662d619ddfd3938f2fff5bfe8349cce7711e27a2236d0e3b39122a8df396",
+      "size_bytes": 201361,
+      "file_count": 16,
+      "files": [
+        "SKILL.md",
+        "references/ddia-systems-original.md",
+        "references/ddia-systems/batch-stream.md",
+        "references/ddia-systems/data-models.md",
+        "references/ddia-systems/fault-tolerance.md",
+        "references/ddia-systems/partitioning.md",
+        "references/ddia-systems/replication.md",
+        "references/ddia-systems/storage-engines.md",
+        "references/ddia-systems/transactions.md",
+        "references/system-design-original.md",
+        "references/system-design/building-blocks.md",
+        "references/system-design/common-designs.md",
+        "references/system-design/database-scaling.md",
+        "references/system-design/estimation-numbers.md",
+        "references/system-design/four-step-process.md",
+        "references/system-design/reliability-operations.md"
+      ]
+    },
+    "development/testing-strategy": {
+      "content_hash": "sha256:bdf4d45d596492666de32b9de5af4e33dce8eb1d35dc72ae69c652ad6e0a78f0",
+      "size_bytes": 6483,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
     "development/workflow-orchestration": {
-      "content_hash": "sha256:70c25e976b628aface7d590333df864b312aca27ee1e0b310cdf77899a02a916",
-      "size_bytes": 60308,
+      "content_hash": "sha256:4a6df9b50f3e8df5e159c5a48a9a5d6712ec11441f26e4959d3524c78fefec39",
+      "size_bytes": 60330,
       "file_count": 6,
       "files": [
         "SKILL.md",
@@ -280,8 +375,8 @@
       ]
     },
     "operational/cross-harness-continuation": {
-      "content_hash": "sha256:324cce6a93311d368fe472df732e9d5a8c72e70075fb54a0806a4dda11d164a6",
-      "size_bytes": 5431,
+      "content_hash": "sha256:30a7ffdbf8bef562a0d30e80eb1c3413bee07a6353974f45c49cd4416dade4a3",
+      "size_bytes": 5721,
       "file_count": 2,
       "files": [
         "SKILL.md",

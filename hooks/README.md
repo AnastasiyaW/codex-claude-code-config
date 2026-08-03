@@ -40,7 +40,7 @@ python scripts/audit_skill_hook_wiring.py --strict
 | Shell injection and self-damage | `command-injection-guard.py`, `self-harm-guard.py` | `PreToolUse` |
 | GitHub Actions workflow injection | `github-workflow-security.py` | `PreToolUse` |
 | Git source-of-truth adoption | `git-source-gate.py` | `Stop` |
-| Tests and code quality | `test-muting-guard.py`, `over-engineering-advisor.py` | `PreToolUse` / `PostToolUse` |
+| Tests and code quality | `test-muting-guard.py`, `test-gate-stop-hook.py`, `over-engineering-advisor.py` | `PreToolUse` / `PostToolUse` / `Stop` |
 | Documentation and long-run state | `docs-staleness-guard.py`, `kb-validate-gate.py`, `feature-list-validator.py` | `SessionStart` / `Stop` |
 | Completion and handoff quality | `handoff-closure-audit-guard.py`, `precompact-handoff-guard.py`, `session-handoff-reminder.py`, `stop-phrase-guard.py` | `PreToolUse` / `PreCompact` / `Stop` |
 | Deletion proof and secret exposure | `verify-deleted-guard.py`, `api-key-leak-detector.py`, `secret-leak-guard.py` | `PostToolUse` / `PreToolUse` |
