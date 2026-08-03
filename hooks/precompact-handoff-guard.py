@@ -48,6 +48,9 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from safety_common import age_from_filename as _age_from_filename  # noqa: E402
+
 # A handoff written within this window counts as "fresh" for this compaction.
 HANDOFF_FRESH_MINUTES = 25
 MARKER_NAME = ".precompact-handoff-needed"
@@ -312,19 +315,9 @@ Read this auto-draft, inspect the working tree and latest tool outputs, then wri
 
 
 # Handoff filenames carry their own timestamp: YYYY-MM-DD_HH-MM_<session>.md
-_FILENAME_TS = re.compile(r"(\d{4})-(\d{2})-(\d{2})[_T](\d{2})[-:](\d{2})")
-
-
-def _age_from_filename(path: Path) -> float | None:
-    """Minutes since the timestamp encoded in the filename, or None if absent."""
-    m = _FILENAME_TS.search(path.name)
-    if not m:
-        return None
-    try:
-        stamp = datetime(*(int(g) for g in m.groups()))
-    except ValueError:
-        return None
-    return (datetime.now() - stamp).total_seconds() / 60
+# The reader is safety_common.age_from_filename, imported above and shared with
+# session-handoff-reminder -- both hooks decide freshness, and two copies of that
+# decision is how one of them ends up trusting mtime again.
 
 
 def newest_handoff_age_minutes(handoffs_dir: Path, handoff_old: Path) -> float | None:

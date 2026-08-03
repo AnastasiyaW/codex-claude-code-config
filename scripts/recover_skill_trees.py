@@ -47,6 +47,11 @@ import shutil
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Strict mode on purpose: a BOM means the loader sees NO frontmatter, and
+# this tool exists to report exactly that rather than paper over it.
+from skill_frontmatter import loader_view as frontmatter  # noqa: E402
+
 BOM = "\ufeff"
 
 DEFAULT_TREES = [
@@ -54,18 +59,6 @@ DEFAULT_TREES = [
     Path.home() / ".claude" / "skills",  # read by Claude Code
 ]
 
-
-def frontmatter(path: Path) -> str | None:
-    """Return the YAML frontmatter block, or None if the loader would not see one."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    if text.startswith(BOM):
-        # Report as absent on purpose: this is what the loader sees.
-        return None
-    match = re.match(r"---\r?\n(.*?)\r?\n---", text, re.S)
-    return match.group(1) if match else None
 
 
 def field(block: str | None, name: str) -> bool:

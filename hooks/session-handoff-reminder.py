@@ -30,25 +30,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from safety_common import age_from_filename as _age_from_filename  # noqa: E402
+
 # Tunables
 SESSION_MIN_MINUTES = 15          # don't remind on short sessions
 HANDOFF_STALE_MINUTES = 30        # consider stale after this
 REMINDER_MARKER_NAME = ".handoff-reminded"
 
 # Handoff filenames carry their own timestamp: YYYY-MM-DD_HH-MM_<session>.md
-_FILENAME_TS = re.compile(r"(\d{4})-(\d{2})-(\d{2})[_T](\d{2})[-:](\d{2})")
 
-
-def _age_from_filename(path) -> float | None:
-    """Minutes since the timestamp encoded in the filename, or None if absent."""
-    m = _FILENAME_TS.search(path.name)
-    if not m:
-        return None
-    try:
-        stamp = datetime(*(int(g) for g in m.groups()))
-    except ValueError:
-        return None
-    return (datetime.now() - stamp).total_seconds() / 60
 
 
 def session_age_minutes(marker: Path) -> float:

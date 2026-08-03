@@ -15,7 +15,12 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
+
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# One parser for this format -- see skill_frontmatter for why two modes exist.
+from skill_frontmatter import value as frontmatter_value  # noqa: E402
 
 
 FRONTMATTER_RE = re.compile(
@@ -31,25 +36,6 @@ HOOK_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-def frontmatter_value(body: str, key: str) -> str:
-    """Read the small name/description subset used by skill registration."""
-    lines = body.splitlines()
-    prefix = f"{key}:"
-    for index, line in enumerate(lines):
-        if not line.startswith(prefix):
-            continue
-        value = line[len(prefix) :].strip().strip("\"'")
-        if value not in {">", "|", ">-", "|-"}:
-            return value
-        parts: list[str] = []
-        for next_line in lines[index + 1 :]:
-            if next_line and not next_line[0].isspace():
-                break
-            if next_line.strip():
-                parts.append(next_line.strip())
-        return " ".join(parts)
-    return ""
 
 
 def skill_metadata(path: Path) -> tuple[str, str]:

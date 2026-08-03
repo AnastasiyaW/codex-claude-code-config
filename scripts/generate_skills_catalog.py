@@ -8,30 +8,19 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# One parser for this format -- see skill_frontmatter for why two modes exist.
+from skill_frontmatter import value as _fm_value  # noqa: E402
+
+
+_frontmatter_value = _fm_value
+
 
 FRONTMATTER_RE = re.compile(
     r"\A\ufeff?---[ \t]*\r?\n(?P<body>.*?)\r?\n---[ \t]*\r?\n",
     re.DOTALL,
 )
 
-
-def _frontmatter_value(body: str, key: str) -> str:
-    lines = body.splitlines()
-    prefix = f"{key}:"
-    for index, line in enumerate(lines):
-        if not line.startswith(prefix):
-            continue
-        value = line[len(prefix):].strip().strip('"\'')
-        if value not in {">", "|", ">-", "|-"}:
-            return value
-        parts: list[str] = []
-        for next_line in lines[index + 1:]:
-            if next_line and not next_line[0].isspace():
-                break
-            if next_line.strip():
-                parts.append(next_line.strip())
-        return " ".join(parts)
-    return ""
 
 
 def skill_metadata(skill_md: Path) -> tuple[str, str]:
