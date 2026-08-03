@@ -168,6 +168,21 @@ ROUTES = [
         "skill": "testing-strategy",
         "description": "Choose the smallest evidence set by change risk: fast, focused, boundary, release, and agent-eval checks",
     },
+    # Harness feedback: report and repair a gate that is too strict or scoped
+    # to the wrong profile. This is deliberately separate from test selection.
+    {
+        "patterns": [
+            r"\b(overload\w*|over[- ]constrain\w*|too (strict|restrictive|heavy)|false[- ]positive|"
+            r"перегруж\w*|слишком (жестк\w*|зажат\w*|тяжел\w*)|избыточн\w*|ложн\w* срабатыван\w*)\b"
+            r".{0,100}\b(harness|gate|тест\w*|провер\w*|хуки|харнесс|smoke|стейдж\w*)\b",
+            r"\b(harness|gate|тест\w*|провер\w*|хуки|харнесс)\b.{0,100}"
+            r"\b(block\w*|блокир\w*|не (да[её]т|позволя\w*|пропуска\w*))\b.{0,100}"
+            r"\b(staging|smoke|стейдж\w*|смоук\w*)\b",
+        ],
+        "skill": "harness-feedback",
+        "description": "Separate staging smoke, security proof, release attestation, and nightly stress when a harness gate is overloaded",
+        "required": True,
+    },
     # Monitoring and observability
     {
         "patterns": [

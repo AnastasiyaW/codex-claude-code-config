@@ -38,6 +38,7 @@ Opt-in extras (use --extras):
   - continuity-contract-guard    PreToolUse    protects incremental edits across Claude/Codex
   - continuity-session-check     SessionStart  surfaces the shared continuation contract
   - test-gate-stop-hook          Stop          selects fast/integration tests by Git-visible risk and blocks red/unproven evidence
+  - harness-load-advisor         Stop          reports overloaded or mis-scoped test/release profiles
   - problems-md-validator        Stop          blocks closing with unresolved OPEN problems
   - plan-gate                    UserPromptSubmit  plan-artifact discipline for risky asks
   - conversation-history-capture Stop          archives and indexes local Codex session JSONL histories
@@ -108,6 +109,7 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("precompact-handoff-guard.py",  "PreCompact", None),
     ("handoff-closure-audit-guard.py", "PreToolUse", "Write|Edit|MultiEdit"),
     ("test-gate-stop-hook.py",       "Stop", None),
+    ("harness-load-advisor.py",       "Stop", None),
     ("problems-md-validator.py",     "Stop", None),
     ("plan-gate.py",                 "UserPromptSubmit", None),
     ("conversation-history-capture.py", "Stop", None),

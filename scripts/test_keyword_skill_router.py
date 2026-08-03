@@ -40,6 +40,8 @@ CASES = [
     ("составь план тестирования для этой фичи", "testing-strategy"),
     ("which tests should run for this API change", "testing-strategy"),
     ("how should we evaluate the coding agent trajectory", "testing-strategy"),
+    ("the VM-harness is overloaded and blocks staging smoke", "harness-feedback"),
+    ("слишком жесткий gate блокирует staging smoke", "harness-feedback"),
     ("привет, как дела", None),
 ]
 

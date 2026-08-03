@@ -27,6 +27,7 @@ PLUGIN_CACHE = Path.home() / ".codex" / "plugins" / "cache"
 REQUIRED_STOP_HOOKS = (
     "stop-phrase-guard.py",
     "test-gate-stop-hook.py",
+    "harness-load-advisor.py",
     "problems-md-validator.py",
     "feature-list-validator.py",
     "session-handoff-reminder.py",

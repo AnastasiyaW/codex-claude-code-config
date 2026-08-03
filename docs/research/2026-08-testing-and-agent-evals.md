@@ -21,6 +21,13 @@ Status: adopted for the shared Claude Code + Codex configuration
 5. Property-based, mutation, performance, security, and long-running agent
    evaluations are valuable, but they are periodic or risk-triggered layers;
    putting all of them on every edit creates latency and encourages bypasses.
+6. Execution environments and evidence profiles must be separate. A VM can be
+   reused by staging and security checks, while signing and production identity
+   belong only to release attestation. A harness overload is a measurable
+   routing defect when a higher-cost gate blocks a lower-risk claim.
+7. Feedback must include the requested profile, blocking gate, observed cost or
+   failure, evidence produced, and the smallest correction. The shared hook
+   records this metadata and forces the final report to expose it.
 
 ## Sources In English
 
@@ -32,6 +39,10 @@ Status: adopted for the shared Claude Code + Codex configuration
   https://www.anthropic.com/engineering/harness-design-long-running-apps
 - Anthropic, “Demystifying evals for AI agents”:
   https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
+- OpenAI, “Inside OpenAI's in-house data agent”:
+  https://openai.com/index/inside-our-in-house-data-agent/
+- GitHub Docs, “Deployments and environments”:
+  https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments
 - SWE-bench paper:
   https://arxiv.org/abs/2310.06770
 - SWT-Bench, testing and validating real-world bug fixes with code agents:
@@ -44,7 +55,7 @@ Status: adopted for the shared Claude Code + Codex configuration
 ## Sources In Chinese
 
 - Google Cloud, “智能体评估” (Agent Evaluation), Chinese documentation:
-  https://docs.cloud.google.com/gemini-enterprise-agent-platform/optimize/evaluation/agent-evaluation?hl=zh-cn
+  https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/evaluation-agents?hl=zh-CN
 - 中国工业互联网研究院, “智能体约束工程（Harness）评测正式启动”:
   https://www.china-aii.com/jgdt/202507015.jhtml
 - Thoughtworks China, “用测试金字塔指导数据应用的测试”:
@@ -69,6 +80,30 @@ or test changes. `.claude/test-policy.json` can provide `fast`, `integration`,
 and `release` commands. The latter is not run on every edit. `test-muting-guard`
 remains a hard guard against hiding failures; `bug-reproducer` and `proof-verify`
 remain specialized workflows rather than global gates.
+
+## Profile Contract And Overload Feedback
+
+The adopted profile contract is:
+
+| Profile | Blocking evidence |
+|---|---|
+| `staging-smoke` | fast build, focused regression, one stable smoke or contract path |
+| `security-proof` | hostile tests, trust-boundary proof, fresh-context evaluator |
+| `release-attestation` | exact artifact, signing, Authenticode/tool identity, installer/package proof |
+| `nightly-stress` | race, stress, OS/AV matrix, long-running evaluation |
+
+The `harness-load-advisor.py` Stop hook is deliberately narrow. It fires only
+when the final assistant message reports overload, false positives, or a
+release/signing gate blocking staging smoke. It writes metadata to
+`~/.claude/harness-feedback/events.jsonl` and blocks the close long enough to
+require a user-visible diagnosis. It never disables the named gate.
+
+This is consistent with the research: Anthropic separates generator and
+evaluator roles and relies on structured artifacts for long-running work;
+Google's Chinese agent-evaluation documentation evaluates both final answers
+and tool-call trajectories; classic testing guidance keeps broad, expensive
+checks few and avoids duplicate coverage. The local implementation makes the
+same boundary mechanical.
 
 ## Rejected As Overkill
 

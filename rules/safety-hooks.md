@@ -46,6 +46,11 @@ Env vars через inline `FOO=1 cmd` НЕ видны хуку — нужен m
   auth/DB/API/concurrency/deploy boundary добавляет `integration` из
   `.claude/test-policy.json`. Timeout считается отсутствием proof и блокирует,
   вместо того чтобы молча пропускать завершение.
+- `harness-load-advisor.py` (Stop) — ловит явный сигнал, что VM/proof/release
+  gate перегружен или блокирует staging smoke; требует назвать профиль, gate,
+  доказательство и исправление маршрутизации. Не отключает security/release
+  проверку и пишет только агрегированные метаданные в
+  `~/.claude/harness-feedback/events.jsonl`.
 - `problems-md-validator.py` (Stop) — блок при OPEN-пунктах в PROBLEMS.md без 5-exception тикета.
 - `session-handoff-reminder.py` (Stop) — напоминает написать handoff в конце длинной сессии.
 - `handoff-closure-audit-guard.py` (PreToolUse) — блокирует запись handoff-файла без `## Closure Audit`: primary task status, acceptance checks, related/scope-adjacent tasks, unfinished related tasks, почему не продолжаем сейчас.

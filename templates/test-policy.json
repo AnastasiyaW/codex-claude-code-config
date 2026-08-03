@@ -1,5 +1,23 @@
 {
   "fast": ["python", "-m", "pytest", "-q", "tests/unit"],
   "integration": ["python", "-m", "pytest", "-q", "tests/integration"],
-  "release": ["python", "-m", "pytest", "-q"]
+  "release": ["python", "-m", "pytest", "-q"],
+  "profiles": {
+    "staging-smoke": {
+      "commands": [["python", "-m", "pytest", "-q", "tests/smoke"]],
+      "forbidden_tokens": ["sign", "authenticode", "production-credential"]
+    },
+    "security-proof": {
+      "commands": [["python", "-m", "pytest", "-q", "tests/security"]],
+      "requires_fresh_evaluator": true
+    },
+    "release-attestation": {
+      "commands": [["python", "scripts/verify_release.py"]],
+      "requires_signed_artifact": true
+    },
+    "nightly-stress": {
+      "commands": [["python", "-m", "pytest", "-q", "tests/stress"]],
+      "scheduled": true
+    }
+  }
 }

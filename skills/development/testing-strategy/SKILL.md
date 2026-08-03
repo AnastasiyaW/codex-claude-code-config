@@ -8,16 +8,21 @@ description: Use when planning or reviewing tests for a code change, choosing be
 Testing is an evidence-selection problem, not a contest to run the largest
 suite. Choose the smallest set that can falsify the changed behavior, then add
 one higher-level check only when it covers a boundary the lower level cannot.
+Keep execution environments reusable, but separate their evidence profiles:
+`staging-smoke`, `security-proof`, `release-attestation`, and `nightly-stress`.
+Use `harness-feedback` when a gate is reported as overloaded or misplaced.
 
 ## Workflow
 
 1. Freeze the acceptance criteria as observable outcomes.
 2. Inspect the changed files and classify the risk.
-3. Select the lowest useful test level from the matrix below.
+3. Select the lowest useful test level from the matrix below and name the profile.
 4. Run the fast gate first. If it fails, fix the cause before adding more tests.
 5. Add a focused regression test for a confirmed bug or a changed invariant.
 6. Test real boundaries only when the change crosses them.
-7. For high-risk or long-horizon work, use a fresh-context verifier and store
+7. Keep security-proof and release-attestation checks out of staging-smoke unless
+   the acceptance criteria explicitly require that evidence.
+8. For high-risk or long-horizon work, use a fresh-context verifier and store
    the command, revision, result, and skipped checks in a durable artifact.
 
 ## Compact Matrix
@@ -45,7 +50,8 @@ contains code or test changes. Projects with a complex suite may declare
 
 `fast` is the automatic Stop gate. `integration` is additionally selected for
 high-risk changes when present. `release` is explicit or CI-only; do not make
-every edit pay the release-suite cost.
+every edit pay the release-suite cost. Optional `profiles` make the separation
+explicit; a staging profile must not contain release-signing requirements.
 
 ## Test Kinds
 
@@ -101,6 +107,9 @@ context must produce the final verdict. For a safe structural refactor use
   Windows, verify the tool's runtime requirements before adding it to CI.
 - Agent trajectories need task-outcome checks and tool-call checks, not only
   final-text similarity.
+- A VM harness is an execution environment, not a release profile. Reuse the
+  VM for staging and security checks, but attach signing and artifact identity
+  checks only to `release-attestation`.
 
 ## Troubleshooting
 
@@ -111,3 +120,4 @@ context must produce the final verdict. For a safe structural refactor use
 | E2E is flaky | Timing, shared state, browser/environment dependency | Make state isolated and waits explicit; reduce E2E to a stable smoke |
 | Generated test passes without exposing the bug | Test asserts implementation details or never goes red | Reproduce the pre-fix failure and assert the user-visible invariant |
 | Agent claims completion with skipped checks | Missing evidence contract or verifier | Record the skip reason and run `proof-verify` for high-risk work |
+| Agent says the harness is too strict or blocks smoke | Profiles are coupled or a gate is misplaced | Invoke `harness-feedback`; capture the blocker, split profiles, and rerun the reduced smoke |

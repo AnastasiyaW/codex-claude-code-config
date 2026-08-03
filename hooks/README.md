@@ -32,6 +32,13 @@ implicit invocation. Check both boundaries with:
 python scripts/audit_skill_hook_wiring.py --strict
 ```
 
+When a session reports an overloaded gate, inspect the aggregate feedback
+without opening transcripts:
+
+```bash
+python scripts/harness_feedback_report.py
+```
+
 ## What Is Enforced
 
 | Concern | Primary scripts | Event |
@@ -41,6 +48,7 @@ python scripts/audit_skill_hook_wiring.py --strict
 | GitHub Actions workflow injection | `github-workflow-security.py` | `PreToolUse` |
 | Git source-of-truth adoption | `git-source-gate.py` | `Stop` |
 | Tests and code quality | `test-muting-guard.py`, `test-gate-stop-hook.py`, `over-engineering-advisor.py` | `PreToolUse` / `PostToolUse` / `Stop` |
+| Harness scope and overload feedback | `harness-load-advisor.py`, `harness-feedback` skill | `Stop` / router |
 | Documentation and long-run state | `docs-staleness-guard.py`, `kb-validate-gate.py`, `feature-list-validator.py` | `SessionStart` / `Stop` |
 | Completion and handoff quality | `handoff-closure-audit-guard.py`, `precompact-handoff-guard.py`, `session-handoff-reminder.py`, `stop-phrase-guard.py` | `PreToolUse` / `PreCompact` / `Stop` |
 | Deletion proof and secret exposure | `verify-deleted-guard.py`, `api-key-leak-detector.py`, `secret-leak-guard.py` | `PostToolUse` / `PreToolUse` |

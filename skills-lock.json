@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-03T09:43:00+00:00",
-  "skill_count": 42,
-  "aggregate_hash": "sha256:d72c1bd67c08dd4134c206269bb87b6f6bac0d64e08f8a06c143d2a3dc16d456",
+  "generated_at": "2026-08-03T10:07:31+00:00",
+  "skill_count": 43,
+  "aggregate_hash": "sha256:6fce907bbeb25d73bb4de4ac05456b69950ffbdc79929ba15935ad521329f32a",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:747805abf1b6b3025fbd3ce87e23e2476dc3b8626b5c49fb1ab7471f70b063a5",
@@ -261,6 +261,14 @@
         "scripts/extract_feedback_queue.py"
       ]
     },
+    "development/harness-feedback": {
+      "content_hash": "sha256:a987c7e24c6853307c3043f2010aa85b547afd14c7eab652c1a6e3ca18be4604",
+      "size_bytes": 4163,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
     "development/proof-verify": {
       "content_hash": "sha256:3eb9ed403436dfe54958bfc4195be293c71fe1ba25cbbe2c59362e551da35046",
       "size_bytes": 10312,
@@ -318,8 +326,8 @@
       ]
     },
     "development/testing-strategy": {
-      "content_hash": "sha256:bdf4d45d596492666de32b9de5af4e33dce8eb1d35dc72ae69c652ad6e0a78f0",
-      "size_bytes": 6483,
+      "content_hash": "sha256:3ef246f6ba3f6a1023520a144be85146d9ef1b1bba9f9562d46109345b9d7968",
+      "size_bytes": 7386,
       "file_count": 1,
       "files": [
         "SKILL.md"
