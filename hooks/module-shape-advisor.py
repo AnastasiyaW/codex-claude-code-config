@@ -28,79 +28,27 @@ Self-test: python module-shape-advisor.py --self-test
 """
 from __future__ import annotations
 
-import ast
 import json
 import os
 import sys
 import time
 from pathlib import Path
 
-# Calibration, not findings. Chosen to stay quiet on ordinary files and to have spoken
-# early on the module described above -- it crossed every one of these many times over.
-MAX_LINES = int(os.environ.get("CLAUDE_SHAPE_MAX_LINES", "800"))
-MAX_DEFS = int(os.environ.get("CLAUDE_SHAPE_MAX_DEFS", "40"))
-MAX_STATE = int(os.environ.get("CLAUDE_SHAPE_MAX_STATE", "6"))
-MAX_FN_LINES = int(os.environ.get("CLAUDE_SHAPE_MAX_FN_LINES", "120"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# One definition of "what shape is this file in", shared with scripts/architecture_audit.py.
+# They were written independently and had already drifted -- see shape_common's docstring.
+from shape_common import (  # noqa: E402
+    CODE_SUFFIXES,
+    MAX_DEFS,
+    MAX_FN_LINES,
+    MAX_LINES,
+    MAX_STATE,
+    is_exempt as _exempt,
+    python_shape,
+    shape_findings as findings_for,
+)
 
 NAG_DAYS = 3  # per file, so a long session on one module is not a drumbeat
-
-CODE_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".php"}
-
-# Test files legitimately grow long: a suite is a list of cases, not a design. Same for
-# generated and vendored code, which nobody is going to restructure by hand.
-EXEMPT_PARTS = {"node_modules", ".venv", "venv", "dist", "build", "__pycache__",
-                "vendor", "third_party", "migrations", "generated", ".git"}
-EXEMPT_NAME_HINTS = ("test_", "_test.", ".test.", ".spec.", "conftest", "_pb2")
-
-MUTABLE_CALLS = {"Lock", "RLock", "Queue", "Event", "Semaphore", "defaultdict", "deque"}
-
-
-def _exempt(path: Path) -> bool:
-    if EXEMPT_PARTS & set(path.parts):
-        return True
-    name = path.name.lower()
-    return any(h in name for h in EXEMPT_NAME_HINTS)
-
-
-def python_shape(src: str) -> dict:
-    """Structure of a Python module: defs, shared mutable state, longest function."""
-    tree = ast.parse(src)
-    funcs = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-    classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
-    state = 0
-    for n in tree.body:
-        if not isinstance(n, (ast.Assign, ast.AnnAssign)):
-            continue
-        v = n.value
-        if isinstance(v, (ast.Dict, ast.List, ast.Set)):
-            state += 1
-        elif isinstance(v, ast.Call):
-            fn = getattr(getattr(v, "func", None), "attr", "") or \
-                 getattr(getattr(v, "func", None), "id", "")
-            if fn in MUTABLE_CALLS:
-                state += 1
-    longest = max((n.end_lineno - n.lineno + 1 for n in funcs + classes), default=0)
-    return {"defs": len(funcs) + len(classes), "state": state, "longest_fn": longest}
-
-
-def findings_for(path: Path, src: str) -> list[str]:
-    lines = len(src.splitlines())
-    out = []
-    if lines >= MAX_LINES:
-        out.append(f"{lines} lines in one file")
-
-    if path.suffix == ".py":
-        try:
-            shape = python_shape(src)
-        except SyntaxError:
-            return out  # mid-edit or not valid yet; say nothing rather than guess
-        if shape["defs"] >= MAX_DEFS:
-            out.append(f"{shape['defs']} top-level definitions")
-        if shape["state"] >= MAX_STATE:
-            out.append(f"{shape['state']} module-level mutable objects shared by all of them")
-        if shape["longest_fn"] >= MAX_FN_LINES:
-            out.append(f"a single function of {shape['longest_fn']} lines")
-    return out
 
 
 def _nagged_recently(path: Path) -> bool:
@@ -192,8 +140,8 @@ def self_test() -> int:
           any("mutable" in f for f in findings_for(Path("x.py"), locks)), True)
 
     fat_fn = "def big():\n" + "\n".join(f"    y{i} = {i}" for i in range(MAX_FN_LINES + 5))
-    check("one fat function speaks",
-          any("single function" in f for f in findings_for(Path("x.py"), fat_fn)), True)
+    check("one fat definition speaks",
+          any("single definition" in f for f in findings_for(Path("x.py"), fat_fn)), True)
 
     check("broken syntax stays quiet, not guessy",
           findings_for(Path("x.py"), "def ("), [])

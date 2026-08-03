@@ -16,6 +16,18 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+# Shape is defined once, in hooks/shape_common.py, and shared with
+# module-shape-advisor.py. These two had already drifted apart on day one --
+# see that file's docstring for what disagreeing measurers cost.
+from shape_common import (  # noqa: E402
+    EXEMPT_NAME_HINTS,
+    EXEMPT_PARTS,
+    is_exempt as _exempt,
+    python_shape as _python_shape,
+    shape_findings as _shape_findings,
+)
+
 
 SOURCE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
@@ -27,24 +39,12 @@ PROJECT_MARKERS = {
     "cmakelists.txt", "pom.xml", "build.gradle", "build.gradle.kts",
     "manage.py",
 }
-EXEMPT_PARTS = {
-    ".git", ".venv", "venv", "node_modules", "dist", "build", "coverage",
-    "__pycache__", "vendor", "third_party", "generated", "migrations",
-}
-EXEMPT_NAME_HINTS = ("test_", "_test.", ".test.", ".spec.", "conftest", "_pb2")
 ARCHITECTURE_NAMES = {"architecture.md", "architecture.mdx", "architecture.rst"}
 ARCHITECTURE_DIR_NAMES = {"architecture", "architecture-decisions", "adr", "adrs"}
 
 
 def _relative(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
-
-
-def _exempt(path: Path) -> bool:
-    if EXEMPT_PARTS & set(path.parts):
-        return True
-    name = path.name.lower()
-    return any(hint in name for hint in EXEMPT_NAME_HINTS)
 
 
 def _source_files(root: Path) -> list[Path]:
@@ -75,49 +75,6 @@ def _markers(root: Path) -> list[str]:
         for path in root.rglob("*")
         if path.is_file() and path.name.lower() in PROJECT_MARKERS and not _exempt(path)
     )
-
-
-def _python_shape(text: str) -> dict[str, int] | None:
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return None
-    functions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
-    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
-    state = 0
-    mutable_calls = {"Lock", "RLock", "Queue", "Event", "Semaphore", "defaultdict", "deque"}
-    for node in tree.body:
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        value = node.value
-        if isinstance(value, (ast.Dict, ast.List, ast.Set)):
-            state += 1
-        elif isinstance(value, ast.Call):
-            function = getattr(value.func, "attr", "") or getattr(value.func, "id", "")
-            state += int(function in mutable_calls)
-    longest = max(
-        (node.end_lineno - node.lineno + 1 for node in functions + classes),
-        default=0,
-    )
-    return {"defs": len(functions) + len(classes), "state": state, "longest_fn": longest}
-
-
-def _shape_findings(path: Path, text: str) -> list[str]:
-    lines = len(text.splitlines())
-    findings: list[str] = []
-    if lines >= 800:
-        findings.append(f"{lines} lines in one file")
-    if path.suffix.lower() == ".py":
-        shape = _python_shape(text)
-        if shape is None:
-            return findings
-        if shape["defs"] >= 40:
-            findings.append(f"{shape['defs']} top-level definitions")
-        if shape["state"] >= 6:
-            findings.append(f"{shape['state']} module-level mutable objects")
-        if shape["longest_fn"] >= 120:
-            findings.append(f"a function/class of {shape['longest_fn']} lines")
-    return findings
 
 
 def audit(root: Path) -> dict:
