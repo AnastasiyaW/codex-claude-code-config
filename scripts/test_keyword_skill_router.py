@@ -19,6 +19,9 @@ CASES = [
     ("спроектируй структуру проекта", "architecture-first"),
     ("build a new service for image jobs", "architecture-first"),
     ("куда положить этот код", "architecture-first"),
+    ("сделай новый многостраничный веб-сервис, чтобы код оставался читаемым", "architecture-quality"),
+    ("architecture review: frontend стал нечитаемым", "architecture-quality"),
+    ("keep the web app readable while adding this feature", "architecture-quality"),
     # capacity / data
     ("выдержит ли это нагрузку", "system-and-data-design"),
     ("какую базу данных выбрать", "system-and-data-design"),

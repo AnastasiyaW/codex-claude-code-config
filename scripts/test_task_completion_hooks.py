@@ -52,6 +52,11 @@ REQUIRED_PRETOOLUSE_HOOKS = (
     "continuity-contract-guard.py",
 )
 
+REQUIRED_POSTTOOLUSE_HOOKS = (
+    "over-engineering-advisor.py",
+    "module-shape-advisor.py",
+)
+
 
 def hook_commands_from(config_path: Path, event_name: str) -> list[str]:
     config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -143,6 +148,17 @@ class TaskCompletionHookTests(unittest.TestCase):
         for required in REQUIRED_PRETOOLUSE_HOOKS:
             self.assertIn(required, commands)
 
+    def test_posttooluse_hooks_guard_code_shape(self) -> None:
+        for config_path in (HOOKS_JSON, CLAUDE_SETTINGS):
+            commands = "\n".join(hook_commands_from(config_path, "PostToolUse"))
+            for required in REQUIRED_POSTTOOLUSE_HOOKS:
+                self.assertIn(required, commands, f"{config_path}: {required}")
+
+    def test_secrets_as_data_does_not_wire_secret_leak_guard(self) -> None:
+        for config_path in (HOOKS_JSON, CLAUDE_SETTINGS):
+            commands = "\n".join(all_hook_commands_from(config_path))
+            self.assertNotIn("secret-leak-guard.py", commands, f"{config_path}: forbidden hook wiring")
+
     def test_claude_runtime_has_the_same_core_lifecycle_guards(self) -> None:
         self.assertTrue(CLAUDE_SETTINGS.exists(), f"missing live Claude settings: {CLAUDE_SETTINGS}")
         required_by_event = {
@@ -150,6 +166,7 @@ class TaskCompletionHookTests(unittest.TestCase):
             "PreCompact": REQUIRED_PRECOMPACT_HOOKS,
             "SessionStart": REQUIRED_SESSIONSTART_HOOKS,
             "PreToolUse": REQUIRED_PRETOOLUSE_HOOKS,
+            "PostToolUse": REQUIRED_POSTTOOLUSE_HOOKS,
         }
         for event_name, required_hooks in required_by_event.items():
             commands = "\n".join(hook_commands_from(CLAUDE_SETTINGS, event_name))

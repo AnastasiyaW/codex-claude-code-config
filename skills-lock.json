@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-03T10:07:31+00:00",
-  "skill_count": 43,
-  "aggregate_hash": "sha256:6fce907bbeb25d73bb4de4ac05456b69950ffbdc79929ba15935ad521329f32a",
+  "generated_at": "2026-08-03T10:42:11+00:00",
+  "skill_count": 44,
+  "aggregate_hash": "sha256:786f5e06a9ad6479a1fe28d8a508bd91162622d911b31f7400a96937e523bb5c",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:747805abf1b6b3025fbd3ce87e23e2476dc3b8626b5c49fb1ab7471f70b063a5",
@@ -213,6 +213,14 @@
         "references/domain-driven-design/repositories-factories.md",
         "references/domain-driven-design/strategic-design.md",
         "references/domain-driven-design/ubiquitous-language.md"
+      ]
+    },
+    "development/architecture-quality": {
+      "content_hash": "sha256:53e8af93c14f4d28392e5cbfc9ecfab914e962bf48ed1c47b790541c9da77b72",
+      "size_bytes": 6568,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
       ]
     },
     "development/code-complexity": {
