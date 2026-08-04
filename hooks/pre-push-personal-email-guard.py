@@ -179,15 +179,18 @@ def collect(payload, remote_name=None):
 
 
 def self_test():
-    pats = [r"black\.design", r"Anastasiya1551", r"navok\.1\.3", r"\bnastya\b"]
+    # Synthetic fixtures only. Real personal markers are loaded from the
+    # private routing file at runtime and must not be copied into this public
+    # guard's test corpus.
+    pats = [r"private\.example", r"ACCOUNT_MARKER", r"test\.handle", r"\btestuser\b"]
     cases = [
-        ("165185905+Anastasiya1551@users.noreply.github.com", False,
+        ("123456+ACCOUNT_MARKER@users.noreply.github.com", False,
          "noreply wins over a login that is itself a marker"),
-        ("92753226+happy_in_happy@users.noreply.github.com", False, "noreply, other account"),
-        ("black.design@me.com", True, "personal address by marker"),
-        ("navok.1.3@gmail.com", True, "personal address by marker"),
-        ("BLACK.DESIGN@ME.COM", True, "case-insensitive"),
-        ("nastya@example.com", True, "bare word marker"),
+        ("987654+other_account@users.noreply.github.com", False, "noreply, other account"),
+        ("private.example@me.invalid", True, "personal address by marker"),
+        ("test.handle@gmail.invalid", True, "personal address by marker"),
+        ("PRIVATE.EXAMPLE@ME.INVALID", True, "case-insensitive"),
+        ("testuser@example.invalid", True, "bare word marker"),
         ("ci-bot@example.com", False, "unrelated address passes"),
         ("", False, "empty address is not a match"),
         ("noreply@github.com", False, "github noreply without the user prefix"),

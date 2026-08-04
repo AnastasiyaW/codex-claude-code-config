@@ -1,7 +1,7 @@
 {
   "name": "claude-code-config",
   "version": "3.20.0",
-  "description": "Battle-tested configuration system for Claude Code agents: 28 architectural principles (incl. P-28 Feature-Layer Architecture for project-knowledge-as-a-navigable-tree), 19 safety hooks, 23 skills (incl. /layer-new + /feature-new for ULTRAPACK-style feature narratives), 16 alternative comparisons, 12 templates (incl. extended kb-skeleton with docs/layers/), diagnostic scripts (incl. build_kb_graph.py + validate_kb_links.py). Pairs with mclaude for multi-session coordination.",
+  "description": "Battle-tested configuration system for Claude Code agents: architectural principles, safety hooks, composable skills, review agents, alternative comparisons, and project templates. Includes proof, handoff, feedback, UI/CLI harness, architecture, and multi-session coordination patterns.",
   "author": {
     "name": "AnastasiyaW",
     "url": "https://github.com/AnastasiyaW"

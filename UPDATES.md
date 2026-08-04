@@ -4,6 +4,23 @@ Changelog for claude-code-skills. Newest first.
 
 ---
 
+## 2026-08-05 (Cursor Team Kit: selective adoption)
+
+- Added claim-level `verify-this` with matched baseline/treatment evidence and
+  explicit `VERIFIED` / `NOT VERIFIED` / `INCONCLUSIVE` verdicts.
+- Promoted reusable `control-cli`, `control-ui`, `deslop`, and opt-in strict
+  maintainability review skills into the public source tree, with Windows-safe
+  harness guidance and privacy boundaries.
+- Added `ci-watcher` and the strict-review agent as reusable Claude agents;
+  background CI monitoring remains an explicit runtime capability, never an
+  unverified claim.
+- Kept `workflow-from-chats` on the existing human-gated
+  `session-feedback-capture` -> `distill-feedback` loop instead of creating a
+  duplicate skill.
+- Added adoption self-tests, router routes, generated catalog/lock updates,
+  and replaced private identifiers in a public guard self-test with synthetic
+  fixtures. All related wiring and privacy gates pass.
+
 ## 2026-07-31 (v3.34.0 - skill-tree recovery after a machine/account move)
 
 - Added `scripts/recover_skill_trees.py`: diagnoses and repairs skill trees that

@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-04T10:28:04+00:00",
-  "skill_count": 44,
-  "aggregate_hash": "sha256:3805b1cdbcd134eeb0b0863da0f3a7de725fbef5c199060e0aa31787aa034794",
+  "generated_at": "2026-08-04T22:36:13+00:00",
+  "skill_count": 49,
+  "aggregate_hash": "sha256:f3504551025bbd37600f8aab906ab177d5aa61329cf7ea58ec72dad64bcd3095",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:9737ec747c5409c33f0e1eed31092010260cb857a39fcfdb0f64bff40c45f659",
@@ -252,9 +252,33 @@
         "references/software-design-philosophy/strategic-programming.md"
       ]
     },
+    "development/control-cli": {
+      "content_hash": "sha256:64de41e1a65d057224c93819c9a093af67207fdbccd6a73e85963b32d39729a9",
+      "size_bytes": 3545,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    "development/control-ui": {
+      "content_hash": "sha256:9cda4f042b516849330dbb4e66e451cf13a6d5a082ad2a34bd1bab1fe989ad6e",
+      "size_bytes": 3026,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
     "development/deep-review": {
       "content_hash": "sha256:e652850424276398fda2bfb32946221570e2997f6bbfb30bd611d14fc61ddf1f",
       "size_bytes": 14498,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    "development/deslop": {
+      "content_hash": "sha256:4deff808ce82c8fe0bf4209eff63ab195d4c761998b550d3346d81d9d4030631",
+      "size_bytes": 2821,
       "file_count": 1,
       "files": [
         "SKILL.md"
@@ -336,6 +360,22 @@
     "development/testing-strategy": {
       "content_hash": "sha256:3ef246f6ba3f6a1023520a144be85146d9ef1b1bba9f9562d46109345b9d7968",
       "size_bytes": 7386,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    "development/thermo-nuclear-code-quality-review": {
+      "content_hash": "sha256:b18fa7b772790792eb9a28860a554cc2acbee64cf59b0f3fbbcc468e1024542f",
+      "size_bytes": 3563,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    "development/verify-this": {
+      "content_hash": "sha256:4814c3f00a784f532ca00f8075a6ae68e2fb2372c096042b5823ab9c176809e1",
+      "size_bytes": 4369,
       "file_count": 1,
       "files": [
         "SKILL.md"

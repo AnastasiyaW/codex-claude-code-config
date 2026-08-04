@@ -157,6 +157,51 @@ ROUTES = [
         "skill": "deep-review",
         "description": "Parallel competency-based code review (security, perf, arch)",
     },
+    # Claim-level verification: baseline/treatment proof is narrower than a
+    # plan-based proof loop and should be reachable by explicit user language.
+    {
+        "patterns": [
+            r"\b(verify this|prove it works|show (me )?the evidence|before[- ]and[- ]after|baseline.{0,20}treatment)\b",
+            r"\b(проверь|докажи|подтверди).{0,50}\b(что (это )?работает|результат|эффективност\w*|до и после|доказательств\w*)\b",
+        ],
+        "skill": "verify-this",
+        "description": "Compare a falsifiable claim with matched baseline/treatment evidence and return one explicit verdict",
+    },
+    # Interactive surfaces: route to a harness rather than a generic test plan.
+    {
+        "patterns": [
+            r"\b(interactive|интерактивн\w*|tui|terminal ui|prompt flow|pty|conpty)\b.{0,80}\b(cli|command|терминал|команд\w*|hang|зависан|memory leak|утечк\w* памят)\b",
+            r"\b(cli|command|терминал|команд\w*)\b.{0,80}\b(tui|prompt|keyboard|клавиш|pty|conpty|startup|запуск|hang|зависан)\b",
+            r"\b(tui|terminal ui)\b.{0,80}\b(prompt|keyboard|клавиш|flow|поток|hang|зависан)\b",
+        ],
+        "skill": "control-cli",
+        "description": "Drive an interactive CLI/TUI with deterministic input and transcript evidence",
+    },
+    {
+        "patterns": [
+            r"\b(control ui|browser harness|cdp harness|accessibility snapshot|visual diff|скриншот\w*|снимок экрана)\b",
+            r"\b(ui|frontend|веб[- ]?интерфейс|браузер|electron)\b.{0,80}\b(focus|keyboard|клавиатур|scroll|скролл|resize|перерисов|accessibility|доступност|visual|визуальн|screenshot|скриншот)\b",
+        ],
+        "skill": "control-ui",
+        "description": "Verify a local UI at the browser/CDP boundary with stable selectors and artifacts",
+    },
+    # Narrow cleanup of an agent-generated diff; do not route all refactors here.
+    {
+        "patterns": [
+            r"\b(deslop|ai slop|AI[- ]мусор|мусор от ИИ|лишн\w* комментар|any[- ]cast|защитн\w* проверк\w*|deep nesting)\b",
+        ],
+        "skill": "deslop",
+        "description": "Remove confirmed AI-generated diff noise while preserving behavior",
+    },
+    # Opt-in strict maintainability review. It complements ordinary deep-review.
+    {
+        "patterns": [
+            r"\b(thermo[- ]?nuclear|thermonuclear|code judo|код[- ]?дзюдо|строг\w* ревью качества|harsh maintainability|жестк\w* аудит поддерживаемост)\b",
+            r"\b(spaghetti|спагетти)\b.{0,60}\b(код|code|review|ревью|архитектур)\b",
+        ],
+        "skill": "thermo-nuclear-code-quality-review",
+        "description": "Opt-in strict maintainability review for structural regressions and unjustified complexity",
+    },
     # Testing strategy: select evidence by changed boundary and risk.
     {
         "patterns": [
