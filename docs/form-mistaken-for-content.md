@@ -152,6 +152,20 @@ new top keys — at which point the pattern is the answer: parsing intent out of
 string was itself the guess. Keeping every argument and dropping only the flags is not a
 cleverer parse, it is the decision to stop parsing.
 
+## The other direction: a failure that also means nothing
+
+Everything above is a pass carrying no content. The mirror image appeared three times in
+one shift: `docker exec` without `-i` measured zero bytes (stdin was never attached), a
+duplicate search that did not model scope returned 147 findings, and `ls` on a
+content-addressed path reported no such file. The data was intact every time; the
+instrument was aimed wrong. A null result is harder to doubt than a hollow pass, because
+zero *is* a number and "not found" *is* an answer — nothing looks missing.
+
+The rule that came out of it is constitutive rather than reported: an image does not reach
+production until its page has compiled. Not "until the health check is green" — a status
+code is a report about a page, and the two came apart at once, which is how a white screen
+served with HTTP 200 was caught twice in a day.
+
 ## What generalises
 
 - **Empty is an outcome, not a success.** Give it its own exit code and decide the policy

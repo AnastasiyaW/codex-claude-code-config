@@ -23,7 +23,30 @@ HOME = Path.home()
 # room to fail cleanly instead of halfway through a copy.
 MIN_FREE_BYTES = 2 * 1024**3
 SOURCE_ROOT = HOME / ".codex" / "sessions"
-DEST_ROOT = HOME / ".codex" / "conversation-history"
+
+
+def _archive_root() -> Path:
+    """Where the archive lives, which is not always beside the sessions it copies.
+
+    A sibling pointer file rather than a junction: a directory junction on this
+    machine once emptied the skill catalogue silently, and a wrong path that still
+    resolves is worse than one that does not. No path is hardcoded here because this
+    file is public; the machine-specific value lives in the pointer.
+
+    conversation-history-github-sync.py carries the same five lines and must stay in
+    step -- if these two disagree, one writes where the other does not look.
+    """
+    pointer = HOME / ".codex" / "conversation-history.location"
+    try:
+        target = Path(pointer.read_text(encoding="utf-8-sig").strip())
+        if target.is_absolute():
+            return target
+    except (OSError, ValueError):
+        pass
+    return HOME / ".codex" / "conversation-history"
+
+
+DEST_ROOT = _archive_root()
 ARCHIVE_ROOT = DEST_ROOT / "archive"
 INDEX_PATH = DEST_ROOT / "codex_sessions_index.jsonl"
 LATEST_MD = DEST_ROOT / "LATEST.md"
