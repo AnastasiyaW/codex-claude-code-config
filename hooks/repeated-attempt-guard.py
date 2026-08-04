@@ -62,14 +62,31 @@ CONSULTING = {"Read", "Grep", "Glob", "WebFetch", "NotebookRead"}
 
 _FLAG = re.compile(r"^-")
 _PATHISH = re.compile(r"[\\/]|\.[A-Za-z0-9]{1,5}$")
+# A long remote script is one attempt, not fifty; the cap keeps the key bounded while
+# still reaching past `cd <project> &&` into the command that follows it.
+MAX_KEY_TOKENS = 14
 
 
 def target_key(tool: str, tool_input: dict) -> str:
     """A stable name for 'the thing being attempted'.
 
-    Deliberately coarse: the point is to notice repetition, and an over-precise key
-    lets a retry with one changed flag look like a different thing -- which is exactly
-    the surface variation the loop consists of.
+    Flags are dropped, arguments are kept. That split is the whole design: a flag is
+    the surface variation a guess-and-retry loop consists of, an argument is what the
+    attempt is aimed at. Keeping only the FIRST argument was the mistake -- on real
+    command lines the first token is `cd`, so the key became the working directory and
+    three failures of anything in a project blocked everything else in it.
+
+    Scored on 14 days of this machine's real history (48,602 tool calls), counting a
+    block as justified only when the exact same failing command is retried:
+
+        verb + first argument   1390 blocks,  24 identical-command repeats   (98% noise)
+        verb + all arguments      55 blocks,  18 identical-command repeats
+        whole command             39 blocks,  18 identical-command repeats
+
+    The middle one is kept: it still sees through a changed flag, which the strictest
+    variant does not, and it costs ~16 extra stops in two weeks to keep that. Note the
+    `cd <project>` prefix survives here as CONTEXT rather than as the whole key, which
+    is also what stops two different projects running `npm test` from colliding.
     """
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         p = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
@@ -77,12 +94,14 @@ def target_key(tool: str, tool_input: dict) -> str:
     cmd = (tool_input.get("command") or "").strip()
     if not cmd:
         return ""
-    tokens = [t for t in cmd.split() if not _FLAG.match(t)]
+    tokens = [t for t in cmd.split() if not _FLAG.match(t)][:MAX_KEY_TOKENS]
     if not tokens:
         return ""
-    verb = Path(tokens[0]).name.lower()
-    arg = next((Path(t.strip("\"'")).name.lower() for t in tokens[1:] if _PATHISH.search(t)), "")
-    return f"cmd:{verb}:{arg}" if arg else f"cmd:{verb}"
+    parts = []
+    for raw in tokens:
+        raw = raw.strip("\"'")
+        parts.append(Path(raw).name.lower() if _PATHISH.search(raw) else raw.lower())
+    return "cmd:" + ":".join(parts)
 
 
 def failed(tool_response) -> bool:
@@ -206,6 +225,28 @@ def self_test() -> int:
     check("command key survives a changed flag",
           target_key("Bash", {"command": "python build.py --fast"}),
           target_key("Bash", {"command": "python build.py --slow -v"}))
+
+    # These are the shapes real command lines actually have on this machine. The
+    # earlier suite tested only `python build.py`, which is why a key that resolved
+    # to the working directory passed every synthetic check and then blocked ~1,300
+    # times in two weeks of replayed history.
+    check("a cd prefix does not swallow the command after it",
+          target_key("Bash", {"command": 'cd "C:/Desktop/CODE_Claude/retouch-app" && git checkout -q master'}),
+          "cmd:cd:retouch-app:&&:git:checkout:master")
+    check("two commands in one directory stay distinct",
+          target_key("Bash", {"command": "cd /repo && git push"}) !=
+          target_key("Bash", {"command": "cd /repo && git status"}), True)
+    check("the same command in two projects stays distinct",
+          target_key("Bash", {"command": "cd /a/proj-one && npm test"}) !=
+          target_key("Bash", {"command": "cd /a/proj-two && npm test"}), True)
+    check("bare navigation is still its own attempt",
+          target_key("Bash", {"command": "cd /nowhere"}), "cmd:cd:nowhere")
+    check("two remote scripts over one transport are not one key",
+          target_key("Bash", {"command": "tailscale ssh ws@vm 'nvidia-smi'"}) !=
+          target_key("Bash", {"command": "tailscale ssh ws@vm 'df -h /workspace'"}), True)
+    check("different git targets are different attempts",
+          target_key("Bash", {"command": "git checkout -B pr133 origin/fix-a"}) !=
+          target_key("Bash", {"command": "git checkout --detach origin/master"}), True)
     check("failure detected from exit code", failed({"exit_code": 2}), True)
     check("failure detected from traceback text", failed("Traceback (most recent call last)"), True)
     check("success is not invented", failed({"exit_code": 0, "stdout": "fine"}), False)
