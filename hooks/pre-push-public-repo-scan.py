@@ -63,15 +63,35 @@ def repo_is_public(owner: str, repo: str) -> bool | None:
     return r.stdout.strip() == "false"
 
 
-def get_push_diff(remote_ref: str, local_sha: str) -> str:
-    """Return diff between remote HEAD and local HEAD."""
-    # If remote ref not known (new branch), diff against empty tree
-    if remote_ref == "0" * 40 or not remote_ref:
-        base = run(["git", "hash-object", "-t", "tree", "/dev/null"]).stdout.strip()
-        if not base:
-            base = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git empty tree
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def get_push_diff(remote_sha: str, local_sha: str, remote_name: str = "origin") -> str:
+    """Return the diff of exactly what this push adds.
+
+    git reports a new ref with remote_sha all-zero. Treating that as "diff against
+    the empty tree" rescans the whole repository as if every file were being added,
+    so a push carrying no new commits at all -- `main:refs/heads/tmp-check` pointing
+    at an already-published SHA -- is scanned as the entire history and can never
+    pass. Any pre-existing match in the tree then blocks every future new branch,
+    and the only way out is the bypass marker; a guard that is bypassed by default
+    has stopped guarding. So bound the range by what the remote already has.
+    """
+    if remote_sha and remote_sha != "0" * 40:
+        base = remote_sha
     else:
-        base = remote_ref
+        r = run(["git", "rev-list", local_sha, "--not", f"--remotes={remote_name}"])
+        if r.returncode != 0:
+            # Cannot establish what the remote holds -- scan everything rather than
+            # nothing. Failing open here would silently disarm the guard.
+            base = EMPTY_TREE
+        else:
+            new_commits = r.stdout.split()
+            if not new_commits:
+                return ""  # ref moves onto published history; zero new objects
+            oldest = new_commits[-1]  # rev-list is newest-first
+            parent = run(["git", "rev-parse", "--verify", "--quiet", oldest + "^"])
+            base = parent.stdout.strip() or EMPTY_TREE  # oldest may be a root commit
     r = run(["git", "diff", f"{base}..{local_sha}"])
     return r.stdout
 
@@ -147,6 +167,46 @@ def _load_private_names() -> list[str]:
     return out
 
 
+def _load_exempt_paths() -> list[str]:
+    """Files the private routing config declares as legitimate marker lists.
+
+    A deny list necessarily contains the names it denies. Scanning it for those
+    names reports the list as a leak of itself, and because the finding lives in
+    the tree rather than in any one commit, it blocks every push from that
+    repository forever. routing.json already names these files in
+    `marker_exempt_paths` with an `_exempt_doc` saying why -- this reads the
+    declaration that was there all along instead of adding a second list.
+    """
+    try:
+        with open(PRIVATE_ROUTING, encoding="utf-8-sig") as fh:
+            paths = json.load(fh).get("marker_exempt_paths") or []
+    except (OSError, ValueError):
+        return []
+    return [str(p) for p in paths]
+
+
+_EXEMPT_PATHS = _load_exempt_paths()
+
+
+def _is_exempt(path: str) -> bool:
+    """True when `path` is a declared marker list.
+
+    Matches the path as the diff spells it, and its basename, so an entry written
+    as `sync-manifest.json` is still recognised in a subdirectory. Exemption
+    covers NAME findings only: a credential inside one of these files is still a
+    credential, and secret patterns keep running there.
+    """
+    if not _EXEMPT_PATHS:
+        return False
+    norm = path.replace("\\", "/").lstrip("./")
+    base = norm.rsplit("/", 1)[-1]
+    for p in _EXEMPT_PATHS:
+        q = p.replace("\\", "/").lstrip("./")
+        if norm == q or base == q or norm.endswith("/" + q):
+            return True
+    return False
+
+
 # Personal data patterns (for public repos)
 PII_PATTERNS = {
     "ssh_private_paths": r"(~/\.ssh/id_[a-z0-9_]+(?!\.pub))",
@@ -196,14 +256,15 @@ def agent_a_regex(diff: str) -> list[Finding]:
                         preview=val[:6] + "..." if len(val) > 6 else val,
                         kind="secret",
                     ))
-            for name, pat in PII_PATTERNS.items():
-                m2 = re.search(pat, added)
-                if m2:
-                    findings.append(Finding(
-                        file_hint=current_file, line=line_no, pattern=f"pii:{name}",
-                        preview=(m2.group(0))[:40],
-                        kind="pii",
-                    ))
+            if not _is_exempt(current_file):
+                for name, pat in PII_PATTERNS.items():
+                    m2 = re.search(pat, added)
+                    if m2:
+                        findings.append(Finding(
+                            file_hint=current_file, line=line_no, pattern=f"pii:{name}",
+                            preview=(m2.group(0))[:40],
+                            kind="pii",
+                        ))
         elif line.startswith(" ") or line.startswith("-"):
             line_no += 0 if line.startswith("-") else 1
     return findings
@@ -275,7 +336,17 @@ def agent_b_claude(diff: str) -> dict | None:
         return None
     # Truncate very long diffs to avoid context blowup
     payload = diff if len(diff) < 120_000 else diff[:120_000] + "\n[... diff truncated for review ...]"
-    prompt = AGENT_B_PROMPT + payload
+    # Agent B would otherwise reproduce Agent A's false positive on the deny list:
+    # these files name private things because naming them is their job.
+    exempt_note = ""
+    if _EXEMPT_PATHS:
+        exempt_note = (
+            "\nThese files are declared marker/deny lists: "
+            + ", ".join(_EXEMPT_PATHS)
+            + ". Internal names appearing in them are the list itself, not a leak. "
+              "Still BLOCK on any credential found there.\n"
+        )
+    prompt = AGENT_B_PROMPT + exempt_note + payload
     # Pipe prompt via stdin instead of argv: Windows command-line limit is
     # ~32K characters, so large diffs (200+ lines) overflow when passed as
     # `claude -p <prompt>`. Stdin avoids the limit entirely.
@@ -355,13 +426,20 @@ def main() -> int:
               f"{PRIVATE_NAMES_FILE}. Host and internal script names will not be "
               f"detected. Create the file (one name per line) to arm it.", file=sys.stderr)
 
+    # Same reasoning as above: say which files the name checks skip. An exemption
+    # nobody can see is indistinguishable from a check that quietly stopped running.
+    if _EXEMPT_PATHS:
+        print(f"[pre-push] name checks exempt on {len(_EXEMPT_PATHS)} declared marker "
+              f"list(s): {', '.join(_EXEMPT_PATHS)} (secret patterns still apply)",
+              file=sys.stderr)
+
     # Read stdin for push refs; find SHAs
     push_lines = sys.stdin.read().splitlines()
     if not push_lines:
         # Called manually without stdin — scan against origin/HEAD
         local_sha = run(["git", "rev-parse", "HEAD"]).stdout.strip()
         remote_ref = run(["git", "rev-parse", f"{remote_name}/HEAD"]).stdout.strip() or ""
-        diff = get_push_diff(remote_ref, local_sha)
+        diff = get_push_diff(remote_ref, local_sha, remote_name)
     else:
         # Concatenate diffs of all pushed refs
         diffs = []
@@ -372,7 +450,7 @@ def main() -> int:
             local_sha, remote_sha = parts[1], parts[3]
             if local_sha == "0" * 40:
                 continue  # delete
-            diffs.append(get_push_diff(remote_sha, local_sha))
+            diffs.append(get_push_diff(remote_sha, local_sha, remote_name))
         diff = "\n".join(diffs)
 
     if not diff.strip():
@@ -485,6 +563,83 @@ def self_test() -> int:
     print("baseline patterns present:")
     for name in ("ssh_private_paths", "home_user_path", "ssh_ports_internal"):
         check(name, name in PII_PATTERNS, True)
+
+    # --- marker_exempt_paths ---------------------------------------------------
+    # The deny list names private things by design. Scanning it for them reports
+    # the list as a leak of itself and, since the match lives in the tree rather
+    # than in any commit, blocks every push from that repo permanently.
+    global _EXEMPT_PATHS
+    saved_exempt = _EXEMPT_PATHS
+    try:
+        _EXEMPT_PATHS = ["sync-manifest.json", "guard/check_split.py"]
+        print("exempt paths:")
+        check("declared name matches", _is_exempt("sync-manifest.json"), True)
+        check("matches in a subdirectory", _is_exempt("config/sync-manifest.json"), True)
+        check("nested declared path matches", _is_exempt("guard/check_split.py"), True)
+        check("unrelated file not exempt", _is_exempt("docs/note.md"), False)
+        check("substring is not a match", _is_exempt("not-sync-manifest.jsonx"), False)
+
+        # Both fixtures are assembled from fragments on purpose. Written as literals
+        # they would trip the very checks they exercise, and this file is published
+        # to the public repo -- the same reason the private names live outside it.
+        home_hit = "/" + "home/someone/private"
+        key_hit = "AKIA" + "IOSFODNN7EXAMPLE"
+        sample = (
+            "+++ b/sync-manifest.json\n"
+            "@@ -0,0 +1,2 @@\n"
+            f"+{home_hit}\n"
+            f"+{key_hit}\n"
+            "+++ b/docs/note.md\n"
+            "@@ -0,0 +1 @@\n"
+            f"+{home_hit}\n"
+        )
+        found = agent_a_regex(sample)
+        pii_files = sorted({f.file_hint for f in found if f.kind == "pii"})
+        secret_files = sorted({f.file_hint for f in found if f.kind == "secret"})
+        print("exempt scanning:")
+        check("name finding suppressed in the deny list", pii_files, ["docs/note.md"])
+        check("credential still caught there", secret_files, ["sync-manifest.json"])
+    finally:
+        _EXEMPT_PATHS = saved_exempt
+
+    # --- push range ------------------------------------------------------------
+    # A new ref arrives with remote_sha all-zero. Basing the diff on the empty
+    # tree rescans the whole repository, so a ref that carries no new commits is
+    # scanned as the entire history.
+    print("push range:")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        cwd0 = os.getcwd()
+        try:
+            os.chdir(td)
+            run(["git", "init", "-q", "-b", "main"])
+            # Neutralise the global hooksPath so this repo's commits do not run the
+            # machine's real guards.
+            run(["git", "config", "core.hooksPath", os.path.join(td, "no-hooks")])
+            run(["git", "config", "user.email", "selftest@example.invalid"])
+            run(["git", "config", "user.name", "selftest"])
+            with open("a.txt", "w", encoding="utf-8") as fh:
+                fh.write("one\n")
+            run(["git", "add", "a.txt"])
+            run(["git", "commit", "-qm", "c1"])
+            sha1 = run(["git", "rev-parse", "HEAD"]).stdout.strip()
+            run(["git", "update-ref", "refs/remotes/origin/main", sha1])
+
+            check("published sha on a new ref yields no diff",
+                  get_push_diff("0" * 40, sha1), "")
+
+            with open("b.txt", "w", encoding="utf-8") as fh:
+                fh.write("two\n")
+            run(["git", "add", "b.txt"])
+            run(["git", "commit", "-qm", "c2"])
+            sha2 = run(["git", "rev-parse", "HEAD"]).stdout.strip()
+
+            new_ref_diff = get_push_diff("0" * 40, sha2)
+            check("new ref scans only the new commit",
+                  ("b.txt" in new_ref_diff) and ("a.txt" not in new_ref_diff), True)
+            check("known remote sha still scans the range",
+                  "b.txt" in get_push_diff(sha1, sha2), True)
+        finally:
+            os.chdir(cwd0)
 
     print("\nSELF-TEST:", "PASS" if not failures else "FAIL")
     for f in failures:
