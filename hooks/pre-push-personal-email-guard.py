@@ -80,15 +80,46 @@ def load_patterns():
     return out, FALLBACK_FILE
 
 
-def is_personal(addr, patterns):
+def matched_marker(addr, patterns):
+    """Return the private-name marker this address matches, or None.
+
+    Deliberately reports WHICH marker matched rather than asserting "personal".
+    The shared list mixes people with infrastructure, so a service address like
+    ci@<private-host> matches too. Blocking it is right - that name does not
+    belong in public commit metadata either - but calling it a personal address
+    sends the reader to change user.email where there is nothing to change.
+    """
     if not addr or NOREPLY.search(addr):
-        return False                      # a noreply address is never personal
-    return any(re.search(p, addr, re.I) for p in patterns)
+        return None                       # a noreply address is never personal
+    for p in patterns:
+        if re.search(p, addr, re.I):
+            return p
+    return None
 
 
-def run(args):
-    return subprocess.run(args, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace").stdout
+def is_personal(addr, patterns):
+    return matched_marker(addr, patterns) is not None
+
+
+class GitFailed(Exception):
+    """git refused to answer. Never treat that as 'nothing found'."""
+
+
+def run(args, required=False):
+    """Run git. With required=True a non-zero exit raises instead of yielding ''.
+
+    `git log <base>..<tip>` exits 128 when <base> is not present locally - the
+    remote was rewritten and the object was never fetched. Discarding that code
+    turns 'I could not look' into 'I looked and it was clean', and the push that
+    follows is a --force: the guard would fall silent exactly while history is
+    being rewritten, which is when a personal address resurfaces.
+    """
+    p = subprocess.run(args, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if required and p.returncode != 0:
+        raise GitFailed(f"{' '.join(args[:3])}... exit {p.returncode}: "
+                        f"{(p.stderr or '').strip()[:160]}")
+    return p.stdout
 
 
 def chain_local_hook(argv, payload):
@@ -133,15 +164,17 @@ def collect(payload, remote_name=None):
         if local_sha == ZERO:
             continue                                   # branch deletion
         args = commits_being_added(local_sha, remote_sha, remote_name)
-        for entry in run(["git", "log"] + args).splitlines():
+        for entry in run(["git", "log"] + args, required=True).splitlines():
             bits = entry.split("\x1f")
             if len(bits) < 3:
                 continue
             for addr in (bits[1], bits[2]):
-                if is_personal(addr, patterns):
+                hit = matched_marker(addr, patterns)
+                if hit:
                     # a set: author and committer are usually the same person,
                     # and counting one commit twice misstates the blast radius
-                    offenders.setdefault(addr, set()).add(bits[0][:8])
+                    rec = offenders.setdefault(addr, {"shas": set(), "marker": hit})
+                    rec["shas"].add(bits[0][:8])
     return offenders, source
 
 
@@ -165,10 +198,80 @@ def self_test():
         ok = got == want
         bad += not ok
         print(f"  {'ok  ' if ok else 'FAIL'}  {addr or '(empty)':52} {why}")
-    print(f"\n{len(cases) - bad}/{len(cases)} passed")
+
+    bad += range_tests()
+    total = len(cases) + RANGE_CASES
+    print(f"\n{total - bad}/{total} passed")
     if not load_patterns()[0]:
         print("note: no name list on this machine - the guard would run INACTIVE here")
     return 1 if bad else 0
+
+
+RANGE_CASES = 4
+
+
+def range_tests():
+    """Exercise commits_being_added on a real repository.
+
+    This is the function that bit twice - once walking the whole history on a
+    new branch, once counting author and committer as two commits - so it gets
+    the only tests that can catch a regression: real refs, real ranges.
+    """
+    import shutil
+    import tempfile
+
+    tmp = tempfile.mkdtemp(prefix="pushguard-")
+    bad = 0
+    try:
+        def git(*a, **kw):
+            return subprocess.run(["git", "-C", tmp] + list(a), capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace", **kw)
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "T")
+        git("config", "user.email", "t@example.com")
+        shas = []
+        for i in range(3):
+            with open(os.path.join(tmp, f"f{i}"), "w", encoding="utf-8") as fh:
+                fh.write(str(i))
+            git("add", "-A")
+            git("commit", "-q", "-m", f"c{i}")
+            shas.append(git("rev-parse", "HEAD").stdout.strip())
+        # a "remote" that already has the first commit
+        git("update-ref", "refs/remotes/origin/main", shas[0])
+
+        def count(local, remote):
+            args = commits_being_added(local, remote, "origin")
+            out = subprocess.run(["git", "-C", tmp, "log"] + args, capture_output=True,
+                                 text=True, encoding="utf-8", errors="replace")
+            return len([x for x in out.stdout.splitlines() if x.strip()]), out.returncode
+
+        checks = [
+            ("existing branch: only the new commits",
+             count(shas[2], shas[0])[0], 2),
+            ("new branch: excludes what the remote already has, not the whole history",
+             count(shas[2], ZERO)[0], 2),
+            ("new branch with nothing new: empty range, no false alarm",
+             count(shas[0], ZERO)[0], 0),
+        ]
+        for why, got, want in checks:
+            ok = got == want
+            bad += not ok
+            print(f"  {'ok  ' if ok else 'FAIL'}  range: {why} (got {got}, want {want})")
+
+        # a base the repository does not have must raise, never return empty
+        try:
+            run(["git", "-C", tmp, "log", "--format=%H", f"{'0'*39}1..{shas[2]}"],
+                required=True)
+            ok = False
+        except GitFailed:
+            ok = True
+        bad += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'}  range: missing base raises instead of "
+              f"reporting a clean range")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return bad
 
 
 def main():
@@ -188,18 +291,36 @@ def main():
             "           This push was NOT checked for personal addresses.\n")
         return chain_local_hook(argv, payload)
 
-    offenders, _ = collect(payload, argv[0] if argv else None)
+    try:
+        offenders, _ = collect(payload, argv[0] if argv else None)
+    except GitFailed as exc:
+        # fail CLOSED: an unanswerable range is exactly the rewritten-history
+        # case, and that is when an address resurfaces
+        sys.stderr.write(
+            f"\n[pre-push] BLOCKED: could not read the pushed range - {exc}\n\n"
+            "This usually means the remote was rewritten and its base object was\n"
+            "never fetched. The check could not run, so the push is refused rather\n"
+            "than passed: 'I could not look' is not 'I looked and it was clean'.\n\n"
+            "  git fetch <remote>      # then push again\n"
+            "\nDeliberate override:  CLAUDE_ALLOW_PERSONAL_EMAIL=1 git push ...\n\n")
+        return 1
+
     if offenders:
         sys.stderr.write(
-            "\n[pre-push] BLOCKED: these commits carry a personal email address.\n\n"
+            "\n[pre-push] BLOCKED: these commit addresses match private-name markers.\n\n"
             "Commit metadata in a public repo is readable by anyone through the API:\n"
             "an address plus proven activity is a ready-made phishing target.\n\n")
-        for addr, shas in offenders.items():
-            ordered = sorted(shas)
+        for addr, rec in offenders.items():
+            ordered = sorted(rec["shas"])
             sample = ", ".join(ordered[:5]) + (" ..." if len(ordered) > 5 else "")
             sys.stderr.write(f"  {addr}  ->  {len(ordered)} commit(s): {sample}\n")
+            sys.stderr.write(f"      matched marker: {rec['marker']}\n")
         sys.stderr.write(
-            f"\n  (names loaded from {source})\n"
+            f"\n  (markers loaded from {source})\n"
+            "\n  The list mixes people with infrastructure. If the address above is a\n"
+            "  person, rewrite the authorship. If it is a service or host name, that\n"
+            "  name does not belong in public commit metadata either - change the\n"
+            "  address the automation commits under.\n"
             "\nFix:\n"
             "  git config --global user.email \"<id>+<login>@users.noreply.github.com\""
             "   # id: gh api users/<login> --jq .id\n"
