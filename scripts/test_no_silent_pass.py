@@ -19,6 +19,9 @@ So one probe is not enough. This runs each checker twice:
 
     empty tree      it must NOT claim a pass          (vacuity)
     populated tree  it must say something different   (witness)
+                    -- a COPY, never the live repo: the first version aimed
+                    at the real tree and regenerated skills-lock.json, a probe
+                    with a side effect on its own subject
 
 A checker that gives the same answer to both is not looking at anything, whatever its
 exit code says. One that cannot be aimed at a tree from outside is reported as
@@ -32,6 +35,7 @@ Model Checking", FMSD 18(2) 2001; pytest exit codes; mutation-testing practice.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -76,15 +80,15 @@ def aim(path: Path, src: str, root: Path):
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 
-def classify(path: Path, src: str, empty: Path):
+def classify(path: Path, src: str, empty: Path, populated: Path):
     on_empty = aim(path, src, empty)
     if on_empty is None:
         return "unprovable", "takes no root argument"
     e_code, e_out = on_empty
 
-    on_real = aim(path, src, REPO)
+    on_real = aim(path, src, populated)
     if on_real is None:
-        return "unprovable", "aimable at empty but not at the repo"
+        return "unprovable", "aimable at empty but not at the fixture"
     r_code, r_out = on_real
 
     # Vacuity: an empty tree must not read as a pass.
@@ -98,7 +102,7 @@ def classify(path: Path, src: str, empty: Path):
         if re.search(r"usage:|the following arguments are required|unrecognized arguments",
                      e_out, re.I):
             return "unprovable", "needs another required argument before it will scan"
-        return "no witness", "identical answer to an empty tree and to the repo"
+        return "no witness", "identical answer to an empty tree and to a populated one"
 
     return "has content", (e_out.splitlines() or ["(silent)"])[-1][:92]
 
@@ -109,12 +113,21 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         empty = Path(td) / "empty"
         empty.mkdir()
+        # The populated side is a COPY, never the live repository. Aiming the first
+        # version at the real tree regenerated skills-lock.json: a probe with a side
+        # effect on its own subject, which is the same class of defect it hunts.
+        populated = Path(td) / "populated"
+        populated.mkdir()
+        for slice_ in ("skills/development", "rules", "principles"):
+            src_dir = REPO / slice_
+            if src_dir.is_dir():
+                shutil.copytree(src_dir, populated / slice_, dirs_exist_ok=True)
         for path, src in candidates():
-            kind, note = classify(path, src, empty)
+            kind, note = classify(path, src, empty, populated)
             buckets[kind].append((path.name, note))
 
     total = sum(len(v) for v in buckets.values())
-    print(f"probed {total} checker(s): empty tree, then the real repo\n")
+    print(f"probed {total} checker(s): empty tree, then a copied fixture\n")
     for name, note in sorted(buckets["has content"]):
         print(f"  [content   ] {name:<36} says on empty: {note}")
     for name, note in sorted(buckets["unprovable"]):
