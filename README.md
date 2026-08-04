@@ -17,6 +17,7 @@ what is inference, and what the fix does not cover.
 | **[Why an agent circles instead of acting](docs/why-agents-circle-instead-of-acting.md)** | Two agents, identical rules, different gate shapes. Describing a fix instead of applying it turned out to be the only move with no gate on it. |
 | **[Gates that cannot bootstrap themselves](principles/30-gates-that-cannot-bootstrap.md)** | A check that only arms once the thing it checks for already exists will never arm. The failure looks exactly like compliance. |
 | **[Nine skills, one skeleton, and nobody reaching for them](docs/skills-organised-by-author.md)** | Nine architecture skills existed and one was reachable — the one arguing for less code. How a one-sided advisory becomes a ratchet toward monoliths, and why filing knowledge by source book makes it unreachable. |
+| **[The form was available, so it was taken for the content](docs/form-mistaken-for-content.md)** | One failure shape in six materials — including three times inside the tool built to catch it. What formal verification, pytest, ESLint and mutation testing each already answer, and why "empty" has to be its own outcome. |
 
 ---
 
