@@ -231,8 +231,8 @@ def self_test() -> int:
     # to the working directory passed every synthetic check and then blocked ~1,300
     # times in two weeks of replayed history.
     check("a cd prefix does not swallow the command after it",
-          target_key("Bash", {"command": 'cd "C:/Desktop/CODE_Claude/retouch-app" && git checkout -q master'}),
-          "cmd:cd:retouch-app:&&:git:checkout:master")
+          target_key("Bash", {"command": 'cd "D:/work/some-project" && git checkout -q master'}),
+          "cmd:cd:some-project:&&:git:checkout:master")
     check("two commands in one directory stay distinct",
           target_key("Bash", {"command": "cd /repo && git push"}) !=
           target_key("Bash", {"command": "cd /repo && git status"}), True)
