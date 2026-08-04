@@ -387,6 +387,14 @@ def main() -> int:
         return 0
     contract, path, error = load_contract(root)
     if error:
+        # A malformed contract must not block repairing the contract. The missing-contract
+        # branch below already exempts these paths; without the same exemption here, the
+        # only way out of a bad contract was to write it with something other than the
+        # edit tools -- which is how a guard teaches people to route around it. Found
+        # 2026-08-04 while bootstrapping a contract in a fresh worktree.
+        if all(is_internal_continuity_path(root, raw) for raw in raw_paths):
+            emit("context", f"[continuity] repairing an invalid contract: {error}")
+            return 0
         emit("block", f"{error} at {path}")
         return 0
     decision, reason = decision_for_event(event, root, contract)
