@@ -116,10 +116,50 @@ rewriting unchanged files. So the rule was scoped to the case actually supported
 inputs means you were aimed at the wrong tree, which is precisely ESLint's rationale, with
 the same named opt-out.
 
+## The measured instance: a guard against guessing, guessing
+
+The day after this was written, the same shape turned up in the hook built to stop
+guess-and-retry loops. It keys each attempt by "the thing being attempted", derived from
+the command line as verb plus first argument. Its self-test fed it `python build.py` and
+passed, every time.
+
+Real command lines on that machine do not look like that. They look like
+`cd <project> && <the actual attempt>`, so the first token is `cd` and the key resolves to
+the *working directory*. Three failures of anything in a project then blocked everything
+else in it — including the diagnostic commands that would have explained the failure, and
+the escape hatch was unreachable for a separate reason: the hook was wired to Bash only,
+so the "read something and the block clears" release never received a Read.
+
+Replaying fourteen days of that machine's real history, 48,602 tool calls, through three
+candidate keys, and counting a block as justified only when the identical failing command
+is retried:
+
+| key | blocks | identical-command repeats |
+|---|---|---|
+| verb + first argument | 1390 | 24 |
+| verb + all arguments | 55 | 18 |
+| whole command | 39 | 18 |
+
+Ninety-eight per cent of what the shipped version would have done was collision. Nothing
+about the guard was missing: it had a docstring explaining why the key was deliberately
+coarse, a twenty-case self-test, and a bypass. What it did not have was one run against
+input it should fail on — the same missing step as every instance above, in the tool
+written to notice that step missing.
+
+Patching it was its own lesson. Skipping `cd` moved the top key to `tailscale ssh`; fixing
+that moved it to `cat >`; then to the `# claude-bypass:` comment line. Four patches, four
+new top keys — at which point the pattern is the answer: parsing intent out of a shell
+string was itself the guess. Keeping every argument and dropping only the flags is not a
+cleverer parse, it is the decision to stop parsing.
+
 ## What generalises
 
 - **Empty is an outcome, not a success.** Give it its own exit code and decide the policy
   on purpose.
+- **Test fixtures are a claim about the world.** `python build.py` was not a simplified
+  input, it was the wrong input, and every green run confirmed it.
+- **When each fix reveals the next case, the approach is the bug.** Four patches producing
+  four new top offenders is a measurement, not bad luck.
 - **A pass should carry what it was based on.** Not as documentation — as something the
   code cannot print without.
 - **Check the checker on an input it should fail.** Presence of a guard is not evidence
