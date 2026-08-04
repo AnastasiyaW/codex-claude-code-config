@@ -52,6 +52,14 @@ EMPTY_WORD = re.compile(r"scanned nothing|no \w+ found|nothing to|not found|miss
 ROOT_FLAGS = ("--root", "--path", "--dir", "--tree")
 TIMEOUT = 90
 
+# A script that writes into the tree it is given is a producer, not a checker, and the
+# two have different contracts. Cleaners count as producers here: "nothing to clean, exit
+# 0" is correct for them and would be a vacuous pass for a checker.
+PRODUCES = re.compile(r"\.write_text\(|\.write_bytes\(|shutil\.(copy|move|rmtree)|"
+                      r"os\.replace|\.unlink\(|\.rename\(")
+WROTE = re.compile(r"\bwrote\b|\bwritten\b|\bcreated\b|\bremoved\b|\bmoved\b|"
+                   r"\bAggregate:|\bgenerated\b", re.I)
+
 
 def candidates():
     for p in sorted(SCRIPTS.glob("*.py")):
@@ -80,6 +88,25 @@ def aim(path: Path, src: str, root: Path):
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 
+def _payload(out: str, root: Path) -> str:
+    """The answer with its envelope stripped: the root path, any temp path, and digits.
+
+    A neighbouring agent found this exact hole in a different detector -- an envelope
+    carrying page numbers was counted as content, so an empty route read as healthy. The
+    same shape here: two runs against two different directories differ in the directory
+    they name, and that difference proves nothing about what either run saw.
+    """
+    text = out.replace(str(root), "<ROOT>").replace(root.as_posix(), "<ROOT>")
+    text = re.sub(r"[A-Za-z]:[\\/][^\s\"']*?tmp[^\s\"']*", "<TMP>", text)
+    text = re.sub(r"/tmp/[^\s\"']*", "<TMP>", text)
+    # Digits are NOT normalised. An earlier version did, and that threw away the count --
+    # which is the payload, not the envelope. "found 0 items" and "found 7 items" then
+    # compared equal, so a checker that reported nothing looked exactly like one that
+    # reported seven. That is the same failure this helper exists to remove, applied to
+    # the other half of the string.
+    return text.strip()
+
+
 def classify(path: Path, src: str, empty: Path, populated: Path):
     on_empty = aim(path, src, empty)
     if on_empty is None:
@@ -91,17 +118,52 @@ def classify(path: Path, src: str, empty: Path, populated: Path):
         return "unprovable", "aimable at empty but not at the fixture"
     r_code, r_out = on_real
 
-    # Vacuity: an empty tree must not read as a pass.
-    if e_code == 0 and CLEAN_WORD.search(e_out) and not EMPTY_WORD.search(e_out):
-        return "vacuous pass", (e_out.splitlines() or [""])[-1][:92]
+    # Vacuity, judged by EXIT CODE, not by the words.
+    #
+    # This used to look for "clean" in the text and for a phrase admitting emptiness.
+    # That is form-matching, and it fails exactly where it matters: a checker whose count
+    # sits one level deeper in its output, or which words its emptiness differently,
+    # slips through the checker built to catch it. The same defect we hunt, in the hunter.
+    #
+    # Exit code is structural and cannot be phrased around. It is also the established
+    # answer: pytest gives "no tests collected" its own code rather than folding it into
+    # success, precisely so a pipeline cannot read one as the other. A checker that exits
+    # 0 over an empty tree has told every caller it passed, whatever it printed for a
+    # human who happens to be reading.
+    # ...but only for a CHECKER. A generator or a cleaner has no pass/fail contract, so
+    # "exit 0 having found nothing" is its correct behaviour, not a vacuous pass. Judging
+    # them by the same rule flagged four of six wrongly, and a report that is wrong about
+    # most of what it says trains its reader to skip it -- the failure this file exists
+    # to prevent, arriving as noise instead of silence.
+    #
+    # Producers have their own version of the defect, and it is worth naming separately:
+    # writing an artifact from an empty input. A skills catalogue of nothing is not a
+    # pass, it is a lie with a filename.
+    if PRODUCES.search(src):
+        if e_code == 0 and WROTE.search(e_out):
+            return "produced from nothing", (e_out.splitlines() or [""])[-1][:88]
+        return "has content", "producer; nothing written on an empty tree"
+
+    if e_code == 0:
+        note = (e_out.splitlines() or ["(silent)"])[-1][:78]
+        if EMPTY_WORD.search(e_out):
+            return "vacuous pass", f"exit 0 on nothing (it does say so: {note})"
+        return "vacuous pass", f"exit 0 on nothing: {note}"
 
     # Identical answers can mean two very different things, and collapsing them would
     # be its own version of form-without-content: "it is blind" and "I could not aim
     # it" deserve different responses. A usage error means it never reached the tree.
-    if (e_code, e_out) == (r_code, r_out):
+    # Compare with the ENVELOPE removed. The two trees have different paths, so a checker
+    # that only echoes its root in a header produces two different strings while having
+    # looked at nothing -- the wrapper counted as the payload. Normalising the paths and
+    # the digits out is what distinguishes "it saw something" from "it printed where it
+    # was pointed".
+    if (e_code, r_code) == (e_code, r_code) and _payload(e_out, empty) == _payload(r_out, populated):
         if re.search(r"usage:|the following arguments are required|unrecognized arguments",
                      e_out, re.I):
             return "unprovable", "needs another required argument before it will scan"
+        if e_out != r_out:
+            return "no witness", "answers differ only in the path it was handed"
         return "no witness", "identical answer to an empty tree and to a populated one"
 
     return "has content", (e_out.splitlines() or ["(silent)"])[-1][:92]
@@ -109,6 +171,7 @@ def classify(path: Path, src: str, empty: Path, populated: Path):
 
 def main() -> int:
     buckets: dict[str, list] = {"has content": [], "vacuous pass": [],
+                                "produced from nothing": [],
                                 "no witness": [], "unprovable": []}
     with tempfile.TemporaryDirectory() as td:
         empty = Path(td) / "empty"
@@ -136,11 +199,16 @@ def main() -> int:
         print(f"  [NO WITNESS] {name:<36} {note}")
     for name, note in sorted(buckets["vacuous pass"]):
         print(f"  [VACUOUS   ] {name:<36} {note}")
+    for name, note in sorted(buckets["produced from nothing"]):
+        print(f"  [FROM NOTHING] {name:<34} {note}")
 
-    defects = len(buckets["vacuous pass"]) + len(buckets["no witness"])
+    defects = (len(buckets["vacuous pass"]) + len(buckets["no witness"])
+               + len(buckets["produced from nothing"]))
     unprovable = len(buckets["unprovable"])
     print(f"\n  content: {len(buckets['has content'])} | unprovable: {unprovable} | "
-          f"vacuous: {len(buckets['vacuous pass'])} | no witness: {len(buckets['no witness'])}")
+          f"vacuous: {len(buckets['vacuous pass'])} | "
+          f"from nothing: {len(buckets['produced from nothing'])} | "
+          f"no witness: {len(buckets['no witness'])}")
 
     if defects:
         print("\nRESULT: FAIL")

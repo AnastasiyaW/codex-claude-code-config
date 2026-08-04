@@ -103,14 +103,23 @@ def main() -> int:
     ap.add_argument("roots", nargs="+", help="dirs to search for */SKILL.md")
     ap.add_argument("--max-words", type=int, default=5000)
     ap.add_argument("--strict", action="store_true", help="exit 1 if any finding")
+    ap.add_argument("--allow-empty", action="store_true",
+                    help="treat 'no SKILL.md found' as success instead of a wrong path")
     args = ap.parse_args()
 
     skill_files = []
     for r in args.roots:
         skill_files += sorted(Path(r).rglob("SKILL.md"))
     if not skill_files:
-        print("no SKILL.md found under:", ", ".join(args.roots))
-        return 0
+        # Zero inputs is an error, not a clean run. ESLint made exactly this change in
+        # v5 -- a glob matching no files became fatal -- because the overwhelmingly
+        # likely cause is a wrong path or a typo, and reporting success for it hides the
+        # mistake behind a green line. The permissive behaviour is an explicit flag
+        # there, and here.
+        print("no SKILL.md found under:", ", ".join(args.roots), file=sys.stderr)
+        print("nothing was linted, so nothing was proven; check the path or pass "
+              "--allow-empty", file=sys.stderr)
+        return 0 if getattr(args, "allow_empty", False) else 2
 
     total_findings = 0
     clean = 0

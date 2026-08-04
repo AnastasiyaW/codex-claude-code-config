@@ -131,6 +131,8 @@ def main() -> int:
                              "(exit 1 on drift). Intended for CI.")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent,
                         help="Repository root (default: parent of scripts/)")
+    parser.add_argument("--allow-empty", action="store_true",
+                        help="write even when zero skills were found")
     parser.add_argument("--output", type=Path, default=None,
                         help="Lockfile path (default: <root>/skills-lock.json)")
     args = parser.parse_args()
@@ -167,6 +169,16 @@ def main() -> int:
             return 1
         print(f"[skills-lock] OK: {current['skill_count']} skills, aggregate matches")
         return 0
+
+    # An aggregate hash over zero skills is a real, stable, meaningless value -- the
+    # SHA-256 of the empty string -- and committing it would replace the lock that
+    # actually pins something. Zero inputs here means the root is wrong, which is the
+    # case ESLint made fatal in v5 rather than reporting as success.
+    if not current["skill_count"] and not args.allow_empty:
+        print(f"[skills-lock] no skills found under {args.root} — refusing to write a "
+              f"lock over nothing. Check the root, or pass --allow-empty.",
+              file=sys.stderr)
+        return 2
 
     lock_path.write_text(
         json.dumps(current, indent=2, ensure_ascii=False) + "\n",

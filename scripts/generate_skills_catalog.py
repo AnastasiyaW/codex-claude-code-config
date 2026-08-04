@@ -88,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=repo_root, help="repository root")
     parser.add_argument("--output", type=Path, default=None, help="output path (defaults to skills/README.md)")
     parser.add_argument("--check", action="store_true", help="fail when the committed catalog is stale")
+    parser.add_argument("--allow-empty", action="store_true",
+                        help="write even when zero skills were found (a real empty tree)")
     args = parser.parse_args(argv)
     output = args.output or args.root / "skills" / "README.md"
     expected = render(args.root)
@@ -99,9 +101,22 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"[skills-catalog] OK: {len(list((args.root / 'skills').rglob('SKILL.md')))} skills")
         return 0
+    # A catalogue built from zero skills is not an empty catalogue, it is evidence of a
+    # wrong root -- and writing it would replace the real one. Same reasoning ESLint used
+    # when an unmatched glob became fatal in v5: the likely cause is a bad path, and a
+    # green line hides it. Note the field does NOT share a blanket "never write empty"
+    # rule (CMake keeps empty outputs so N-to-M mappings stay consistent), so this is
+    # scoped to the wrong-root case rather than dressed up as a general principle.
+    found = len(list((args.root / "skills").rglob("SKILL.md")))
+    if not found and not args.allow_empty:
+        print(f"[skills-catalog] no SKILL.md under {args.root / 'skills'} — refusing to "
+              f"overwrite {output} with a catalogue of nothing. Check the root, or pass "
+              f"--allow-empty if the emptiness is real.", file=sys.stderr)
+        return 2
+
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(expected, encoding="utf-8")
-    print(f"[skills-catalog] wrote {output}")
+    print(f"[skills-catalog] wrote {output} ({found} skills)")
     return 0
 
 
