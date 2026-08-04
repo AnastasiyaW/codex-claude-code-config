@@ -25,28 +25,30 @@ MIN_FREE_BYTES = 2 * 1024**3
 SOURCE_ROOT = HOME / ".codex" / "sessions"
 
 
-def _archive_root() -> Path:
-    """Where the archive lives, which is not always beside the sessions it copies.
+def _relocatable(name: str) -> Path:
+    """`~/.codex/<name>`, unless a sibling `<name>.location` file says otherwise.
 
-    A sibling pointer file rather than a junction: a directory junction on this
-    machine once emptied the skill catalogue silently, and a wrong path that still
-    resolves is worse than one that does not. No path is hardcoded here because this
-    file is public; the machine-specific value lives in the pointer.
+    A pointer file rather than a directory junction: a junction on this machine once
+    emptied the skill catalogue without a word, and a wrong path that still resolves
+    is worse than one that does not. Ignored unless absolute, which is what caught the
+    first pointer being written with printf and coming out as `D:gent-archives`. No
+    path is hardcoded here because this file is public; the machine-specific value
+    lives in the pointer.
 
-    conversation-history-github-sync.py carries the same five lines and must stay in
-    step -- if these two disagree, one writes where the other does not look.
+    conversation-history-github-sync.py carries this same resolver and must stay in
+    step -- if the two disagree, one writes where the other does not look.
     """
-    pointer = HOME / ".codex" / "conversation-history.location"
     try:
-        target = Path(pointer.read_text(encoding="utf-8-sig").strip())
+        target = Path((HOME / ".codex" / f"{name}.location")
+                      .read_text(encoding="utf-8-sig").strip())
         if target.is_absolute():
             return target
     except (OSError, ValueError):
         pass
-    return HOME / ".codex" / "conversation-history"
+    return HOME / ".codex" / name
 
 
-DEST_ROOT = _archive_root()
+DEST_ROOT = _relocatable("conversation-history")
 ARCHIVE_ROOT = DEST_ROOT / "archive"
 INDEX_PATH = DEST_ROOT / "codex_sessions_index.jsonl"
 LATEST_MD = DEST_ROOT / "LATEST.md"
