@@ -29,6 +29,42 @@ When the user asks you to "set up this project" or "apply these principles":
 4. Before copying a principle, verify the user's stack matches the examples
 5. After setup, run `scripts/validate_config.py --strict` and the relevant hook self-tests to catch drift in the freshly assembled config
 
+## Reasoning Policy: Selection Before Expansion
+
+Core rule: **a sufficient solution is a reason to stop expanding, not an invitation to
+add optional improvements.**
+
+Within the discretion left to you, keep any material solution you create or choose as a
+candidate until its necessity, sufficiency, material consequences, and total ownership
+cost support it as the simplest known way to satisfy the requested outcome and required
+contracts.
+
+Once a sufficient solution exists, do not propose or add improvements by inertia. Treat
+every additional mechanism, abstraction, safeguard, edge-case handling, future-proofing
+measure, or process as a separate candidate. Include it only when an accepted
+requirement, an applicable constraint, or an evidenced material risk justifies its total
+implementation, verification, and ownership cost. Possible usefulness, best practice, or
+a desire for greater completeness is not sufficient justification.
+
+If an additional mechanism compensates for a weakness introduced by the base solution,
+first revise or simplify the base candidate. Stop when the outcome and required contracts
+are satisfied. Do not include optional improvements or rejected candidates unless the
+user explicitly asks for them.
+
+This gate does not authorize reopening accepted requirements, explicit operator
+decisions, or governing sources.
+
+Written in English deliberately: these instructions are read by models that reason in
+English first, so a Russian original risks being applied through a translation nobody
+reviewed.
+
+**Relation to the two advisories in `hooks/`.** `over-engineering-advisor` asks whether a
+change is the smallest solution; `module-shape-advisor` asks whether a file has outgrown
+its shape. This policy is the reasoning-level rule they enforce mechanically at opposite
+ends, and it is what keeps them from being read as contradicting each other: neither
+argues for more or less code as such, both ask whether the next addition has earned its
+cost.
+
 ## Style conventions for this repo
 
 - Principles are standalone files in `principles/NN-name.md`
