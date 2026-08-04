@@ -111,6 +111,54 @@ HIGH_RISK_MARKERS = (
 IGNORED_PATH_PARTS = {".git", "node_modules", "dist", "build", ".venv", "__pycache__"}
 IGNORED_CONFIG_PATHS = {".claude/test-policy.json", ".claude/test-command"}
 
+# Verification depth, on the scope this hook already computes.
+#
+# `high-risk` used to mean only "also run the integration suite". More tests of the same
+# kind is not a deeper check -- a suite that never exercised the boundary you moved
+# passes just as green after you move it. DevRails-26 tiers verification depth T0..T3 and
+# demands an independent pass at the top; the idea is right and the part we lacked is the
+# INDEPENDENCE, not more of our own tests.
+#
+# So a high-risk change must also carry one recorded independent review. Evidence is keyed
+# to a hash of the changed paths, so it cannot be earned once and coasted on: move a
+# different boundary and the old evidence stops counting. Same reason a repeat that never
+# pins its input proves nothing about the run you are actually in.
+#
+# Deliberately NOT a second classifier. An earlier draft of this derived its own T0..T3
+# from the same paths, which would have put two competing definitions of "risky here" in
+# one repo -- the duplication class this codebase spent a day removing.
+EVIDENCE_PATH = Path(os.environ.get(
+    "CLAUDE_REVIEW_EVIDENCE",
+    str(Path.home() / ".claude" / "state" / "review-evidence.jsonl")))
+
+
+def surface_key(paths: list[str]) -> str:
+    import hashlib
+    normalized = sorted(p.replace("\\", "/") for p in paths)
+    return hashlib.sha1("\n".join(normalized).encode()).hexdigest()[:12]
+
+
+def record_review(note: str, paths: list[str]) -> str:
+    key = surface_key(paths)
+    try:
+        EVIDENCE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with EVIDENCE_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.time(), "surface": key, "note": note},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return key
+
+
+def reviews_for(paths: list[str]) -> list[str]:
+    key = surface_key(paths)
+    try:
+        rows = [json.loads(l) for l in
+                EVIDENCE_PATH.read_text(encoding="utf-8-sig").splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return []
+    return [r.get("note", "") for r in rows if r.get("surface") == key]
+
 
 @dataclass(frozen=True)
 class ChangeScope:
@@ -401,6 +449,23 @@ def main() -> int:
         failures.append(f"{label} exit {result.returncode}:\n{framed}")
 
     if not failures:
+        # Green tests close a `source` change. A high-risk one also needs a pass that is
+        # not ours: our own suite did not cover the boundary before it moved, so it will
+        # not notice that it moved.
+        if scope.name == "high-risk" and paths and not reviews_for(paths):
+            if stop_budget_consume is not None:
+                stop_budget_consume(BUDGET_NAME, cwd)
+            print(json.dumps({"decision": "block", "reason": (
+                f"Tests are green, and this change is high-risk: {scope.reason} "
+                f"No independent review is recorded for these {len(paths)} path(s). "
+                f"More of our own tests is not a deeper check — run one independent pass "
+                f"(/deep-review, or a fresh-context verifier returning PROCEED / HOLD / "
+                f"REJECT per rules/no-guessing.md), then record what actually ran:\n"
+                f'  python "{Path(__file__).as_posix()}" --record "<what ran, and its verdict>"\n'
+                f"Evidence is keyed to this exact set of paths, so it will not carry over "
+                f"to a different change. Deliberate override: CLAUDE_SKIP_TEST_GATE=1."
+            )}))
+            return 0
         return 0
 
     if stop_budget_consume is not None:
@@ -422,5 +487,24 @@ def main() -> int:
     return 0
 
 
+def _record_cli(argv: list[str]) -> int:
+    """`--record "<note>"` — satisfy the high-risk review requirement for this change."""
+    note = argv[argv.index("--record") + 1] if len(argv) > argv.index("--record") + 1 else ""
+    if not note.strip():
+        print("--record needs a note saying what actually ran and what it concluded",
+              file=sys.stderr)
+        return 2
+    paths = changed_paths(Path.cwd())
+    if not paths:
+        print("nothing changed here; there is no surface to record a review against",
+              file=sys.stderr)
+        return 2
+    key = record_review(note.strip(), paths)
+    print(f"recorded for surface {key} ({len(paths)} path(s)): {note.strip()}")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--record" in sys.argv:
+        sys.exit(_record_cli(sys.argv))
     sys.exit(main())
