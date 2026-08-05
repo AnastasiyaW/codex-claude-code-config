@@ -39,6 +39,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from safety_common import read_event  # noqa: E402
+
 MARKER = Path(".claude") / "live-tree"
 
 # Type 1 state in principle 18's sense: one file per session, appended, never contended.
@@ -126,9 +129,13 @@ def assess(file_path: str) -> str | None:
 def main() -> int:
     if os.environ.get("CLAUDE_ALLOW_LIVE_TREE_EDIT") == "1":
         return 0
-    try:
-        event = json.loads(sys.stdin.read() or "{}")
-    except ValueError:
+    # Use the shared reader rather than json.loads(stdin): it strips a UTF-8 BOM, and
+    # rolling my own here meant a BOM-prefixed event raised inside json.loads, hit the
+    # outer except, and returned 0 — the guard silently passing everything through.
+    # Found by an independent review on 2026-08-04, in the guard I had just written to
+    # stop exactly this class of silent pass.
+    event = read_event()
+    if not event:
         return 0  # fail open: a guard bug must not be the reason work stops
     if event.get("tool_name") not in EDITING:
         return 0
@@ -194,6 +201,18 @@ def self_test() -> int:
         outside = Path(td) / "loose.txt"
         outside.write_text("x", encoding="utf-8")
         check("a file outside any repo is silent", assess(str(outside)) is None, True)
+
+        # The event arrives over a pipe, and a BOM in front of it used to make
+        # json.loads raise into the outer handler — the guard passing everything
+        # silently. Prove the block survives the byte sequence that defeated it.
+        event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                            "tool_input": {"file_path": str(tracked)}})
+        for label, payload in (("plain", event.encode("utf-8")),
+                               ("BOM-prefixed", b"\xef\xbb\xbf" + event.encode("utf-8"))):
+            done = subprocess.run([sys.executable, str(Path(__file__).resolve())],
+                                  input=payload, capture_output=True, timeout=60)
+            check(f"a {label} event still blocks",
+                  b'"decision": "block"' in (done.stdout or b""), True)
 
     print("\nSELF-TEST:", "PASS" if not failures else "FAIL")
     for f in failures:

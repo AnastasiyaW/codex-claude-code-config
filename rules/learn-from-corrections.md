@@ -49,7 +49,8 @@ Keyword-эвристика **отвергнута**: пропускала ~60% �
 «в следующий раз лучше через python», «this would've been cleaner as one commit»), а praise-suppress
 **убивал** самый частый паттерн — «отлично, но всегда пинуй версии». Keyword-префильтр **структурно
 несовместим** с ловлей soft-поправок (отсеет их до LLM). Поэтому детекция = **сам LLM**, по рубрике,
-в шаге distill. Доказательная база: `knowledge/agent-systems/self-learning-agents/effectiveness-test/`.
+в шаге distill. Held-out evaluation evidence is retained in the private research archive;
+it is what rejected the keyword prefilter, and this repo does not ship that corpus.
 
 ## Рубрика (что есть durable-поправка)
 
