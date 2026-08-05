@@ -19,6 +19,7 @@ Bypass:
 """
 from __future__ import annotations
 
+import datetime as _dt
 import re
 import sys
 from pathlib import Path
@@ -163,6 +164,98 @@ def validate_closure_audit(content: str) -> list[str]:
     return errors
 
 
+# Heading line and identifier are matched separately: folded into one pattern, the
+# optional id group let the lazy prefix swallow the line and every entry came back
+# without an id, so the check silently found nothing. Caught by testing it, not by
+# reading it.
+PROBLEM_HEADING_RE = re.compile(r"^##\s+(?P<date>\d{4}-\d{2}-\d{2})[^\n]*$", re.M)
+TICKET_ID_RE = re.compile(r"\b[A-Z][A-Z0-9]{2,}(?:-[A-Z0-9]+)+\b")
+STATUS_RE = re.compile(r"^\*\*Status\*\*:\s*(?P<value>.+)$", re.M)
+CLOSED_WORDS = re.compile(r"\b(RESOLVED|CLOSED|FIXED|DONE|NOT[_ ]A[_ ]BUG|WONTFIX|ОТОЗВАНО)\b", re.I)
+
+
+def find_problems_file(handoff_path: Path) -> Path | None:
+    """The PROBLEMS.md that governs this handoff, walking up from the handoff."""
+    for parent in list(handoff_path.parents)[:6]:
+        candidate = parent / "PROBLEMS.md"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def tickets_opened_today(problems_text: str, today: str) -> list[tuple[str, str, str]]:
+    """(id, status, title) for entries opened today that are still open.
+
+    Today's entries only, and this is the whole point. The historical backlog is not
+    this session's to close, and blocking on it would wedge every handoff — that is
+    the guard-gets-switched-off failure. What this catches is narrower and is exactly
+    the behaviour the rule forbids: a problem found in this session, written down, and
+    left for later while the session ends.
+
+    Measured on this hub 2026-08-05: 51 open entries, of which 27 carry `arch-decision`
+    — one of the five legitimate deferral reasons absorbed 53% of everything deferred.
+    The phrase guard closed the wording, the taxonomy replaced it with a label, and the
+    label became the new wording. This checks the fact, not the label.
+    """
+    out: list[tuple[str, str, str]] = []
+    heads = list(PROBLEM_HEADING_RE.finditer(problems_text))
+    for i, match in enumerate(heads):
+        if match.group("date") != today:
+            continue
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(problems_text)
+        body = problems_text[match.start():end]
+        status_match = STATUS_RE.search(body)
+        status = status_match.group("value").strip() if status_match else "NO STATUS"
+        if CLOSED_WORDS.search(status):
+            continue
+        heading = match.group(0).lstrip("# ").strip()
+        found = TICKET_ID_RE.search(heading)
+        if not found:
+            continue  # no stable identifier to match on; not blocked on fuzzy text
+        out.append((found.group(0), status.split()[0][:40], heading[:90]))
+    return out
+
+
+def project_tokens(handoff_path: Path) -> set[str]:
+    """Words from the handoff's project slug, used to attribute a ticket to it.
+
+    Same-day alone is the wrong test on a hub where a dozen sessions run at once: it
+    held every handoff responsible for tickets other projects opened that day. Measured
+    over the full handoff history, day-only would have blocked 98 of 102; adding the
+    project brings it to 7 — and those 7 include MASHINKI-CANCEL-01/02 walking past
+    four consecutive handoffs from two sessions, which is the behaviour this is for.
+    """
+    return {word for word in re.split(r"[-_]", handoff_path.parent.name.lower())
+            if len(word) > 3}
+
+
+def validate_todays_open_tickets(content: str, handoff_path: Path) -> list[str]:
+    problems = find_problems_file(handoff_path)
+    if problems is None:
+        return []
+    try:
+        text = problems.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    tokens = project_tokens(handoff_path)
+    if not tokens:
+        return []
+    today = _dt.date.today().isoformat()
+    mine = [t for t in tickets_opened_today(text, today)
+            if any(word in t[0].lower() for word in tokens)]
+    unmentioned = [t for t in mine if t[0] not in content]
+    if not unmentioned:
+        return []
+    listing = "\n".join(f"    {ident}  [{status}]  {title}" for ident, status, title in unmentioned)
+    return [
+        "these were opened in PROBLEMS.md today and are still open, and this handoff "
+        "does not mention them:\n" + listing + "\n"
+        "    Finish them now — that is the rule, and a session's own findings are not a "
+        "backlog. If one genuinely cannot be finished, name its id in the Closure Audit "
+        "under Unfinished related tasks with the external blocker, not a label."
+    ]
+
+
 def main() -> None:
     event = read_event()
     tool_name = str(event.get("tool_name", ""))
@@ -199,6 +292,7 @@ def main() -> None:
         allow()
 
     errors = validate_closure_audit(content)
+    errors += validate_todays_open_tickets(content, target)
     if not errors:
         allow()
 
