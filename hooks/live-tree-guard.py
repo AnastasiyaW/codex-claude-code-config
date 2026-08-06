@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from safety_common import read_event  # noqa: E402
+from safety_common import log, read_event  # noqa: E402
 
 MARKER = Path(".claude") / "live-tree"
 
@@ -145,6 +145,7 @@ def main() -> int:
         return 0
     reason = assess(str(path))
     if reason:
+        log("BLOCK", "live_tree", "deny", "tracked_file_in_primary_tree", str(path))
         print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 

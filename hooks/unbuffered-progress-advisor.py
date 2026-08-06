@@ -26,6 +26,10 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from safety_common import log  # noqa: E402
 
 # Only the FIRST command matters, after an optional `cd ...&&` and env assignments. An
 # earlier version searched the whole string for `python`, and measured against 14 days of
@@ -75,6 +79,7 @@ def main() -> int:
         return 0
     background = bool(tool_input.get("run_in_background"))
     if needs_advice(command, background):
+        log("INFO", "unbuffered_progress", "advise", "background_no_-u", command[:200])
         print("[progress] This Python run sends its output to a pipe, a file or the "
               "background, so stdout is block-buffered and nothing appears until it "
               "ends or the buffer fills. A stall will read as slowness -- that has "

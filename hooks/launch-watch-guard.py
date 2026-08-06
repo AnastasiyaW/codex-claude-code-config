@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from safety_common import read_event  # noqa: E402
+from safety_common import log, read_event  # noqa: E402
 
 WINDOW_H = float(os.environ.get("CLAUDE_LAUNCH_WINDOW_H", "6"))
 STATE = Path(os.environ.get("CLAUDE_LAUNCH_STATE",
@@ -135,6 +135,11 @@ def record(event: dict) -> int:
     if background or is_launch(command):
         _append({"ts": now, "kind": "launch", "cmd": command.replace("\n", " ")[:160],
                  "tokens": tokens_of(command), "remote": bool(REMOTE.search(command))})
+        # Logged, not just recorded in the watch file: without an audit line there is no
+        # way to answer "has this hook ever fired in production", which is the question
+        # every one of these guards exists to make answerable about something else.
+        log("INFO", "launch_watch", "armed",
+            "background" if background else "launch-verb", command[:200])
         return 0
     if PROBE.search(command):
         _append({"ts": now, "kind": "probe", "generic": True, "tokens": tokens_of(command)})
@@ -150,6 +155,8 @@ def decide() -> int:
     if not pending:
         return 0
     lines = [f"  - {row['cmd']}" for row in pending[:5]]
+    log("BLOCK", "launch_watch", "deny", f"{len(pending)}_unprobed",
+        "; ".join(row["cmd"][:60] for row in pending[:3]))
     remote = any(row.get("remote") for row in pending)
     extra = ""
     if remote:

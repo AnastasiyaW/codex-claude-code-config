@@ -31,6 +31,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from safety_common import log  # noqa: E402
+
 MAX_LISTED = 12
 STALE_DAYS = 14
 
@@ -136,7 +139,9 @@ def main() -> int:
         text = problems.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return 0
-    print(render(open_entries(text, _dt.date.today())))
+    entries = open_entries(text, _dt.date.today())
+    log("INFO", "open_items", "inject", f"{len(entries)}_open", prompt[:200])
+    print(render(entries))
     return 0
 
 
