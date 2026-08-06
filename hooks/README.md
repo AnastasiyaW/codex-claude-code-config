@@ -89,5 +89,12 @@ the registry metadata; it does not prove that a maintainer account was never
 compromised, so lockfile review and vulnerability scanning remain separate
 controls.
 
+Registry unavailability is fail-closed for new dependency edits and installs. A
+24-hour verified provenance cache or an already reviewed lockfile with artifact
+integrity may keep a known-good repeat install moving; otherwise use
+`scripts/dependency-alternatives.py`, which searches official PyPI/npm metadata
+and returns only age- and digest-verified candidates. It never installs or edits
+the manifest automatically.
+
 See the current [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
 for supported events, handler types, and result schemas.

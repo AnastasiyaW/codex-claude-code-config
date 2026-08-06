@@ -33,9 +33,10 @@ So this asks the registry, at the one moment the answer matters:
   * anything else behind           -> report the current version, do not block.
                                      Old is often deliberate; unknown never is.
 
-Fail-open by design: no network, a slow registry or an unparsable manifest must
-never wedge an edit. A guard that blocks when the internet hiccups gets disabled,
-and a disabled guard protects nothing.
+Registry silence is not proof. A manifest edit that introduces or changes a
+dependency is blocked when the canonical registry is unavailable; use the
+verified-alternative search tool or restore registry access. A verifier error
+also blocks so a broken guard cannot silently become an unchecked path.
 
 Bypass: `# claude-bypass: deps` in the content, or CLAUDE_SKIP_DEP_CHECK=1.
 
@@ -260,7 +261,11 @@ def review(content: str, ecosystem: str, cache: dict) -> tuple[list[str], list[s
     for index, (name, version, operator) in enumerate(specs):
         info = registry_info(name, ecosystem, cache)
         if info is None:
-            continue                      # registry silent -> say nothing, never block
+            blocking.append(
+                f"{name}: {ecosystem} registry did not answer, so this dependency is not verified. "
+                "Restore registry access or search a verified alternative before editing the manifest."
+            )
+            continue
         if not info["exists"]:
             blocking.append(f"{name}: not found in {ecosystem}. A package that does not "
                             f"exist is either a misremembered name or a typosquat target.")
@@ -347,8 +352,15 @@ def main() -> int:
     cache = load_cache()
     try:
         blocking, notes = review(content, ecosystem, cache)
-    except Exception:
-        return 0                          # a bug here must not cost an edit
+    except Exception as exc:
+        print(json.dumps({
+            "decision": "block",
+            "reason": (
+                "DEPENDENCY CHECK — verifier failed; manifest edit blocked until "
+                f"the verifier is repaired ({type(exc).__name__})."
+            ),
+        }, ensure_ascii=False))
+        return 0
     save_cache(cache)
 
     if blocking:
@@ -375,8 +387,8 @@ def _self_test() -> int:
         fails.append(f"a real, long-published package was blocked: {real[0]}")
 
     fake = review("thispackagedoesnotexist-qwerty-12345==1.0.0\n", "pypi", cache)
-    if not any("not found" in b for b in fake[0]):
-        fails.append("a nonexistent package was not blocked (registry unreachable?)")
+    if not any("not found" in b or "not verified" in b for b in fake[0]):
+        fails.append("a nonexistent package was not blocked")
 
     behind = review("flask==0.12.2\n", "pypi", cache)
     if not behind[1] and not behind[0]:

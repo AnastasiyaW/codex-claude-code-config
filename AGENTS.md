@@ -91,6 +91,7 @@ python scripts/generate_skills_catalog.py --check
 python evals/hooks/run_hook_evals.py
 python scripts/test_lifecycle_hook_contracts.py
 python scripts/test_dependency_provenance_guard.py
+python scripts/dependency-alternatives.py --self-test
 ```
 
 After installing into a local Codex/Claude environment, also run

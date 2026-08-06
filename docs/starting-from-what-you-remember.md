@@ -70,15 +70,20 @@ for: a package that does not exist returns 404. The distinction between *absent*
 has to be explicit in the code, because it is invisible in the control flow. It was caught by
 the guard's own self-test, which is the argument for writing one.
 
-**Fail open.** A guard that blocks work when the registry is down gets removed within a week,
-and then it protects nothing. Registry unreachable → allow, and say so.
+**Registry outage is not verification.** A registry that is unreachable cannot confirm a
+new name, version, or digest. Manifest edits and new installs therefore block. The install
+guard may continue only when it has a recent (24-hour) previously verified canonical record,
+or when an already reviewed lockfile supplies integrity evidence. Otherwise it points the
+agent to the verified-alternative search tool instead of silently allowing an unchecked
+package.
 
 **Cache.** A guard that adds seconds to every edit also gets removed. Six hours of caching
 makes the cost invisible without making the answer stale in any way that matters — packages do
 not become fraudulent on an hourly cycle.
 
-Both of those are the same argument: the failure mode of a security control is usually not
-being wrong. It is being annoying enough to disable.
+The cache keeps a short outage from stopping a known-good repeat install without turning
+network silence into trust. A cache is not a defense against a compromised host; it is only
+bounded continuity evidence.
 
 ## What this does not do
 
@@ -131,4 +136,19 @@ or ABI/CUDA requirement proves that the latest version does not work here.
 
 The guard does not claim that a real package is benevolent. Registry existence plus a digest is
 artifact identity, not maintainer trust; vulnerability, provenance, and upstream review remain
-separate controls. Network silence is reported as unknown rather than mislabelled as verified.
+separate controls. Network silence blocks unless bounded cached or lockfile evidence applies.
+
+## Finding a verified alternative
+
+When a requested package name is misspelled, absent, or cannot be verified, use the standard-
+library helper rather than guessing another library:
+
+```text
+python scripts/dependency-alternatives.py --ecosystem pypi --name reqeusts
+python scripts/dependency-alternatives.py --ecosystem npm --name image-reszie
+```
+
+It searches official PyPI/npm metadata, rechecks each candidate's exact package record, and
+returns only stable releases older than seven days with an artifact digest (npm candidates
+also need a download floor). It never edits a manifest or installs a candidate. Compatibility
+tests, security review, and the normal hooks remain mandatory.

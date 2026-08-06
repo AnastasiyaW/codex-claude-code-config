@@ -46,20 +46,44 @@ The age settings above are necessary but not sufficient. The shared harness wire
 separate `PreToolUse` guards:
 
 1. `hooks/dependency-currency-guard.py` runs when a dependency manifest is written. It
-   distinguishes a definitive registry 404 from an unavailable registry and blocks
-   names with the slopsquat profile, releases younger than seven days, and selected
-   stale fast-moving pins.
+   distinguishes a definitive registry 404 from an unavailable registry. It blocks
+   names with the slopsquat profile, releases younger than seven days, selected stale
+   fast-moving pins, and any dependency edit that cannot be verified because the
+   canonical registry did not answer.
 2. `hooks/dependency-provenance-guard.py` runs before an install or download command. It
    rejects direct `.whl`/archive/Git sources, `--extra-index-url`/`--find-links`, and
    non-canonical registries. Explicit package versions must exist in the canonical
    registry and have an artifact digest. `pip` requires `--require-hashes`, `uv sync`
    requires `--locked`, and npm installs require `--ignore-scripts` plus either
-   `npm ci` or an exact package version.
+   `npm ci` or an exact package version. `uv.lock` and npm lockfiles must contain
+   artifact-integrity evidence for lock-only installs.
+
+Registry silence is a block, not a warning. The install guard first asks the live
+canonical registry. During a temporary outage it may use only a previously verified
+record from `~/.claude/state/dependency-provenance-cache.json`, and only for 24 hours;
+otherwise the install is stopped. This cache is convenience evidence, not protection
+against a compromised workstation. A package-lock/uv.lock hash is an independent
+offline proof for an already reviewed lock, not permission to invent a new package.
+
+When a requested name is probably mistyped or unavailable, search for candidates with:
+
+```text
+python scripts/dependency-alternatives.py --ecosystem pypi --name reqeusts
+python scripts/dependency-alternatives.py --ecosystem npm --name image-reszie
+```
+
+The command searches only the official PyPI/npm surfaces, re-fetches each candidate's
+canonical metadata, and returns a candidate only when its stable release is at least
+seven days old and has an artifact digest (npm also needs a meaningful download floor).
+The candidate still requires project compatibility tests and normal manifest/install
+guards; a search result is not an automatic substitution.
 
 This is an artifact-integrity boundary, not a claim that a legitimate package name can
 never be compromised. The digest binds the downloaded wheel/tarball to the registry
 metadata; the lockfile binds future installs; `pip-audit`, `npm audit`, `cargo audit`,
-and upstream/provenance review cover the remaining questions.
+and upstream/provenance review cover the remaining questions. For npm projects, run
+`npm audit signatures` where registry signatures are available; npm documents this as
+an explicit verification of registry signatures and attestations.
 
 ## Version Selection Policy
 
@@ -168,6 +192,10 @@ Sources: Elastic Security Labs, Snyk, Wiz, Google Cloud Blog (GTIG attribution),
 ## See Also
 
 - [npm min-release-age docs](https://docs.npmjs.com/cli/using-npm/config#min-release-age)
+- [PyPA Simple Repository API](https://packaging.python.org/en/latest/specifications/simple-repository-api/) - canonical package files and hashes
+- [npm registry docs](https://docs.npmjs.com/misc/registry/) - official registry metadata surface
+- [npm registry signature verification](https://docs.npmjs.com/verifying-registry-signatures/) - `npm audit signatures`
+- [npm package search guidance](https://docs.npmjs.com/searching-for-and-choosing-packages-to-download/) - search and selection considerations
 - [uv configuration reference](https://docs.astral.sh/uv/reference/settings/)
 - [Elastic Security Labs - axios supply chain analysis](https://www.elastic.co/security-labs/axios-one-rat-to-rule-them-all)
 - [StepSecurity Safe Chain](https://www.stepsecurity.io/) - enforces package age + SLSA provenance
