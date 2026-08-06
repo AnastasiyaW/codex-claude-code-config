@@ -11,6 +11,10 @@ So this asks the registry, at the one moment the answer matters:
 
   * package does not exist         -> BLOCK. The hallucinated-dependency failure,
                                      and how typosquats land.
+  * exact requested version absent -> BLOCK. A real package name does not make a
+                                     recalled or invented release real.
+  * near-duplicate name in one manifest -> BLOCK. A likely spelling collision
+                                     must be confirmed from the upstream project.
   * name registered recently       -> BLOCK. Existence is not authenticity. In a
                                      slopsquat the package DOES exist -- someone
                                      registered the hallucination on purpose. A
@@ -41,6 +45,7 @@ Self-test: python dependency-currency-guard.py --self-test
 from __future__ import annotations
 
 import json
+import difflib
 import os
 import re
 import sys
@@ -51,8 +56,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 MIN_RELEASE_AGE_DAYS = 7
-BEHIND_MAJOR_WARN = 2          # report when the pin trails by this many majors
-
 # Slopsquatting window. A model cannot legitimately know a package first published
 # after its training data was collected, so "the agent is confident about a package
 # that appeared weeks ago" is the exact profile of a registered hallucination.
@@ -87,7 +90,7 @@ MANIFESTS = {
 
 # name==1.2.3 / name>=1.2 / "name": "^1.2.3" / name = "1.2.3"
 PY_SPEC = re.compile(r"^\s*([A-Za-z][\w.\-]{1,60})\s*(?:\[[^\]]+\])?\s*(==|>=|~=)\s*([\w.\-]+)", re.M)
-NPM_SPEC = re.compile(r'"([@\w][\w.\-/]{1,60})"\s*:\s*"[\^~]?([\w.\-]+)"')
+NPM_SPEC = re.compile(r'"([@\w][\w.\-/]{1,60})"\s*:\s*"([\^~]?)([\w.\-]+)"')
 
 
 def load_cache() -> dict:
@@ -130,14 +133,19 @@ def registry_info(name: str, ecosystem: str, cache: dict) -> dict | None:
     """{'exists', 'latest', 'released'} or None when the registry could not answer."""
     key = f"{ecosystem}:{name.lower()}"
     if key in cache:
-        return cache[key]["info"]
+        cached = cache[key].get("info") or {}
+        if "versions" in cached and "release_by_version" in cached:
+            return cached
+        # Refresh old entries created before exact-version enforcement.
+        cache.pop(key, None)
 
     if ecosystem == "pypi":
         data = fetch(f"https://pypi.org/pypi/{name}/json")
         if data is None:
             return None
         if data is ABSENT:
-            info = {"exists": False, "latest": None, "released": None}
+            info = {"exists": False, "latest": None, "released": None,
+                    "versions": [], "release_by_version": {}}
             cache[key] = {"at": time.time(), "info": info}
             return info
         latest = (data.get("info") or {}).get("version")
@@ -154,14 +162,26 @@ def registry_info(name: str, ecosystem: str, cache: dict) -> dict | None:
                 ts = f.get("upload_time_iso_8601")
                 if ts and (created is None or ts < created):
                     created = ts
+        release_by_version = {}
+        for version, files in (data.get("releases") or {}).items():
+            timestamps = [
+                item.get("upload_time_iso_8601")
+                for item in files
+                if item.get("upload_time_iso_8601")
+            ]
+            if timestamps:
+                release_by_version[version] = min(timestamps)
         info = {"exists": bool(latest), "latest": latest, "released": released,
-                "created": created, "downloads": None}
+                "created": created, "downloads": None,
+                "versions": sorted((data.get("releases") or {}).keys()),
+                "release_by_version": release_by_version}
     else:
         data = fetch(f"https://registry.npmjs.org/{name.replace('/', '%2F')}")
         if data is None:
             return None
         if data is ABSENT:
-            info = {"exists": False, "latest": None, "released": None}
+            info = {"exists": False, "latest": None, "released": None,
+                    "versions": [], "release_by_version": {}}
             cache[key] = {"at": time.time(), "info": info}
             return info
         latest = (data.get("dist-tags") or {}).get("latest")
@@ -172,7 +192,12 @@ def registry_info(name: str, ecosystem: str, cache: dict) -> dict | None:
         if isinstance(stats, dict):
             downloads = stats.get("downloads")
         info = {"exists": bool(latest), "latest": latest, "released": released,
-                "created": times.get("created"), "downloads": downloads}
+                "created": times.get("created"), "downloads": downloads,
+                "versions": sorted((data.get("versions") or {}).keys()),
+                "release_by_version": {
+                    version: stamp for version, stamp in times.items()
+                    if version not in {"created", "modified"}
+                }}
 
     cache[key] = {"at": time.time(), "info": info}
     return info
@@ -211,23 +236,28 @@ def minors_behind(pinned: str, latest: str) -> int | None:
     return (lm - pm) * 10 + (minor(latest) - minor(pinned))
 
 
-def extract(content: str, ecosystem: str) -> list[tuple[str, str]]:
+def extract(content: str, ecosystem: str) -> list[tuple[str, str, str]]:
     pattern = PY_SPEC if ecosystem == "pypi" else NPM_SPEC
     out, seen = [], set()
     for m in pattern.finditer(content):
         name = m.group(1)
-        version = m.group(3) if ecosystem == "pypi" else m.group(2)
+        if ecosystem == "pypi":
+            operator, version = m.group(2), m.group(3)
+        else:
+            operator, version = m.group(2), m.group(3)
         if name.lower() in seen:
             continue
         seen.add(name.lower())
-        out.append((name, version))
+        out.append((name, version, operator))
     return out[:40]
 
 
 def review(content: str, ecosystem: str, cache: dict) -> tuple[list[str], list[str]]:
     blocking: list[str] = []
     notes: list[str] = []
-    for name, version in extract(content, ecosystem):
+    specs = extract(content, ecosystem)
+    normalized_names = [re.sub(r"[-_.]+", "-", name.lower()) for name, _, _ in specs]
+    for index, (name, version, operator) in enumerate(specs):
         info = registry_info(name, ecosystem, cache)
         if info is None:
             continue                      # registry silent -> say nothing, never block
@@ -235,7 +265,23 @@ def review(content: str, ecosystem: str, cache: dict) -> tuple[list[str], list[s
             blocking.append(f"{name}: not found in {ecosystem}. A package that does not "
                             f"exist is either a misremembered name or a typosquat target.")
             continue
-        released = age_days(info.get("released"))
+        exact = operator == "==" if ecosystem == "pypi" else operator == ""
+        known_versions = info.get("versions")
+        if exact and known_versions is not None and version not in set(known_versions):
+            blocking.append(f"{name} {version}: exact version is absent from {ecosystem}. "
+                            "The package name exists, but this requested release does not.")
+            continue
+        if any(
+            other != index and normalized_names[index] != normalized_names[other]
+            and difflib.SequenceMatcher(None, normalized_names[index], normalized_names[other]).ratio() >= 0.88
+            for other in range(len(normalized_names))
+        ):
+            blocking.append(f"{name}: name is suspiciously close to another dependency in the same manifest. "
+                            "Confirm the spelling from the upstream project before installing.")
+        released = age_days(
+            (info.get("release_by_version") or {}).get(version)
+            if exact else info.get("released")
+        )
         if released is not None and released < MIN_RELEASE_AGE_DAYS:
             blocking.append(f"{name} {info['latest']}: published {released:.1f} days ago, "
                             f"under our {MIN_RELEASE_AGE_DAYS}-day supply-chain buffer.")
@@ -266,10 +312,12 @@ def review(content: str, ecosystem: str, cache: dict) -> tuple[list[str], list[s
                     f"{name}: pinned {version}, current {info['latest']} ({behind} minor "
                     f"releases behind). This one moves fast enough that a recalled version "
                     f"is almost certainly wrong -- pick deliberately or bypass.")
-        elif (pinned_major is not None and latest_major is not None
-                and latest_major - pinned_major >= BEHIND_MAJOR_WARN):
-            notes.append(f"{name}: pinned {version}, current {info['latest']} "
-                         f"({latest_major - pinned_major} majors behind) -- deliberate?")
+        elif info.get("latest") and version != info["latest"]:
+            gap = (f" ({latest_major - pinned_major} majors behind)"
+                   if pinned_major is not None and latest_major is not None
+                   and latest_major > pinned_major else "")
+            notes.append(f"{name}: pinned {version}, latest stable {info['latest']}{gap}. "
+                         "Prefer latest; keep this pin only with compatibility evidence.")
     return blocking, notes
 
 
@@ -351,15 +399,40 @@ def _self_test() -> int:
     seeded["pypi:freshly-registered-lure"] = {"at": time.time(), "info": {
         "exists": True, "latest": "1.0.0",
         "released": (now - timedelta(days=30)).isoformat(),
-        "created": (now - timedelta(days=30)).isoformat(), "downloads": None}}
+        "created": (now - timedelta(days=30)).isoformat(), "downloads": None,
+        "versions": ["1.0.0"],
+        "release_by_version": {"1.0.0": (now - timedelta(days=30)).isoformat()}}}
     young = review("freshly-registered-lure==1.0.0\n", "pypi", seeded)
     if not any("only existed for" in b for b in young[0]):
         fails.append("a name registered 30 days ago did not trip the slopsquat rule")
 
+    seeded["pypi:known-lib"] = {"at": time.time(), "info": {
+        "exists": True, "latest": "1.0.0", "released": "2020-01-01T00:00:00Z",
+        "created": "2020-01-01T00:00:00Z", "downloads": 1000,
+        "versions": ["1.0.0"],
+        "release_by_version": {"1.0.0": "2020-01-01T00:00:00Z"}}}
+    missing_version = review("known-lib==9.9.9\n", "pypi", seeded)
+    if not any("exact version is absent" in b for b in missing_version[0]):
+        fails.append("an absent exact version was not blocked")
+
+    for name in ("alpha-utils", "alpha-util"):
+        seeded[f"pypi:{name}"] = {"at": time.time(), "info": {
+            "exists": True, "latest": "1.0.0", "released": "2020-01-01T00:00:00Z",
+            "created": "2020-01-01T00:00:00Z", "downloads": 1000,
+            "versions": ["1.0.0"],
+            "release_by_version": {"1.0.0": "2020-01-01T00:00:00Z"}}}
+    near_duplicate = review(
+        "alpha-utils==1.0.0\nalpha-util==1.0.0\n", "pypi", seeded
+    )
+    if not any("suspiciously close" in b for b in near_duplicate[0]):
+        fails.append("near-duplicate dependency names were not flagged")
+
     seeded["npm:barely-used-pkg"] = {"at": time.time(), "info": {
         "exists": True, "latest": "2.0.0",
         "released": (now - timedelta(days=400)).isoformat(),
-        "created": (now - timedelta(days=800)).isoformat(), "downloads": 12}}
+        "created": (now - timedelta(days=800)).isoformat(), "downloads": 12,
+        "versions": ["2.0.0"],
+        "release_by_version": {"2.0.0": (now - timedelta(days=400)).isoformat()}}}
     thin = review('{"dependencies": {"barely-used-pkg": "2.0.0"}}', "npm", seeded)
     if not any("adoption floor" in b for b in thin[0]):
         fails.append("a package with 12 weekly downloads did not trip the adoption floor")

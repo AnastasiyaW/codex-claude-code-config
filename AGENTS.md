@@ -90,6 +90,7 @@ python scripts/generate_skills_lock.py --check
 python scripts/generate_skills_catalog.py --check
 python evals/hooks/run_hook_evals.py
 python scripts/test_lifecycle_hook_contracts.py
+python scripts/test_dependency_provenance_guard.py
 ```
 
 After installing into a local Codex/Claude environment, also run

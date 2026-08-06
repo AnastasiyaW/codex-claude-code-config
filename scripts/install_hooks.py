@@ -16,6 +16,8 @@ Safety-critical hooks installed by default (--safe-defaults):
   - command-injection-guard      PreToolUse    blocks `cmd $(evil)` shell substitution
   - directory-creation-guard     PreToolUse    keeps new folders in project hierarchy
   - self-harm-guard              PreToolUse    stops agent from killing its own process
+  - dependency-currency-guard    PreToolUse    checks package names and release age
+  - dependency-provenance-guard  PreToolUse    protects registry and artifact provenance
 
 Opt-in extras (use --extras):
   - api-key-leak-detector        PostToolUse   scans tool output for leaked keys
@@ -84,6 +86,8 @@ SAFE_DEFAULTS: list[tuple[str, str, str | None]] = [
     ("git-auto-backup.py",           "PreToolUse", "Bash"),
     ("command-injection-guard.py",   "PreToolUse", "Bash"),
     ("directory-creation-guard.py",  "PreToolUse", "Bash"),
+    ("dependency-currency-guard.py", "PreToolUse", "Write|Edit|MultiEdit"),
+    ("dependency-provenance-guard.py", "PreToolUse", "Bash|PowerShell"),
     ("directory-creation-guard.py",  "PreToolUse", "PowerShell"),
     ("self-harm-guard.py",           "PreToolUse", "Bash"),
     ("session-drift-validator.py",   "SessionStart", None),

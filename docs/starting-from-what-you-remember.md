@@ -110,3 +110,25 @@ pressure, which is the whole reason mechanical gates exist. The countermeasure i
 lookup happen at the moment the value is written, and to make the answer *block* rather than
 advise, in the narrow set of cases where being wrong is not recoverable by the next person who
 reads the diff.
+
+## The second boundary: the file is not the download
+
+The manifest check is still too early to protect a wheel by itself. A later shell command can
+fetch a direct `.whl`, switch to an extra index, or install without binding the bytes to a lock
+or hash file. The paired `dependency-provenance-guard.py` therefore runs on install commands and
+enforces the package-manager proof that the command can actually provide:
+
+- PyPI installs use `--require-hashes`, so the selected wheel is checked against a reviewed hash.
+- `uv sync --locked` uses the committed lock rather than silently resolving a new graph.
+- npm uses `npm ci --ignore-scripts` for a lockfile install, or an exact package version with
+  `--ignore-scripts` when adding one dependency.
+- Direct wheels, archives, Git URLs, extra indexes, and non-canonical registries are blocked.
+
+When the requested exact version is older than the registry's latest stable release, the
+guard reports the newer version. The default action is to test the latest version; an older
+pin is retained or restored only when a compatibility test, supported-runtime constraint,
+or ABI/CUDA requirement proves that the latest version does not work here.
+
+The guard does not claim that a real package is benevolent. Registry existence plus a digest is
+artifact identity, not maintainer trust; vulnerability, provenance, and upstream review remain
+separate controls. Network silence is reported as unknown rather than mislabelled as verified.

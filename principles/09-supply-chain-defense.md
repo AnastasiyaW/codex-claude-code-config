@@ -40,6 +40,40 @@ No native `min-release-age` flag yet. Use `cargo-audit` + `cargo-deny` for known
 
 Go's module proxy (proxy.golang.org) caches modules immutably - once fetched, the content can't change. This provides integrity but not freshness gating. Use `go mod verify` and review `go.sum` diffs.
 
+## What Is Enforced At Runtime
+
+The age settings above are necessary but not sufficient. The shared harness wires two
+separate `PreToolUse` guards:
+
+1. `hooks/dependency-currency-guard.py` runs when a dependency manifest is written. It
+   distinguishes a definitive registry 404 from an unavailable registry and blocks
+   names with the slopsquat profile, releases younger than seven days, and selected
+   stale fast-moving pins.
+2. `hooks/dependency-provenance-guard.py` runs before an install or download command. It
+   rejects direct `.whl`/archive/Git sources, `--extra-index-url`/`--find-links`, and
+   non-canonical registries. Explicit package versions must exist in the canonical
+   registry and have an artifact digest. `pip` requires `--require-hashes`, `uv sync`
+   requires `--locked`, and npm installs require `--ignore-scripts` plus either
+   `npm ci` or an exact package version.
+
+This is an artifact-integrity boundary, not a claim that a legitimate package name can
+never be compromised. The digest binds the downloaded wheel/tarball to the registry
+metadata; the lockfile binds future installs; `pip-audit`, `npm audit`, `cargo audit`,
+and upstream/provenance review cover the remaining questions.
+
+## Version Selection Policy
+
+For a new dependency, choose the newest stable version that the canonical registry
+offers and test it against the actual project. A deliberately older pin is an exception,
+not a default: keep it only when compatibility evidence explains the constraint (for
+example, the supported Python/Node version, a CUDA/ABI boundary, or a failing project
+test). If an upgrade breaks the system, record the failing test and roll back to the
+last known-good pin; do not preserve an old version merely because it is familiar.
+
+The guards report a stale exact pin and the latest stable version. They do not perform
+an unverified automatic upgrade or rollback, because that would trade one supply-chain
+risk for an untested compatibility change.
+
 ---
 
 ## When to Apply
@@ -75,6 +109,11 @@ Package age gating is one layer. Combine with:
 3. **Audit tools** - `npm audit`, `cargo audit`, `pip-audit`. Run in CI.
 4. **Minimal dependencies** - Every dependency is attack surface. Fewer = safer.
 5. **Scope verification** - Check package scope/author before installing. Typosquatting is real.
+
+The automated checks deliberately do not infer that a project URL or publisher is safe
+from a string alone. If an install needs a private mirror, a direct artifact, or a Git
+revision, use the explicit `# claude-bypass: deps` marker only after recording and
+reviewing that source independently.
 
 ---
 

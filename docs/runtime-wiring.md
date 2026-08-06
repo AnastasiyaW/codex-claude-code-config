@@ -33,6 +33,7 @@ pass.
 | Concern | Codex desktop | Claude Code | Proof |
 |---|---|---|---|
 | Destructive-operation guards | `PreToolUse` | `PreToolUse` | hook eval cases |
+| Dependency supply-chain guards | `PreToolUse` on manifest edits and install commands | `PreToolUse` on manifest edits and install commands | `scripts/test_dependency_provenance_guard.py` + both guard self-tests |
 | Handoff completeness | `PreToolUse`, `Stop`, `PreCompact` | `PreToolUse`, `Stop`, `PreCompact` | `test_task_completion_hooks.py` |
 | Handoff to memory continuity | `SessionStart` | `SessionStart` | `test_review_handoff_memory_loop.py` |
 | Claude/Codex continuation contract | `PreToolUse`, `SessionStart` | `PreToolUse`, `SessionStart` | `scripts/test_continuity_contract.py` |

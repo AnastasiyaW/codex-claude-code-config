@@ -70,7 +70,7 @@ Two bounds matter, and both came from measuring rather than reasoning:
 - **Same-day alone is wrong.** On a hub with a dozen concurrent sessions it holds every
   handoff responsible for every ticket opened that day. Over the full handoff history it
   would have blocked **98 of 102**. A gate that stops everything gets switched off.
-- **With project attribution it blocks 7** — and those 7 include `MASHINKI-CANCEL-01/02`
+- **With project attribution it blocks 7** — and those 7 include `PROJECT-CANCEL-01/02`
   passing unmentioned through four consecutive handoffs from two different sessions. That
   is the exact behaviour the gate exists for, and it was invisible until counted.
 

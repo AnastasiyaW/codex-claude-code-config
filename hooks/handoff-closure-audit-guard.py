@@ -222,7 +222,7 @@ def project_tokens(handoff_path: Path) -> set[str]:
     Same-day alone is the wrong test on a hub where a dozen sessions run at once: it
     held every handoff responsible for tickets other projects opened that day. Measured
     over the full handoff history, day-only would have blocked 98 of 102; adding the
-    project brings it to 7 — and those 7 include MASHINKI-CANCEL-01/02 walking past
+    project brings it to 7 — and those 7 include PROJECT-CANCEL-01/02 walking past
     four consecutive handoffs from two sessions, which is the behaviour this is for.
     """
     return {word for word in re.split(r"[-_]", handoff_path.parent.name.lower())
