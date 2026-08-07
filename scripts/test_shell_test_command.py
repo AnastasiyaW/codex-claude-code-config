@@ -71,11 +71,24 @@ for cmd in (["npm", "test", "--silent"], ["pytest", "--tb=short", "-q"],
             ["go", "test", "./..."], ["cargo", "test", "--quiet"], []):
     check(f"untouched: {cmd or '[]'}", hook.portable_argv(list(cmd), here), cmd)
 
+# Measured, not assumed: on Windows a .cmd and a .bat run fine through subprocess,
+# so touching them would be a change with no defect behind it.
+for cmd in (["run-tests.cmd"], ["ci\\suite.bat"]):
+    check(f"untouched: {cmd}", hook.portable_argv(list(cmd), here), cmd)
+
 print("\n=== a shell command is made runnable, and only on Windows ===")
 routed = hook.portable_argv(["./init.sh", "--fast"], here)
 if os.name == "nt" and shutil.which("bash"):
     check("windows: bash is prepended", routed[0].lower().endswith("bash.exe"), True)
     check("windows: arguments survive", routed[1:], ["./init.sh", "--fast"])
+    # Windows filenames are case-insensitive, so INIT.SH is a real file that fails
+    # with the same WinError 193. Matching only the lowercase spelling would leave
+    # the hole open for the one nobody thinks to test.
+    upper = hook.portable_argv(["./INIT.SH", "--fast"], here)
+    check("windows: uppercase suffix is routed too",
+          upper[0].lower().endswith("bash.exe"), True)
+    check("windows: uppercase name is passed through verbatim",
+          upper[1:], ["./INIT.SH", "--fast"])
 elif os.name == "nt":
     # No bash: returning the command untouched keeps the failure honest rather than
     # swapping one unrunnable command for another.
