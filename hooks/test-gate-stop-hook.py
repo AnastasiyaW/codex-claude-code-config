@@ -274,11 +274,20 @@ def portable_argv(cmd: list[str], cwd: Path) -> list[str]:
     So route shell scripts through bash when the platform cannot exec them
     directly. If bash is missing we return the command untouched: an honest
     "cannot run" beats a rewritten command that fails for a second reason.
+
+    Scope, measured rather than assumed: `.sh` fails, and so does `.ps1`; `.cmd`
+    and `.bat` run fine as-is, so they are deliberately left alone. `.ps1` is not
+    covered because routing it would mean a different interpreter and a different
+    argument form -- worth doing when a project actually declares one, not before.
+
+    The suffix is matched case-insensitively: Windows filenames are, so `INIT.SH`
+    is a real file that fails exactly like `init.sh`. Matching only the lowercase
+    form would leave the hole open for the spelling nobody thinks to test.
     """
     if os.name != "nt" or not cmd:
         return cmd
     exe = cmd[0]
-    if not exe.endswith(".sh"):
+    if not exe.lower().endswith(".sh"):
         return cmd
     bash = shutil.which("bash")
     if not bash:
