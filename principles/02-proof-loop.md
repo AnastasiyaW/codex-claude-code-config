@@ -100,6 +100,34 @@ If the verdict is FAIL:
 
 Repeat steps 4-5 until the verdict is PASS across all acceptance criteria.
 
+## Release-State Test Sequence
+
+The Proof Loop does not mean running every expensive check after every line.
+Use release states with one clear purpose:
+
+```text
+focused local slice -> independent review -> one full matrix -> immutable candidate VM run
+```
+
+- **Focused local slice:** while changing code, run the smallest deterministic
+  checks that exercise the changed behavior or reproduction. This is the loop's
+  fast feedback and may run repeatedly.
+- **Independent review:** for a boundary/high-risk change, a fresh evaluator
+  checks the exact changed surface and records a verdict. More of the builder's
+  own tests is not a substitute for independence.
+- **Full matrix:** before commit/merge, run the complete project matrix once on
+  the final staged candidate. Do not attach this cost to every edit.
+- **Immutable candidate VM run:** after the candidate has an exact commit or
+  artifact digest, run the real VM smoke/compatibility proof against that exact
+  identity. Any candidate change invalidates the VM result.
+
+The shared `test-gate-stop-hook.py` enforces the first two boundaries: `fast` for
+normal source changes, optional `integration` for high-risk changes, and a
+path-keyed independent-review requirement. It intentionally excludes `release`
+from automatic per-edit execution. `harness-load-advisor.py` reports when a
+release/VM gate is misrouted into staging smoke. Full-matrix and VM evidence are
+explicit candidate/release steps, not silent repeated work.
+
 ---
 
 ## Four Sub-Agent Roles

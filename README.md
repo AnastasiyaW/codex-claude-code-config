@@ -96,6 +96,7 @@ offered? Nothing raises an error when that happens — see
 
 - **Self-evaluation bias?** Separate Generator and Evaluator agents ([Harness Design](principles/01-harness-design.md))
 - **Agent claims "done" but it's broken?** Require durable proof artifacts ([Proof Loop](principles/02-proof-loop.md))
+- **Tests feel repetitive or the VM gate blocks smoke?** Use the release-state sequence: focused slice, independent review, one full matrix, then one immutable-candidate VM run ([testing strategy](docs/research/2026-08-testing-and-agent-evals.md))
 - **Need to improve a prompt/skill/config?** Automated Read-Change-Test loop ([Autoresearch](principles/03-autoresearch.md))
 - **LLM skips steps in complex workflows?** Shell scripts for mechanical tasks, one step at a time ([Deterministic Orchestration](principles/04-deterministic-orchestration.md))
 - **Wrong debugging conclusions?** Structured Premises-Trace-Conclusions format ([Structured Reasoning](principles/05-structured-reasoning.md))

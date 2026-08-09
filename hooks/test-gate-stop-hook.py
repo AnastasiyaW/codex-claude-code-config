@@ -7,6 +7,11 @@ layer: it runs a fast/default suite only when Git-visible source or test files
 changed, and adds an integration command for high-risk changes when the project
 declares one. The agent cannot say "done" while selected tests fail.
 
+Release-state contract: focused checks may repeat during iteration; an independent
+review is required for high-risk boundaries; the full/release matrix and a real VM
+run are explicit candidate steps, not automatic tests after every edit. The final
+VM proof must target an immutable commit or artifact identity.
+
 Companion to stop-phrase-guard.py (phrase-level detection) and
 problems-md-validator.py (PROBLEMS.md ticket discipline). Together they
 implement Layer 2-4 of the no-pre-existing-evasion stack.
@@ -21,7 +26,9 @@ implement Layer 2-4 of the no-pre-existing-evasion stack.
 
 If `.claude/test-policy.json` exists, its tokenized `fast` command is preferred;
 `integration` is added for high-risk changes. `release` is intentionally not
-automatic, so a large release suite does not become a per-edit tax.
+automatic, so a large release suite does not become a per-edit tax. A project
+workflow owns the one full-matrix run before commit/merge and the one VM run on
+the resulting immutable candidate.
 
 If none detected → silent pass (graceful for non-code dirs).
 

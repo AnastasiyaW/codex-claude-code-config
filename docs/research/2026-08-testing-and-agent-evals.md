@@ -81,6 +81,36 @@ and `release` commands. The latter is not run on every edit. `test-muting-guard`
 remains a hard guard against hiding failures; `bug-reproducer` and `proof-verify`
 remain specialized workflows rather than global gates.
 
+## Release-State Test Sequence (Canonical)
+
+Do not turn every edit into a release rehearsal. The working sequence is:
+
+1. **Focused local slice** — run the smallest deterministic checks that exercise
+   the changed behavior or reproduced bug. Repeat these while iterating.
+2. **Independent review** — for a boundary or high-risk change, use a fresh
+   context/evaluator and record its verdict against the exact changed surface.
+3. **Full matrix once before commit/merge** — run the project's complete matrix
+   once on the final staged candidate. This is release evidence, not an edit tax.
+4. **Real VM run on an immutable candidate** — after the candidate has an exact
+   commit/artifact identity, run the real VM smoke or compatibility proof against
+   that identity. If the candidate changes, the VM proof is invalid and must be
+   repeated.
+
+The compact form is:
+
+```text
+focused slice -> independent review -> one full matrix -> immutable candidate VM run
+```
+
+The Stop hooks enforce the first two boundaries without pretending they are the
+last two. `test-gate-stop-hook.py` runs `fast` for source changes and adds
+`integration` only for high-risk boundaries; it deliberately does not auto-run
+`release`. Its high-risk path requires independent review evidence keyed to the
+changed paths. `harness-load-advisor.py` catches the opposite mistake: a release,
+signing, or long VM gate accidentally blocking a staging smoke, and requires a
+profile split instead of a bypass. A project must expose the full matrix and VM
+commands as explicit release-candidate workflow steps.
+
 ## Profile Contract And Overload Feedback
 
 The adopted profile contract is:

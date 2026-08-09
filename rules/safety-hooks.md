@@ -49,12 +49,17 @@ Env vars через inline `FOO=1 cmd` НЕ видны хуку — нужен m
 - `test-gate-stop-hook.py` (Stop) — выбирает минимальный test scope по Git-visible
   изменению: docs-only пропускает, source/tests запускают fast suite, а
   auth/DB/API/concurrency/deploy boundary добавляет `integration` из
-  `.claude/test-policy.json`. Timeout считается отсутствием proof и блокирует,
-  вместо того чтобы молча пропускать завершение.
+  `.claude/test-policy.json`. `release`/full matrix намеренно не запускается на
+  каждой правке: перед commit/merge он выполняется один раз на финальном
+  кандидате, после чего реальный VM-прогон идёт по его immutable commit/artifact
+  identity. Timeout считается отсутствием proof и блокирует, вместо того чтобы
+  молча пропускать завершение. Для high-risk hook также требует независимый
+  review, а не бесконечное добавление собственных тестов.
 - `harness-load-advisor.py` (Stop) — ловит явный сигнал, что VM/proof/release
   gate перегружен или блокирует staging smoke; требует назвать профиль, gate,
-  доказательство и исправление маршрутизации. Не отключает security/release
-  проверку и пишет только агрегированные метаданные в
+  доказательство и исправление маршрутизации. Это ловит необязательный
+  expensive-test слой в неправильном профиле, но не разрешает обходить
+  security/release проверку и пишет только агрегированные метаданные в
   `~/.claude/harness-feedback/events.jsonl`.
 - `problems-md-validator.py` (Stop) — блок при OPEN-пунктах в PROBLEMS.md без 5-exception тикета.
 - `session-handoff-reminder.py` (Stop) — напоминает написать handoff в конце длинной сессии.
