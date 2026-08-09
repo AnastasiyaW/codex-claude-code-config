@@ -268,6 +268,42 @@ def load_policy_commands(cwd: Path) -> dict[str, list[str]]:
     return commands
 
 
+def portable_argv(cmd: list[str], cwd: Path) -> list[str]:
+    """Make a POSIX-authored test command runnable on Windows.
+
+    A project's `.claude/test-command` is written for the repository, not for
+    the machine that happens to read it: `./init.sh --fast` is correct on Linux
+    and macOS and raises WinError 193 on Windows, because CreateProcess only
+    runs real executables. The gate then reports "unavailable ... no green
+    evidence", which reads exactly like a red suite while nothing ever ran —
+    the failure mode we keep tightening these hooks against.
+
+    So route shell scripts through bash when the platform cannot exec them
+    directly. If bash is missing we return the command untouched: an honest
+    "cannot run" beats a rewritten command that fails for a second reason.
+
+    Scope, measured rather than assumed: `.sh` fails, and so does `.ps1`; `.cmd`
+    and `.bat` run fine as-is, so they are deliberately left alone. `.ps1` is not
+    covered because routing it would mean a different interpreter and a different
+    argument form -- worth doing when a project actually declares one, not before.
+
+    The suffix is matched case-insensitively: Windows filenames are, so `INIT.SH`
+    is a real file that fails exactly like `init.sh`. Matching only the lowercase
+    form would leave the hole open for the spelling nobody thinks to test.
+    """
+    if os.name != "nt" or not cmd:
+        return cmd
+    exe = cmd[0]
+    if not exe.lower().endswith(".sh"):
+        return cmd
+    bash = shutil.which("bash")
+    if not bash:
+        return cmd
+    # Forward slashes: bash reads its argument as a POSIX path, and cwd is
+    # already the working directory of the subprocess.
+    return [bash, exe.replace("\\", "/"), *cmd[1:]]
+
+
 def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
     """Detect what test command to run. Returns (cmd_list, label) or None."""
 
@@ -412,6 +448,7 @@ def main() -> int:
 
     failures: list[str] = []
     for cmd, label in commands:
+        cmd = portable_argv(cmd, cwd)
         try:
             # CI=1 forces watch-capable runners into run-once non-interactive
             # mode. FORCE_COLOR=0 keeps evidence compact and comparable.
