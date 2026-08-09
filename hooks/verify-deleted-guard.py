@@ -110,6 +110,46 @@ def verify_rm(cmd: str) -> tuple[str, str]:
     return "verified-deleted", f"{len(targets)} target(s) gone"
 
 
+def verify_move(cmd: str) -> tuple[str, str]:
+    """For move-style commands, verify the local source is gone."""
+    cmd_no_comments = re.sub(r"#[^\n]*", "", cmd)
+    try:
+        tokens = shlex.split(cmd_no_comments, posix=True)
+    except ValueError:
+        return "could-not-verify", "shlex parse failed"
+
+    source: str | None = None
+    lowered = [token.lower() for token in tokens]
+    if "move-item" in lowered:
+        for flag in ("-path", "-literalpath"):
+            if flag in lowered:
+                index = lowered.index(flag)
+                if index + 1 < len(tokens):
+                    source = tokens[index + 1]
+                break
+    elif "robocopy" in lowered and any(re.fullmatch(r"/(?:move|mov)", token, re.I) for token in tokens):
+        index = lowered.index("robocopy")
+        if index + 2 < len(tokens):
+            source = tokens[index + 1]
+    else:
+        for name in ("mv",):
+            if name in lowered:
+                index = lowered.index(name)
+                args = [token for token in tokens[index + 1:] if not token.startswith("-")]
+                if len(args) >= 2:
+                    source = args[0]
+                break
+
+    if not source or any(mark in source for mark in "*?[$"):
+        return "could-not-verify", "local move source could not be extracted"
+    if re.match(r"^(?:[a-z]+://|[^\\/\s]+@[^\\/\s:]+:)", source, re.I):
+        return "could-not-verify", "remote move source requires contract evidence"
+    path = Path(source).expanduser()
+    if path.exists():
+        return "still-present", f"move source still exists: {path}"
+    return "verified-deleted", f"move source gone: {path}"
+
+
 def verify_docker_rm(cmd: str) -> tuple[str, str]:
     """docker rm <container> — check `docker ps -a` doesn't list it."""
     if not shutil.which("docker"):
@@ -199,6 +239,7 @@ def verify_curl_delete(cmd: str) -> tuple[str, str]:
 
 DISPATCH = [
     (r"\b(rm|rmdir)\s+", verify_rm),
+    (r"\bmove-item\b|(?:^|[;&|])\s*mv\s+|\brobocopy\b.*\/(?:move|mov)\b", verify_move),
     (r"\bdocker\s+(rm|rmi|volume\s+rm|network\s+rm)\b", verify_docker_rm),
     (r"\bkubectl\s+delete\s+\w+\s+\S+", verify_kubectl_delete),
     (r"\bcurl\s+[^|]*-X\s+DELETE\b", verify_curl_delete),

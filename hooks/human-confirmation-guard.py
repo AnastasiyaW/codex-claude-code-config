@@ -68,6 +68,10 @@ DESTRUCTIVE_INTENT = [
     # Filesystem
     r"\brm\s+-[a-z]*r[a-z]*\s+",      # rm -rf, rm -r, rm -Rf, etc
     r"\brmdir\s+",
+    r"(?:^|[;&|])\s*mv\s+",
+    r"\bmove-item\b",
+    r"\brobocopy\b.*\/(?:move|mov)\b",
+    r"\brclone\s+move\b",
     r"\bfind\s+\S+.*-delete\b",
     r"\bmkfs\.[a-z0-9]+\s+/dev/",
     r"\bdd\s+if=\S+\s+of=/dev/[sh]d[a-z]",
@@ -306,7 +310,7 @@ def all_targets_safe(cmd: str) -> bool:
 
 def main() -> None:
     event = read_event()
-    if event.get("tool_name") != "Bash":
+    if event.get("tool_name") not in {"Bash", "PowerShell"}:
         allow()
     cmd = bash_command(event.get("tool_input", {}))
     if not cmd:

@@ -9,7 +9,6 @@ skips already-installed hooks.
 Safety-critical hooks installed by default (--safe-defaults):
 
   - destructive-command-guard    PreToolUse    blocks rm -rf, DROP TABLE, etc.
-  - secret-leak-guard            PreToolUse    blocks writes containing API keys
   - git-destructive-guard        PreToolUse    blocks git reset --hard, push --force
   - git-auto-backup              PreToolUse    creates branch snapshot before rewrites
   - session-drift-validator      SessionStart  reports broken file paths in CLAUDE.md
@@ -18,6 +17,7 @@ Safety-critical hooks installed by default (--safe-defaults):
   - self-harm-guard              PreToolUse    stops agent from killing its own process
   - dependency-currency-guard    PreToolUse    checks package names and release age
   - dependency-provenance-guard  PreToolUse    protects registry and artifact provenance
+  - transfer-contract-guard      Pre/Post/Stop requires a durable transfer record and verification
 
 Opt-in extras (use --extras):
   - api-key-leak-detector        PostToolUse   scans tool output for leaked keys
@@ -81,7 +81,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #   (script filename in hooks/, hook event, optional "matcher" for fine-grained events)
 SAFE_DEFAULTS: list[tuple[str, str, str | None]] = [
     ("destructive-command-guard.py", "PreToolUse", "Bash"),
-    ("secret-leak-guard.py",         "PreToolUse", None),
     ("git-destructive-guard.py",     "PreToolUse", "Bash"),
     ("git-auto-backup.py",           "PreToolUse", "Bash"),
     ("command-injection-guard.py",   "PreToolUse", "Bash"),
@@ -89,6 +88,11 @@ SAFE_DEFAULTS: list[tuple[str, str, str | None]] = [
     ("dependency-currency-guard.py", "PreToolUse", "Write|Edit|MultiEdit"),
     ("dependency-provenance-guard.py", "PreToolUse", "Bash|PowerShell"),
     ("directory-creation-guard.py",  "PreToolUse", "PowerShell"),
+    ("transfer-contract-guard.py",    "PreToolUse", "Bash"),
+    ("transfer-contract-guard.py",    "PreToolUse", "PowerShell"),
+    ("transfer-contract-guard.py",    "PostToolUse", "Bash"),
+    ("transfer-contract-guard.py",    "PostToolUse", "PowerShell"),
+    ("transfer-contract-guard.py",    "Stop", None),
     ("self-harm-guard.py",           "PreToolUse", "Bash"),
     ("session-drift-validator.py",   "SessionStart", None),
     ("continuity-contract-guard.py", "PreToolUse", "Write|Edit|MultiEdit|NotebookEdit"),
@@ -105,7 +109,7 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("keyword-skill-router.py",      "UserPromptSubmit", None),
     ("task-inbox-show.py",           "SessionStart", None),
     ("claude-attribution-guard.py",  "PreToolUse", "Bash"),
-    ("human-confirmation-guard.py",  "PreToolUse", "Bash"),
+    ("human-confirmation-guard.py",  "PreToolUse", "Bash|PowerShell"),
     ("db-snapshot-guard.py",         "PreToolUse", "Bash"),
     ("verify-deleted-guard.py",      "PostToolUse", "Bash"),
     ("file-cohesion-guard.py",       "PreToolUse", "Write|Edit"),

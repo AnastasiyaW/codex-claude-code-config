@@ -33,6 +33,7 @@ REQUIRED_STOP_HOOKS = (
     "session-handoff-reminder.py",
     "kb-validate-gate.py",
     "git-source-gate.py",
+    "transfer-contract-guard.py",
 )
 
 REQUIRED_PRECOMPACT_HOOKS = (

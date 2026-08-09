@@ -176,6 +176,7 @@ See [docs/rtk-integration.md](docs/rtk-integration.md) and
 | [handoff-resume-gate](hooks/handoff-resume-gate.py) | `SessionStart` | Resume freshness-gate — complements session-handoff-check by gating on stale/unacknowledged handoffs |
 | [long-run-detector](hooks/long-run-detector.py) | `SessionStart` | Auto-detects a long-running project and nudges adopting the [LONG-RUN] harness (feature_list.json / init.sh) |
 | [verify-deleted-guard](hooks/verify-deleted-guard.py) | `PostToolUse` | Verifies a destructive operation actually completed (object really gone) |
+| [transfer-contract-guard](hooks/transfer-contract-guard.py) | `PreToolUse` + `PostToolUse` + `Stop` | Requires a durable source/destination/setting/deadline record for clone/copy/move/sync, reminds about proof, and blocks orphaned transfers |
 | [db-snapshot-guard](hooks/db-snapshot-guard.py) | `PreToolUse` | Auto-snapshots the database before bypassed destructive SQL |
 | [claude-attribution-guard](hooks/claude-attribution-guard.py) | `PreToolUse` | Blocks commits/PRs carrying `Co-Authored-By: Claude` footers (see [rules/no-claude-attribution.md](rules/no-claude-attribution.md)) |
 | [pre-push-claude-attribution](hooks/pre-push-claude-attribution.py) | git `pre-push` | Final attribution gate before commits reach the remote |

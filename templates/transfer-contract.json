@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "transfer_id": "2026-08-09_move-example",
+  "status": "planned",
+  "source": "C:/path/to/source",
+  "destination": "D:/path/to/destination",
+  "purpose": "Keep the project workspace on the data disk",
+  "motivation": "C: is full; the destination is the canonical project location",
+  "deadline": "2026-08-09T23:59:00+02:00",
+  "operation": {
+    "kind": "copy",
+    "tool": "robocopy",
+    "command_family": "robocopy",
+    "settings": {
+      "flags": ["/E", "/COPY:DAT", "/DCOPY:DAT"],
+      "delete_source": false
+    }
+  },
+  "verification": {
+    "plan": [
+      "destination exists",
+      "file count and byte totals match",
+      "hash or an equivalent content check is recorded"
+    ],
+    "performed": false,
+    "result": null,
+    "evidence": []
+  },
+  "source_cleanup": {
+    "planned": false,
+    "performed": false,
+    "verified": false,
+    "reason": "Keep the source until the copy has been independently verified"
+  },
+  "next_action": "Run the copy, then verify destination before considering source cleanup",
+  "owner": "current-agent",
+  "closure_reason": ""
+}

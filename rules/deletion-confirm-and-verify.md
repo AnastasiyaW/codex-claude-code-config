@@ -31,6 +31,7 @@
 - `destructive-command-guard.py` / `git-destructive-guard.py` — блок катастрофических удалений.
 - `db-snapshot-guard.py` — снапшот БД перед destructive SQL.
 - `verify-deleted-guard.py` (PostToolUse) — проверяет, что destructive-операция реально завершилась.
+- `transfer-contract-guard.py` (PreToolUse + PostToolUse + Stop) — связывает конкретный перенос с планом проверки и не даёт закрыть сессию с незавершённой записью.
 
 Связано: CLAUDE.md «Anti-Fabrication» («Deletion = re-verification»),
 `system-verification-independent.md`, `safety.md`.
