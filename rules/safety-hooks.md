@@ -37,7 +37,7 @@ Env vars через inline `FOO=1 cmd` НЕ видны хуку — нужен m
 ## PostToolUse / Stop / SessionStart / PreCompact
 
 - `verify-deleted-guard.py` (PostToolUse) — проверяет, что destructive-операция РЕАЛЬНО завершилась (объект исчез).
-- `transfer-contract-guard.py` (PreToolUse + PostToolUse + Stop) — требует контракт в `.claude/transfers/` для clone/copy/move/sync, напоминает о проверке результата и блокирует незакрытые переносы.
+- `transfer-contract-guard.py` (PreToolUse + PostToolUse + Stop) — требует контракт в `.claude/transfers/` для clone/copy/move/sync, напоминает о проверке результата и блокирует незакрытые переносы. **Скоуп по владельцу (2026-08-09):** контракт получает `session_id` первой применившей его сессии (штамп на PreToolUse, чужой не перетирается); на Stop открытый контракт **живой** чужой сессии не блокирует, только строка в stderr. Блокируют свои, безымянные и протухшие — владелец молчит >30 мин по mtime транскрипта (`CLAUDE_TRANSFER_OWNER_TTL`). До этого одна общая папка контрактов запирала Stop всем сессиям сразу. `--self-test`.
 - `api-key-leak-detector.py` (PostToolUse) — detective: сканирует output на API-key паттерны, warning (не блок).
 - `over-engineering-advisor.py` (PostToolUse Write|Edit|MultiEdit) — advisory: большое добавление в код / новая зависимость → нудж «это минимум?» (`quality-code.md`), НЕ блок; bypass `CLAUDE_ALLOW_BLOAT=1`.
 - `module-shape-advisor.py` (PostToolUse Write|Edit|MultiEdit) — advisory: после правки

@@ -17,13 +17,30 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from safety_common import allow, block, log, read_event  # noqa: E402
+
+
+# Transfer records live in one shared directory, but a Stop gate belongs to one
+# session. Without an owner, session A is blocked by session B's in-flight
+# record -- collateral, and the usual answer to collateral is to switch the gate
+# off. So a record records who opened it, and a live owner's open record only
+# warns the others. Ownership is stamped automatically at PreToolUse; a record
+# with no owner still blocks everyone, so this cannot become a silent escape.
+SESSION_ROOT = Path(
+    os.environ.get("CLAUDE_SESSION_ROOT")
+    or (Path.home() / ".claude" / "projects")
+)
+# A live session's transcript is appended to continuously. Half an hour of
+# silence means the owner is not going to close this record on its own.
+FOREIGN_LIVE_SECONDS = int(os.environ.get("CLAUDE_TRANSFER_OWNER_TTL", "1800"))
 
 
 TRANSFER_MARKER = re.compile(
@@ -42,6 +59,66 @@ def _text(value: Any) -> str:
 def _event_cwd(event: dict[str, Any]) -> Path:
     raw = _text(event.get("cwd"))
     return Path(raw).expanduser() if raw else Path.cwd()
+
+
+def _event_session(event: dict[str, Any]) -> str:
+    """Session id, however this harness spells it.
+
+    Falls back to the transcript filename, which IS the session id and is
+    present on every Stop event -- so ownership does not hinge on one key name.
+    """
+    for key in ("session_id", "sessionId", "conversation_id", "conversationId"):
+        value = _text(event.get(key))
+        if value:
+            return value
+    transcript = _text(event.get("transcript_path"))
+    if transcript:
+        stem = Path(transcript).stem
+        if stem and stem not in {".", ".."}:
+            return stem
+    return ""
+
+
+def _session_alive(session_id: str, now: float | None = None) -> bool:
+    """True while the owning session's transcript is still being written.
+
+    The transcript is `<project-slug>/<session-id>.jsonl` and a worktree session
+    lives under its own slug, so the lookup globs every project.
+    """
+    if not session_id or "/" in session_id or "\\" in session_id:
+        return False
+    moment = time.time() if now is None else now
+    try:
+        for transcript in SESSION_ROOT.glob(f"*/{session_id}.jsonl"):
+            try:
+                if moment - transcript.stat().st_mtime <= FOREIGN_LIVE_SECONDS:
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        return False
+    return False
+
+
+def _foreign_and_live(contract: dict[str, Any], current_session: str) -> str:
+    """Owner id when this record belongs to a different, still-live session."""
+    owner = _text(contract.get("session_id"))
+    if not owner or owner == current_session:
+        return ""
+    return owner if _session_alive(owner) else ""
+
+
+def _stamp_owner(path: Path, contract: dict[str, Any], session_id: str) -> None:
+    """Record who opened this transfer, so its Stop gate is scoped to them."""
+    if not session_id or _text(contract.get("session_id")):
+        return
+    try:
+        contract["session_id"] = session_id
+        path.write_text(json.dumps(contract, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        # Ownership is an optimisation for other sessions' Stop gates. Failing
+        # to write it must never turn into a blocked transfer.
+        pass
 
 
 def _tool_input(event: dict[str, Any]) -> dict[str, Any]:
@@ -245,6 +322,7 @@ def _pre(event: dict[str, Any]) -> None:
         errors.append(f"operation.tool must describe {expected_tool!r} for this command")
     if errors:
         block(f"Transfer contract is incomplete ({path}): " + "; ".join(errors))
+    _stamp_owner(path, contract, _event_session(event))
     log("INFO", "transfer_contract", "allowed", f"{kind}:{expected_tool}", str(path))
     allow()
 
@@ -303,15 +381,23 @@ def _transfer_files(root: Path) -> list[Path]:
     return paths
 
 
-def _stop(event: dict[str, Any]) -> None:
-    root = _repo_root(_event_cwd(event))
+def _stop_issues(root: Path, current_session: str) -> tuple[list[str], list[str]]:
+    """Return (blocking issues for this session, notes about other sessions')."""
     issues: list[str] = []
+    deferred: list[str] = []
     for path in _transfer_files(root):
         contract, error = _load(path)
         if error or contract is None:
+            # A record too broken to parse has no readable owner, so it is
+            # everyone's problem until someone repairs it.
             issues.append(f"{path.name}: {error}")
             continue
+        owner = _foreign_and_live(contract, current_session)
         status = _text(contract.get("status"))
+        if owner:
+            if status in OPEN_STATUSES or _contract_errors(contract) or _verified_path_errors(contract, root):
+                deferred.append(f"{path.name} (status={status}, owner session {owner} still live)")
+            continue
         if status in OPEN_STATUSES:
             issues.append(
                 f"{path.name}: status={status}; next_action={_text(contract.get('next_action')) or 'missing'}"
@@ -319,6 +405,18 @@ def _stop(event: dict[str, Any]) -> None:
         elif status in CLOSED_STATUSES:
             issues.extend(f"{path.name}: {item}" for item in _contract_errors(contract))
             issues.extend(f"{path.name}: {item}" for item in _verified_path_errors(contract, root))
+    return issues, deferred
+
+
+def _stop(event: dict[str, Any]) -> None:
+    root = _repo_root(_event_cwd(event))
+    issues, deferred = _stop_issues(root, _event_session(event))
+    if deferred:
+        sys.stderr.write(
+            "[transfer_contract] left to their owners (live sessions, not yours): "
+            + " | ".join(deferred)
+            + "\n"
+        )
     if issues:
         log("WARN", "transfer_contract", "blocked", "open-or-invalid-transfer", " | ".join(issues))
         block(
@@ -329,7 +427,118 @@ def _stop(event: dict[str, Any]) -> None:
     allow()
 
 
+def _self_test() -> int:
+    """Prove the ownership rule on real files in a real temp tree."""
+    import tempfile
+
+    global SESSION_ROOT
+    fails: list[str] = []
+    base_contract = {
+        "schema_version": 1,
+        "transfer_id": "t",
+        "status": "planned",
+        "source": "ssh://host/src",
+        "destination": "rclone://remote:dst",
+        "purpose": "p",
+        "motivation": "m",
+        "next_action": "n",
+        "deadline": "2026-08-10T00:00:00+03:00",
+        "operation": {"kind": "copy", "tool": "rclone", "settings": "s"},
+        "verification": {"plan": ["check"], "performed": False},
+        "source_cleanup": {"planned": False, "performed": False, "verified": False, "reason": "r"},
+    }
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        sessions = tmp / "projects"
+        (sessions / "slug").mkdir(parents=True)
+        SESSION_ROOT = sessions
+        live, stale, mine = "live-owner", "stale-owner", "my-session"
+        (sessions / "slug" / f"{live}.jsonl").write_text("{}", encoding="utf-8")
+        old = sessions / "slug" / f"{stale}.jsonl"
+        old.write_text("{}", encoding="utf-8")
+        ancient = time.time() - FOREIGN_LIVE_SECONDS - 600
+        os.utime(old, (ancient, ancient))
+
+        repo = tmp / "repo"
+        transfers = repo / ".claude" / "transfers"
+        transfers.mkdir(parents=True)
+
+        def put(name: str, **over: Any) -> Path:
+            record = json.loads(json.dumps(base_contract))
+            record.update(over)
+            path = transfers / f"{name}.json"
+            path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            return path
+
+        cases = [
+            ("open record owned by me", {"session_id": mine}, True),
+            ("open record, owner still live", {"session_id": live}, False),
+            ("open record, owner gone stale", {"session_id": stale}, True),
+            ("open record with no owner at all", {}, True),
+            ("closed record, owner live", {"session_id": live, "status": "cancelled",
+                                           "closure_reason": "c"}, False),
+        ]
+        for label, over, should_block in cases:
+            for leftover in transfers.glob("*.json"):
+                leftover.unlink()
+            put("case", **over)
+            issues, deferred = _stop_issues(repo, mine)
+            if bool(issues) != should_block:
+                fails.append(f"{label}: expected block={should_block}, issues={issues}, deferred={deferred}")
+
+        # A malformed record has no readable owner and must block everyone.
+        for leftover in transfers.glob("*.json"):
+            leftover.unlink()
+        (transfers / "broken.json").write_text("{not json", encoding="utf-8")
+        if not _stop_issues(repo, mine)[0]:
+            fails.append("unparseable record did not block")
+
+        # A closed record whose own schema is broken must still block its owner.
+        for leftover in transfers.glob("*.json"):
+            leftover.unlink()
+        path = put("mine-broken", session_id=mine, status="verified")
+        if not _stop_issues(repo, mine)[0]:
+            fails.append("verified record without evidence did not block its owner")
+
+        # Stamping: writes once, never overwrites an existing owner.
+        for leftover in transfers.glob("*.json"):
+            leftover.unlink()
+        path = put("stamp")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        _stamp_owner(path, record, mine)
+        if json.loads(path.read_text(encoding="utf-8")).get("session_id") != mine:
+            fails.append("owner was not stamped onto an unowned record")
+        _stamp_owner(path, json.loads(path.read_text(encoding="utf-8")), "someone-else")
+        if json.loads(path.read_text(encoding="utf-8")).get("session_id") != mine:
+            fails.append("existing owner was overwritten")
+
+        if _session_alive("no-such-session"):
+            fails.append("an unknown session was reported alive")
+        if _session_alive("../escape"):
+            fails.append("a path-traversing session id was not rejected")
+
+        # The id must survive whichever key this harness uses, including the
+        # transcript-filename fallback that Stop events always carry.
+        for label, event, expected in (
+            ("snake_case", {"session_id": mine}, mine),
+            ("camelCase", {"sessionId": mine}, mine),
+            ("transcript fallback", {"transcript_path": f"/x/y/{mine}.jsonl"}, mine),
+            ("nothing usable", {"transcript_path": ""}, ""),
+        ):
+            got = _event_session(event)
+            if got != expected:
+                fails.append(f"session id from {label}: expected {expected!r}, got {got!r}")
+
+    for line in fails:
+        print("FAIL:", line)
+    print("transfer-contract-guard self-test:", "FAILED" if fails else "ok")
+    return 1 if fails else 0
+
+
 def main() -> None:
+    if "--self-test" in sys.argv:
+        sys.exit(_self_test())
     event = read_event()
     if not event:
         allow()
