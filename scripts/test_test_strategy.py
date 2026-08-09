@@ -1,9 +1,9 @@
-"""Prove the test gate selects release states instead of repeating release work.
+"""Prove the test gate selects candidate states instead of repeating costly work.
 
 This drives the real selection functions in ``test-gate-stop-hook.py``. It does
 not run a full project suite: the contract being tested is that per-edit hooks
-choose the smallest sufficient lane and leave full-matrix/VM proof to the
-immutable candidate workflow.
+choose the smallest sufficient lane and leave full-matrix and specialized-
+environment proof to the immutable candidate workflow.
 """
 
 from __future__ import annotations
@@ -47,18 +47,22 @@ def main() -> int:
         normal_commands = HOOK.detect_test_commands(root, normal)
         normal_labels = [label for _, label in normal_commands]
         check("normal source selects fast only", normal_labels == ["policy.fast"], failures)
-        check("normal source does not select release matrix", "policy.release" not in normal_labels, failures)
+        check("normal source does not select candidate matrix", "policy.release" not in normal_labels, failures)
 
         risky = HOOK.classify_paths(["src/auth/login.py"])
         risky_commands = HOOK.detect_test_commands(root, risky)
         risky_labels = [label for _, label in risky_commands]
         check("high-risk source selects fast plus integration", risky_labels == ["policy.fast", "policy.integration"], failures)
-        check("high-risk source does not select release matrix", "policy.release" not in risky_labels, failures)
+        check("high-risk source does not select candidate matrix", "policy.release" not in risky_labels, failures)
 
         tests_only = HOOK.classify_paths(["tests/test_parser.py"])
         tests_only_commands = HOOK.detect_test_commands(root, tests_only)
         tests_only_labels = [label for _, label in tests_only_commands]
         check("tests-only change stays on fast lane", tests_only_labels == ["policy.fast"], failures)
+
+        docs_only = HOOK.classify_paths(["docs/testing-strategy.md"])
+        docs_commands = HOOK.detect_test_commands(root, docs_only)
+        check("docs-only change selects no test lane", docs_only.name == "docs-only" and not docs_commands, failures)
 
     print("TEST STRATEGY:", "PASS" if not failures else "FAIL")
     for failure in failures:

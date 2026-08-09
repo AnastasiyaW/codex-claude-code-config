@@ -2,9 +2,10 @@
 """Stop hook: surface an over-constrained or mis-scoped agent harness.
 
 This is a feedback guard, not a release bypass. It detects when the final
-assistant message says that a high-cost gate (for example production signing or
-a VM release harness) is blocking a lower-risk staging smoke. The hook then
-requires a user-visible diagnosis and a profile split before the turn closes.
+assistant message says that a high-cost or specialized gate (for example
+production signing, a VM/GPU/OS compatibility run, or a stress matrix) is
+blocking a lower-risk smoke. The hook then requires a user-visible diagnosis
+and a profile split before the turn closes.
 
 The signal is intentionally narrow. It does not infer overload from elapsed
 time alone and it never disables security or release evidence. Short event
@@ -33,7 +34,8 @@ FEEDBACK_DIR = Path(
 FEEDBACK_PATH = FEEDBACK_DIR / "events.jsonl"
 
 # These patterns require both a harness/gate signal and a consequence. A mere
-# mention of release signing in a design note is not an overload event.
+# mention of a specialized or release check in a design note is not an overload
+# event.
 SIGNALS: list[tuple[str, list[str]]] = [
     (
         "declared-overload",
@@ -43,8 +45,11 @@ SIGNALS: list[tuple[str, list[str]]] = [
             r"перегруж\w*|слишком (жестк\w*|зажат\w*|тяжел\w*))\b",
             r"\b(block\w*|не (да[её]т|позволя\w*|пропуска\w*)|блокир\w*)\b"
             r"[^.?!\n]{0,120}\b(staging|staging smoke|smoke test|стейдж\w*|смоук\w*)\b",
-            r"\b(production[- ]signing|release[- ]only|authenticode|подпис\w* production|"
-            r"релиз\w* подпис\w*)\b[^.?!\n]{0,120}\b(staging|smoke|обычн\w* тест|стейдж\w*)\b",
+            r"\b(production[- ]signing|release[- ]only|authenticode|vm[- ](?:run|test|harness)|"
+            r"virtual machine|gpu[- ](?:run|test|runner)|os[- ]matrix|abi|browser[- ]matrix|"
+            r"compatibility|hardware|performance|stress|load[- ]test|nightly|подпис\w* production|"
+            r"релиз\w* подпис\w*|совместим\w*|аппаратн\w*|нагрузочн\w*)\b"
+            r"[^.?!\n]{0,120}\b(staging|smoke|обычн\w* тест|стейдж\w*|быстр\w* тест)\b",
         ],
     ),
     (
@@ -115,6 +120,8 @@ def _profile(message: str) -> str:
         return "security-proof"
     if re.search(r"release|signing|authenticode|production|релиз|подпис", lowered):
         return "release-attestation"
+    if re.search(r"vm|virtual machine|gpu|os[- ]matrix|abi|browser|compatibility|hardware|performance|stress|load[- ]test|nightly|совместим|аппаратн|нагрузоч", lowered):
+        return "compatibility-proof"
     return "unknown"
 
 
@@ -162,6 +169,10 @@ def record(event: dict, hits: list[str], message: str) -> None:
             "session_id": str(event.get("session_id") or event.get("sessionId") or ""),
             "cwd": str(event.get("cwd") or Path.cwd()),
             "mentions_release_gate": bool(re.search(r"signing|release|authenticode|подпис|релиз", lowered)),
+            "mentions_specialized_gate": bool(re.search(
+                r"vm|virtual machine|gpu|os[- ]matrix|abi|browser|compatibility|hardware|performance|stress|load[- ]test|nightly|совместим|аппаратн|нагрузоч",
+                lowered,
+            )),
             "mentions_staging_smoke": bool(re.search(r"staging|smoke|стейдж|смоук", lowered)),
         }
         with FEEDBACK_PATH.open("a", encoding="utf-8") as handle:
@@ -190,7 +201,7 @@ def main() -> int:
         hits.extend(configured_hits)
     if not hits:
         return 0
-    observed = message or "staging-smoke policy contains a forbidden release-only token"
+    observed = message or "staging-smoke policy contains a forbidden costly/specialized token"
     record(event, hits, observed)
 
     if stop_budget_exhausted is not None and stop_budget_exhausted(BUDGET_NAME, Path.cwd()):
@@ -204,9 +215,10 @@ def main() -> int:
         f"({', '.join(hits)}; apparent profile: {profile}). Before ending, tell the user: "
         "which requested profile was blocked, which gate caused it, the command or "
         "evidence proving the mismatch, and the smallest profile split that fixes it. "
-        "Keep security-proof and release-attestation gates; move production signing, "
-        "Authenticode, and long VM checks out of staging-smoke. Run the reduced smoke "
-        "and record the result. Do not call the harness fixed by merely bypassing a gate."
+        "Keep the gate when the requested profile needs it; move unrelated costly "
+        "or specialized checks (VM/GPU/OS/ABI/browser/hardware/performance/signing) "
+        "out of lower-risk smoke. Run the reduced smoke and record the result. "
+        "Do not call the harness fixed by merely bypassing a gate."
     )
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0

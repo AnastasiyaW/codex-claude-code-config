@@ -7,10 +7,11 @@ layer: it runs a fast/default suite only when Git-visible source or test files
 changed, and adds an integration command for high-risk changes when the project
 declares one. The agent cannot say "done" while selected tests fail.
 
-Release-state contract: focused checks may repeat during iteration; an independent
-review is required for high-risk boundaries; the full/release matrix and a real VM
-run are explicit candidate steps, not automatic tests after every edit. The final
-VM proof must target an immutable commit or artifact identity.
+Candidate-state contract: focused checks may repeat during iteration; an independent
+review is required for high-risk boundaries; the full/candidate matrix and any
+specialized environment proof are explicit candidate steps, not automatic tests
+after every edit. Candidate-bound evidence must target an immutable commit or
+artifact identity; a changed candidate invalidates it.
 
 Companion to stop-phrase-guard.py (phrase-level detection) and
 problems-md-validator.py (PROBLEMS.md ticket discipline). Together they
@@ -26,9 +27,9 @@ implement Layer 2-4 of the no-pre-existing-evasion stack.
 
 If `.claude/test-policy.json` exists, its tokenized `fast` command is preferred;
 `integration` is added for high-risk changes. `release` is intentionally not
-automatic, so a large release suite does not become a per-edit tax. A project
-workflow owns the one full-matrix run before commit/merge and the one VM run on
-the resulting immutable candidate.
+automatic, so a large candidate matrix does not become a per-edit tax. A
+project workflow owns the one full-matrix run at its candidate boundary and any
+specialized environment proof that its acceptance criteria actually require.
 
 If none detected → silent pass (graceful for non-code dirs).
 
@@ -252,7 +253,12 @@ def changed_paths(cwd: Path) -> list[str] | None:
 
 
 def load_policy_commands(cwd: Path) -> dict[str, list[str]]:
-    """Load optional tokenized commands; invalid policy fails closed to fallback."""
+    """Load optional tokenized commands; invalid policy falls back safely.
+
+    ``release`` is retained as a compatibility key for existing projects. It
+    denotes the complete candidate matrix and is intentionally not an automatic
+    per-edit lane; it does not imply that a VM or a release-signing step exists.
+    """
     policy = cwd / ".claude" / "test-policy.json"
     if not policy.is_file():
         return {}
@@ -380,6 +386,8 @@ def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
 
 def detect_test_commands(cwd: Path, scope: ChangeScope) -> list[tuple[list[str], str]]:
     """Choose the smallest configured suite that matches the change risk."""
+    if not scope.should_run:
+        return []
     policy = load_policy_commands(cwd)
     if policy:
         selected: list[tuple[list[str], str]] = []

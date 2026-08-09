@@ -100,13 +100,13 @@ If the verdict is FAIL:
 
 Repeat steps 4-5 until the verdict is PASS across all acceptance criteria.
 
-## Release-State Test Sequence
+## Candidate-State Test Sequence
 
 The Proof Loop does not mean running every expensive check after every line.
-Use release states with one clear purpose:
+This is a universal testing sequence, not a VM-specific workflow:
 
 ```text
-focused local slice -> independent review -> one full matrix -> immutable candidate VM run
+focused local slice -> risk-based review -> one full matrix -> conditional specialized proof
 ```
 
 - **Focused local slice:** while changing code, run the smallest deterministic
@@ -115,18 +115,23 @@ focused local slice -> independent review -> one full matrix -> immutable candid
 - **Independent review:** for a boundary/high-risk change, a fresh evaluator
   checks the exact changed surface and records a verdict. More of the builder's
   own tests is not a substitute for independence.
-- **Full matrix:** before commit/merge, run the complete project matrix once on
-  the final staged candidate. Do not attach this cost to every edit.
-- **Immutable candidate VM run:** after the candidate has an exact commit or
-  artifact digest, run the real VM smoke/compatibility proof against that exact
-  identity. Any candidate change invalidates the VM result.
+- **Full matrix:** at the candidate commit/merge/release boundary, run the
+  complete project matrix once on the final candidate. Do not attach this cost
+  to every small commit or edit.
+- **Conditional specialized proof:** only when the acceptance criteria depend
+  on a VM, GPU, OS/ABI, browser, hardware, performance, stress, or another
+  specialized environment, run that proof against the exact candidate commit
+  or artifact digest. If none applies, record an explicit N/A. Any candidate
+  change invalidates all candidate-bound evidence, so the changed candidate
+  needs a fresh matrix and fresh specialized proof when applicable.
 
 The shared `test-gate-stop-hook.py` enforces the first two boundaries: `fast` for
 normal source changes, optional `integration` for high-risk changes, and a
-path-keyed independent-review requirement. It intentionally excludes `release`
-from automatic per-edit execution. `harness-load-advisor.py` reports when a
-release/VM gate is misrouted into staging smoke. Full-matrix and VM evidence are
-explicit candidate/release steps, not silent repeated work.
+path-keyed independent-review requirement. It intentionally excludes the
+full/candidate matrix from automatic per-edit execution. `harness-load-advisor.py`
+reports when a costly or specialized gate is misrouted into a lower-risk smoke.
+Full-matrix and specialized-environment evidence are explicit candidate steps,
+not silent repeated work.
 
 ---
 

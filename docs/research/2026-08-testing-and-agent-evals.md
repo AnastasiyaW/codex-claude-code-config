@@ -21,10 +21,11 @@ Status: adopted for the shared Claude Code + Codex configuration
 5. Property-based, mutation, performance, security, and long-running agent
    evaluations are valuable, but they are periodic or risk-triggered layers;
    putting all of them on every edit creates latency and encourages bypasses.
-6. Execution environments and evidence profiles must be separate. A VM can be
-   reused by staging and security checks, while signing and production identity
-   belong only to release attestation. A harness overload is a measurable
-   routing defect when a higher-cost gate blocks a lower-risk claim.
+6. Test profiles and execution environments must be separate. A VM is only one
+   possible compatibility environment: other projects may need a GPU, another
+   OS/ABI, a browser matrix, hardware, a performance runner, or no specialized
+   environment at all. A harness overload is a measurable routing defect when
+   a higher-cost or specialized gate blocks a lower-risk claim.
 7. Feedback must include the requested profile, blocking gate, observed cost or
    failure, evidence produced, and the smallest correction. The shared hook
    records this metadata and forces the final report to expose it.
@@ -73,7 +74,7 @@ The shared system uses five practical layers:
 | L1 | Fast deterministic gate | Every code/test change |
 | L2 | Focused behavior/regression | Changed behavior or confirmed bug |
 | L3 | Boundary/contract | API, DB, filesystem, queue, serialization, auth, concurrency |
-| L4 | Smoke/release/eval | User journey, release claim, high-risk or long-running agent |
+| L4 | Smoke/candidate/eval | User journey, candidate claim, high-risk or long-running agent |
 
 The active Stop hook enforces the red/green fast gate only for Git-visible code
 or test changes. `.claude/test-policy.json` can provide `fast`, `integration`,
@@ -81,35 +82,41 @@ and `release` commands. The latter is not run on every edit. `test-muting-guard`
 remains a hard guard against hiding failures; `bug-reproducer` and `proof-verify`
 remain specialized workflows rather than global gates.
 
-## Release-State Test Sequence (Canonical)
+## Candidate-State Test Sequence (Canonical)
 
-Do not turn every edit into a release rehearsal. The working sequence is:
+This is a universal testing rule, not a VM or release-only rule. Do not turn
+every edit into a full-matrix rehearsal. The working sequence is:
 
 1. **Focused local slice** — run the smallest deterministic checks that exercise
    the changed behavior or reproduced bug. Repeat these while iterating.
 2. **Independent review** — for a boundary or high-risk change, use a fresh
    context/evaluator and record its verdict against the exact changed surface.
-3. **Full matrix once before commit/merge** — run the project's complete matrix
-   once on the final staged candidate. This is release evidence, not an edit tax.
-4. **Real VM run on an immutable candidate** — after the candidate has an exact
-   commit/artifact identity, run the real VM smoke or compatibility proof against
-   that identity. If the candidate changes, the VM proof is invalid and must be
-   repeated.
+3. **Full matrix once at the candidate boundary** — run the project's complete
+   matrix once when the candidate is ready for its commit/merge/release
+   boundary. This is candidate evidence, not a per-commit edit tax.
+4. **Conditional specialized-environment proof** — only when the acceptance
+   criteria or risk actually depends on a VM, GPU, OS/ABI, browser, hardware,
+   performance, stress, or another specialized environment, run that proof
+   against the exact candidate identity. If no such environment is relevant,
+   record `N/A: no specialized compatibility requirement` instead of inventing
+   a VM step. If the candidate changes, all candidate-bound evidence is invalid
+   and must be regenerated, including the full matrix and specialized proof.
 
 The compact form is:
 
 ```text
-focused slice -> independent review -> one full matrix -> immutable candidate VM run
+focused slice -> risk-based review -> one full matrix -> conditional specialized proof
 ```
 
 The Stop hooks enforce the first two boundaries without pretending they are the
 last two. `test-gate-stop-hook.py` runs `fast` for source changes and adds
 `integration` only for high-risk boundaries; it deliberately does not auto-run
-`release`. Its high-risk path requires independent review evidence keyed to the
-changed paths. `harness-load-advisor.py` catches the opposite mistake: a release,
-signing, or long VM gate accidentally blocking a staging smoke, and requires a
-profile split instead of a bypass. A project must expose the full matrix and VM
-commands as explicit release-candidate workflow steps.
+the full/candidate matrix. Its high-risk path requires independent review
+evidence keyed to the changed paths. `harness-load-advisor.py` catches the
+opposite mistake: a costly or specialized gate accidentally blocking a lower-
+risk smoke, and requires a profile split instead of a bypass. A project must
+expose its full matrix and any relevant specialized-environment commands as
+explicit candidate workflow steps.
 
 ## Profile Contract And Overload Feedback
 
@@ -119,12 +126,14 @@ The adopted profile contract is:
 |---|---|
 | `staging-smoke` | fast build, focused regression, one stable smoke or contract path |
 | `security-proof` | hostile tests, trust-boundary proof, fresh-context evaluator |
+| `compatibility-proof` | only the relevant VM/OS/ABI/GPU/browser/hardware proof |
+| `candidate-matrix` | complete project matrix on one immutable candidate |
 | `release-attestation` | exact artifact, signing, Authenticode/tool identity, installer/package proof |
 | `nightly-stress` | race, stress, OS/AV matrix, long-running evaluation |
 
 The `harness-load-advisor.py` Stop hook is deliberately narrow. It fires only
 when the final assistant message reports overload, false positives, or a
-release/signing gate blocking staging smoke. It writes metadata to
+costly/specialized gate blocking a lower-risk smoke. It writes metadata to
 `~/.claude/harness-feedback/events.jsonl` and blocks the close long enough to
 require a user-visible diagnosis. It never disables the named gate.
 
@@ -141,5 +150,5 @@ same boundary mechanical.
   existing Stop gate, test-muting guard, review, and proof-verify workflows.
 - Making an LLM judge the only release oracle: use deterministic tests and
   artifact checks first, then semantic/trajectory scoring for agent behavior.
-- Running full E2E, mutation, load, and security suites after every edit: use
+- Running full E2E, mutation, load, compatibility, and security suites after every edit: use
   risk-based triggers and CI/nightly schedules.

@@ -73,6 +73,19 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             self.assertTrue(event["mentions_release_gate"])
             self.assertTrue(event["mentions_staging_smoke"])
 
+    def test_mis_scoped_compatibility_gate_blocks_staging_close(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="harness-compatibility-") as raw:
+            root = Path(raw)
+            payload, output = run_hook(
+                root,
+                "The GPU compatibility runner is overloaded and blocks the ordinary staging smoke.",
+            )
+            self.assertEqual(payload and payload.get("decision"), "block", output)
+            event = json.loads((root / "feedback" / "events.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(event["profile"], "staging-smoke")
+            self.assertFalse(event["mentions_release_gate"])
+            self.assertTrue(event["mentions_specialized_gate"])
+
     def test_unrelated_release_report_is_silent(self) -> None:
         with tempfile.TemporaryDirectory(prefix="harness-clear-") as raw:
             root = Path(raw)
