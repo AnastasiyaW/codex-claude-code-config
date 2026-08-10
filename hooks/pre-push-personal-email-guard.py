@@ -182,6 +182,22 @@ def self_test():
     # Synthetic fixtures only. Real personal markers are loaded from the
     # private routing file at runtime and must not be copied into this public
     # guard's test corpus.
+    #
+    # This is not a style preference, it is the incident that produced the rule.
+    # The first version of this file (1b4c51f, 2026-08-03) used a real address as
+    # its fixture, so the guard that refuses to publish a personal email published
+    # one -- in its own test. Two days earlier the public-repo scanner had done the
+    # identical thing with host names and blocked its own push. Same shape twice:
+    # a guard carries an example of what it defends against, and the example is the
+    # leak.
+    #
+    # The addresses below end in `.invalid`, which RFC 2606 reserves precisely so a
+    # test can name an address that can never belong to anyone. Reach for that, not
+    # for a real one that happens to be in front of you. Nothing here needs to be a
+    # working address: the check is a pattern match, and a pattern match cannot tell.
+    #
+    # The fixture was corrected quietly inside an unrelated commit, which is why this
+    # comment exists at all -- a fix nobody can find is a fix that gets undone.
     pats = [r"private\.example", r"ACCOUNT_MARKER", r"test\.handle", r"\btestuser\b"]
     cases = [
         ("123456+ACCOUNT_MARKER@users.noreply.github.com", False,
