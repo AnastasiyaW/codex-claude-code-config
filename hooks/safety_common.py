@@ -48,14 +48,33 @@ def read_event() -> dict:
         raw = raw.lstrip("\ufeff")
         return json.loads(raw)
     except (json.JSONDecodeError, OSError) as exc:
-        try:
-            sys.stderr.write(
-                f"[safety_common] event did not parse ({exc.__class__.__name__}: {exc}); "
-                "this hook ran NO checks on it\n"
-            )
-        except OSError:
-            pass
+        _announce_dead_event(exc)
         return {}
+
+
+def _announce_dead_event(exc: BaseException) -> None:
+    """Say, on channels that are actually heard, that this hook checked nothing.
+
+    stderr alone was not enough: on exit 0 the harness surfaces hook output from
+    **stdout JSON**, so a stderr line is written where nobody reads it. That was
+    the first version of this warning, and it would have been a fix that does not
+    fix. `systemMessage` is used rather than `hookSpecificOutput`, because the
+    event did not parse and inventing a `hookEventName` would be a guess.
+    """
+    message = (
+        f"[safety_common] hook {Path(sys.argv[0]).name or 'unknown'} received an event that "
+        f"did not parse ({exc.__class__.__name__}: {exc}). It ran NO checks and exited allow. "
+        "Treat this as an unchecked action, not as a clean pass."
+    )
+    try:
+        sys.stderr.write(message + "\n")
+    except OSError:
+        pass
+    try:
+        print(json.dumps({"systemMessage": message}, ensure_ascii=False))
+    except (OSError, ValueError):
+        pass
+    log("WARN", "safety_common", "unchecked", "event-parse-failure", message)
 
 
 def log(level: str, hook: str, verdict: str, pattern: str, target: str) -> None:
