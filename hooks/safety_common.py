@@ -30,14 +30,31 @@ LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 def read_event() -> dict:
-    """Parse PreToolUse event from stdin. Returns empty dict on failure."""
+    """Parse the hook event from stdin. Returns empty dict on failure.
+
+    Fail-open is deliberate: a malformed event must never wedge a session. But
+    it stays *audible* -- a payload that arrived and did not parse means every
+    check in that hook silently did nothing, which is indistinguishable from
+    "nothing to flag" unless somebody says so. Cost me a false green on
+    2026-08-10: a hand-built test event with mangled Windows path escapes made
+    the transfer guard exit 0 without running a single check, and the run read
+    as proof that the gate passed. Empty stdin stays silent: several hooks are
+    invoked that way on purpose.
+    """
     try:
         raw = sys.stdin.read().strip()
         if not raw:
             return {}
         raw = raw.lstrip("\ufeff")
         return json.loads(raw)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        try:
+            sys.stderr.write(
+                f"[safety_common] event did not parse ({exc.__class__.__name__}: {exc}); "
+                "this hook ran NO checks on it\n"
+            )
+        except OSError:
+            pass
         return {}
 
 

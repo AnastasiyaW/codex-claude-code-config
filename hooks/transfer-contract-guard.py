@@ -327,7 +327,34 @@ def _pre(event: dict[str, Any]) -> None:
     allow()
 
 
+def _stamp_written_contract(event: dict[str, Any]) -> bool:
+    """Give a freshly written contract its owner, before any transfer runs.
+
+    Stamping only at PreToolUse left a gap: a session that writes the record and
+    then works for a while owns nothing on paper, so its in-flight record blocks
+    every sibling session's Stop gate. Hit twice on 2026-08-09/10. The record is
+    created by Write/Edit, so that is where ownership should be established.
+    """
+    if _text(event.get("tool_name")) not in {"Write", "Edit", "MultiEdit"}:
+        return False
+    raw = _text(_tool_input(event).get("file_path"))
+    if not raw:
+        return False
+    path = _contract_path(raw, _event_cwd(event))
+    if path is None or not path.is_file():
+        return False
+    try:
+        contract = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(contract, dict):
+        return False
+    _stamp_owner(path, contract, _event_session(event))
+    return True
+
+
 def _post(event: dict[str, Any]) -> None:
+    _stamp_written_contract(event)
     tool = _text(event.get("tool_name"))
     if tool not in {"Bash", "PowerShell"}:
         allow()
@@ -512,6 +539,29 @@ def _self_test() -> int:
         _stamp_owner(path, json.loads(path.read_text(encoding="utf-8")), "someone-else")
         if json.loads(path.read_text(encoding="utf-8")).get("session_id") != mine:
             fails.append("existing owner was overwritten")
+
+        # Writing a contract must establish ownership, whether or not a transfer
+        # command ever runs -- that gap is what wedged sibling sessions twice.
+        for leftover in transfers.glob("*.json"):
+            leftover.unlink()
+        written = put("written")
+        event = {"tool_name": "Write", "session_id": mine, "cwd": str(repo),
+                 "tool_input": {"file_path": str(written)}}
+        if not _stamp_written_contract(event):
+            fails.append("writing a contract was not recognised as a stamping opportunity")
+        if json.loads(written.read_text(encoding="utf-8")).get("session_id") != mine:
+            fails.append("a contract written by Write was left without an owner")
+        for label, bad_event in (
+            ("a file outside transfers/", {"tool_name": "Write", "session_id": mine,
+                                           "cwd": str(repo),
+                                           "tool_input": {"file_path": str(repo / "notes.json")}}),
+            ("a non-write tool", {"tool_name": "Read", "session_id": mine, "cwd": str(repo),
+                                  "tool_input": {"file_path": str(written)}}),
+            ("no path at all", {"tool_name": "Write", "session_id": mine, "cwd": str(repo),
+                                "tool_input": {}}),
+        ):
+            if _stamp_written_contract(bad_event):
+                fails.append(f"{label} was treated as a contract write")
 
         if _session_alive("no-such-session"):
             fails.append("an unknown session was reported alive")
