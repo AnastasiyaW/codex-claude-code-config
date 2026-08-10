@@ -76,7 +76,36 @@ def _event_session(event: dict[str, Any]) -> str:
         stem = Path(transcript).stem
         if stem and stem not in {".", ".."}:
             return stem
-    return ""
+    # Last resort, and the only one that survives a payload that did not parse:
+    # measured 2026-08-10, the harness exports CLAUDE_CODE_SESSION_ID into every
+    # hook process. Ownership therefore does not depend on the event at all.
+    return _text(os.environ.get("CLAUDE_CODE_SESSION_ID"))
+
+
+def _transcripts_for(session_id: str) -> list[Path]:
+    """Transcript files belonging to this session id.
+
+    A record written by hand may carry a SHORTENED id (`c6b59e27`) while the
+    transcript file is the full uuid (`c6b59e27-b8fb-...jsonl`). An exact glob
+    then finds nothing and a live owner reads as dead, which blocks every other
+    session on a transfer that is legitimately in flight — measured 2026-08-10.
+    So: exact match first, prefix only as a fallback, and only when the prefix
+    is long enough to identify one session rather than act as a wildcard.
+    """
+    exact = list(SESSION_ROOT.glob(f"*/{session_id}.jsonl"))
+    if exact or len(session_id) < 8:
+        return exact
+    return list(SESSION_ROOT.glob(f"*/{session_id}*.jsonl"))
+
+
+def _same_session(a: str, b: str) -> bool:
+    """Same session, tolerating one side being a shortened id."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long_ = sorted((a, b), key=len)
+    return len(short) >= 8 and long_.startswith(short)
 
 
 def _session_alive(session_id: str, now: float | None = None) -> bool:
@@ -89,7 +118,7 @@ def _session_alive(session_id: str, now: float | None = None) -> bool:
         return False
     moment = time.time() if now is None else now
     try:
-        for transcript in SESSION_ROOT.glob(f"*/{session_id}.jsonl"):
+        for transcript in _transcripts_for(session_id):
             try:
                 if moment - transcript.stat().st_mtime <= FOREIGN_LIVE_SECONDS:
                     return True
@@ -103,7 +132,7 @@ def _session_alive(session_id: str, now: float | None = None) -> bool:
 def _foreign_and_live(contract: dict[str, Any], current_session: str) -> str:
     """Owner id when this record belongs to a different, still-live session."""
     owner = _text(contract.get("session_id"))
-    if not owner or owner == current_session:
+    if not owner or _same_session(owner, current_session):
         return ""
     return owner if _session_alive(owner) else ""
 
@@ -570,15 +599,28 @@ def _self_test() -> int:
 
         # The id must survive whichever key this harness uses, including the
         # transcript-filename fallback that Stop events always carry.
-        for label, event, expected in (
-            ("snake_case", {"session_id": mine}, mine),
-            ("camelCase", {"sessionId": mine}, mine),
-            ("transcript fallback", {"transcript_path": f"/x/y/{mine}.jsonl"}, mine),
-            ("nothing usable", {"transcript_path": ""}, ""),
-        ):
-            got = _event_session(event)
-            if got != expected:
-                fails.append(f"session id from {label}: expected {expected!r}, got {got!r}")
+        saved_env = os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+        try:
+            for label, event, expected in (
+                ("snake_case", {"session_id": mine}, mine),
+                ("camelCase", {"sessionId": mine}, mine),
+                ("transcript fallback", {"transcript_path": f"/x/y/{mine}.jsonl"}, mine),
+                ("nothing usable, no env", {"transcript_path": ""}, ""),
+            ):
+                got = _event_session(event)
+                if got != expected:
+                    fails.append(f"session id from {label}: expected {expected!r}, got {got!r}")
+            # The env var is what survives a payload that did not parse, but it
+            # must never outrank an id the event actually carried.
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "env-owner"
+            if _event_session({}) != "env-owner":
+                fails.append("env fallback did not supply the session id for an empty event")
+            if _event_session({"session_id": mine}) != mine:
+                fails.append("env fallback overrode an id present in the event")
+        finally:
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            if saved_env is not None:
+                os.environ["CLAUDE_CODE_SESSION_ID"] = saved_env
 
     for line in fails:
         print("FAIL:", line)

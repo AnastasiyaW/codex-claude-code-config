@@ -53,13 +53,24 @@ def read_event() -> dict:
 
 
 def _announce_dead_event(exc: BaseException) -> None:
-    """Say, on channels that are actually heard, that this hook checked nothing.
+    """Record, durably, that this hook checked nothing.
 
-    stderr alone was not enough: on exit 0 the harness surfaces hook output from
-    **stdout JSON**, so a stderr line is written where nobody reads it. That was
-    the first version of this warning, and it would have been a fix that does not
-    fix. `systemMessage` is used rather than `hookSpecificOutput`, because the
-    event did not parse and inventing a `hookEventName` would be a guess.
+    Measured on this harness 2026-08-10 with four probes through a registered
+    hook, control included:
+
+      hookSpecificOutput + matching hookEventName -> reaches the model
+      hookSpecificOutput + wrong hookEventName    -> dropped
+      systemMessage alone                         -> does NOT reach the model
+      both together                               -> only the first half arrives
+
+    A payload that did not parse cannot tell us its hookEventName, and no
+    environment variable carries it either (checked: the hook process gets
+    CLAUDE_CODE_SESSION_ID and CLAUDE_PROJECT_DIR, nothing about the event). So
+    the one channel the model can hear is unavailable in exactly this case, and
+    saying otherwise would be the same false comfort this warning exists to
+    prevent. What is left is real but passive: a line on stderr for a human at
+    the terminal, `systemMessage` on the chance the UI shows it to the user
+    (unproven, costs nothing), and the durable log, which is verified.
     """
     message = (
         f"[safety_common] hook {Path(sys.argv[0]).name or 'unknown'} received an event that "
