@@ -145,7 +145,7 @@ See [docs/rtk-integration.md](docs/rtk-integration.md) and
 | [keyword-skill-router](hooks/keyword-skill-router.py) | `UserPromptSubmit` | Detects natural-language keywords and suggests matching skills (bilingual RU/EN) |
 | [api-key-leak-detector](hooks/api-key-leak-detector.py) | `PostToolUse` | Scans tool output for exposed API keys, tokens, secrets |
 | [command-injection-guard](hooks/command-injection-guard.py) | `PreToolUse` | Blocks shell substitution with non-trivial commands |
-| [git-destructive-guard](hooks/git-destructive-guard.py) | `PreToolUse` | Blocks `git reset --hard`, `push --force`, `branch -D` |
+| [git-destructive-guard](hooks/git-destructive-guard.py) | `PreToolUse` | Blocks `git reset --hard`, `push --force`, force branch deletion (`-D`, `-fD`, `-Df`, long flags); allows merged-only `branch -d` |
 | [git-auto-backup](hooks/git-auto-backup.py) | `PreToolUse` | Creates backup branch before destructive git operations |
 | [self-harm-guard](hooks/self-harm-guard.py) | `PreToolUse` | Prevents agent from killing its own process, locking SSH, bare reboot |
 | [test-muting-guard](hooks/test-muting-guard.py) | `PreToolUse` | Blocks adding `@skip`, `.only()`, `@Ignore` to existing tests |

@@ -25,7 +25,7 @@ Env vars через inline `FOO=1 cmd` НЕ видны хуку — нужен m
 | Hook (script) | Блокирует | Bypass key | Safe-альтернатива |
 |---|---|---|---|
 | `destructive-command-guard.py` | rm -rf корней, DROP/TRUNCATE, docker system prune, mkfs, dd | destructive | targeted rm; DELETE с узким WHERE; явный список контейнеров |
-| `git-destructive-guard.py` | reset --hard, push --force, branch -D, clean -fdx, checkout -- . | git-destructive | stash + reset --keep; push --force-with-lease; branch -d |
+| `git-destructive-guard.py` | reset --hard, push --force, force branch deletion (`-D`, clustered `-fD`/`-Df`, long flags), clean -fdx, checkout -- . | git-destructive | stash + reset --keep; push --force-with-lease; merged-only `branch -d` |
 | `self-harm-guard.py` | restart sshd (единств. сессия), kill node/bun/python, iptables/ufw DROP, reboot | self-harm | только при наличии второго канала на хост |
 | `test-muting-guard.py` | @pytest.mark.skip/xfail, it.skip, @Disabled, t.Skip | test-muting | чинить тест; skip только с reason + issue-link |
 | `command-injection-guard.py` | `$(...)` / backticks с non-trivial body (Bash) | injection | одинарные кавычки; heredoc `'EOF'`; `--body-file`/stdin |
@@ -117,7 +117,7 @@ allowlist'а серверов: **любой не свой вывод в reason �
 Каждый hook = закон; здесь — что он НЕ покрывает (важно знать предел) + tuning.
 
 - **destructive-command-guard** — `rm -rf /tmp/*` проходит, корни/`$HOME`/`/etc/*` блок (паттерны в `PATTERNS`). НЕ покрывает: деструктив внутри запускаемого скрипта (`./drop.sh`), shell-aliases, `psql -f drop.sql` (файл не виден), Python/Node DB-client API. Сужать regex при false-positive, не отключать категорию.
-- **git-destructive-guard** — safe-альт: `--force-with-lease` (а не `--force`), `branch -d`, `stash`+`reset --keep`. НЕ покрывает: force-push через GitHub Desktop/IDE/lazygit (не через Bash tool), `reflog expire`, interactive-rebase drop. Personal feature-branch → `CLAUDE_ALLOW_GIT_DESTRUCTIVE=1`.
+- **git-destructive-guard** — safe-альт: `--force-with-lease` (а не `--force`), merged-only `branch -d`, `stash`+`reset --keep`. Для подтверждённого разового обхода используй `# claude-bypass: git-destructive`; экспортированный `CLAUDE_ALLOW_GIT_DESTRUCTIVE=1` также работает, но inline `CLAUDE_ALLOW_GIT_DESTRUCTIVE=1 git ...` до sibling-hook не доходит. НЕ покрывает: force-push через GitHub Desktop/IDE/lazygit (не через Bash tool), `reflog expire`, interactive-rebase drop.
 - **self-harm-guard** — тест перед действием: «сломает → есть второй способ зайти на хост?» нет → НЕ делать. НЕ покрывает: `/etc/hosts.deny`, systemd mask через конфиг, NetworkManager/systemd-networkd firewall, BMC/IPMI. Нестандартный SSH-порт = долгое восстановление через rescue.
 - **command-injection-guard** — safe: одинарные кавычки, heredoc `'EOF'`, `--body-file`/stdin. НЕ покрывает: `$(var)` где `$var` malicious, `eval`/`bash -c`/`sh -c`, Python/Node subprocess, SQL-инъекции (нужны prepared statements). Whitelist в `TRIVIAL_CMDS` — НЕ добавлять curl/ssh/docker/kubectl.
 - **test-muting-guard** — legit-skip: с `reason=…#issue`, `skipif` (OS/cond), или **удалить** тест устаревшей фичи. НЕ покрывает: закомментированный файл целиком, mute через CI-config / `.gitignore tests/`. Проект со skip как 1st-class → `CLAUDE_ALLOW_TEST_MUTING=1` + review-требование issue-link.

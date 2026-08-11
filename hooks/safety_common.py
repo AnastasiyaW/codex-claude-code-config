@@ -28,6 +28,15 @@ except (AttributeError, OSError):
 LOG_PATH = Path.home() / ".claude" / "logs" / "safety.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+# Git treats lowercase ``-d`` as a safe merged-branch delete and uppercase
+# ``-D`` as force-delete.  Keep these patterns shared by both Git guards so
+# the distinction and the shell-command boundary cannot drift again.
+GIT_FORCE_BRANCH_DELETE_PATTERNS = (
+    r"\bgit\s+branch\b[^|;&\n\r]*\s(?-i:-\w*D\w*\b)",
+    r"\bgit\s+branch\b[^|;&\n\r]*\s(?-i:--delete(?=\s|$))[^|;&\n\r]*\s(?-i:--force(?=\s|$))",
+    r"\bgit\s+branch\b[^|;&\n\r]*\s(?-i:--force(?=\s|$))[^|;&\n\r]*\s(?-i:--delete(?=\s|$))",
+)
+
 
 def read_event() -> dict:
     """Parse the hook event from stdin. Returns empty dict on failure.

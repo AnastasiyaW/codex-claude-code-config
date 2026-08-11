@@ -9,7 +9,7 @@ skips already-installed hooks.
 Safety-critical hooks installed by default (--safe-defaults):
 
   - destructive-command-guard    PreToolUse    blocks rm -rf, DROP TABLE, etc.
-  - git-destructive-guard        PreToolUse    blocks git reset --hard, push --force
+  - git-destructive-guard        PreToolUse    blocks destructive git history/branch operations
   - git-auto-backup              PreToolUse    creates branch snapshot before rewrites
   - session-drift-validator      SessionStart  reports broken file paths in CLAUDE.md
   - command-injection-guard      PreToolUse    blocks `cmd $(evil)` shell substitution

@@ -2,7 +2,8 @@
 """PreToolUse: block destructive git operations.
 
 Covers: reset --hard, push --force, branch -D, clean -fdx, checkout -- .,
-amend on published commits. Bypass: CLAUDE_ALLOW_GIT_DESTRUCTIVE=1.
+amend on published commits. Bypass: ``# claude-bypass: git-destructive`` in
+the command, or an exported CLAUDE_ALLOW_GIT_DESTRUCTIVE=1 before the session.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from safety_common import (  # noqa: E402
+    GIT_FORCE_BRANCH_DELETE_PATTERNS,
     allow,
     any_match,
     bash_command,
@@ -24,15 +26,7 @@ PATTERNS = [
     r"\bgit\s+reset\s+--hard\b",
     r"\bgit\s+(push\s+)?(-f|--force(?!-with-lease))\b",
     r"\bgit\s+push\s+.*--force(?!-with-lease)",
-    # any_match() runs every pattern with re.IGNORECASE, so a bare -D also
-    # matched the *safe* lowercase -d, which refuses to delete unmerged
-    # branches and is exactly what we recommend instead. Pin the case locally
-    # with (?-i:...) rather than dropping IGNORECASE globally — other guards
-    # rely on it for things like DROP TABLE.
-    r"\bgit\s+branch\s+(?-i:-D)\b",
-    # --delete --force is the same operation spelled out, in either order.
-    r"\bgit\s+branch\s+.*--delete\b.*--force\b",
-    r"\bgit\s+branch\s+.*--force\b.*--delete\b",
+    *GIT_FORCE_BRANCH_DELETE_PATTERNS,
     r"\bgit\s+clean\s+-[fdxX]{2,}",
     r"\bgit\s+clean\s+-[fdx]\s+-[fdx]",
     r"\bgit\s+checkout\s+--\s+\.",
@@ -70,11 +64,13 @@ def main() -> None:
         "Перед выполнением:\n"
         "  1) подтверди у пользователя\n"
         "  2) сделай fresh backup branch: git branch backup-$(date +%s)\n"
-        "  3) запусти с CLAUDE_ALLOW_GIT_DESTRUCTIVE=1\n"
+        "  3) для разового обхода добавь в команду: # claude-bypass: git-destructive\n"
+        "     Inline CLAUDE_ALLOW_GIT_DESTRUCTIVE=1 перед командой хуку не передаётся;\n"
+        "     экспортируй переменную до запуска Claude, если нужен env-обход.\n"
         "Безопасные альтернативы:\n"
         "  reset --hard → reset --keep, или stash && reset\n"
         "  push --force → push --force-with-lease\n"
-        "  branch -D → merge/rebase + delete merged\n"
+        "  branch -D → merge/rebase + git branch -d <merged-branch>\n"
         "  clean -fdx → проверить git status && targeted rm"
     )
 
