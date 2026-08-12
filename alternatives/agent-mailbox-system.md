@@ -1,6 +1,6 @@
 ---
 related_principles: [19]
-last_reviewed: 2026-07-22
+last_reviewed: 2026-08-12
 ---
 
 # Agent Mailbox System: File-based Inter-Agent Communication
@@ -51,9 +51,9 @@ For remote agents: use git push + hooks, or SMB over Tailscale/VPN.
 ```json
 {
   "hooks": {
-    "SessionStart": [{"hook_command": "python .claude/scripts/check_mail.py"}],
-    "UserPromptSubmit": [{"hook_command": "python .claude/scripts/check_mail.py"}],
-    "PreToolUse": [{"hook_command": "python .claude/scripts/check_mail_throttled.py"}]
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python .claude/scripts/check_mail.py"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python .claude/scripts/check_mail.py"}]}],
+    "PreToolUse": [{"matcher": "Bash|PowerShell", "hooks": [{"type": "command", "command": "python .claude/scripts/check_mail_throttled.py"}]}]
   }
 }
 ```
@@ -218,8 +218,9 @@ Inboxes accumulate. A healthy mailbox needs periodic cleanup:
 find .claude/mailbox -path "*/inbox/*" -name "*.md" -mtime +14 \
   -exec bash -c 'mv "$0" "${0/\/inbox\//\/archive\/}"' {} \;
 
-# Delete receipts older than 30 days (they served their purpose)
-find .claude/mailbox -path "*/receipts/*" -name "*.md" -mtime +30 -delete
+# Archive receipts older than 30 days after reviewing the retention policy
+find .claude/mailbox -path "*/receipts/*" -name "*.md" -mtime +30 \
+  -exec bash -c 'mkdir -p "$(dirname "$0")/../archive" && mv "$0" "$(dirname "$0")/../archive/"' {} \;
 ```
 
 Run weekly as a scheduled task or before session-end. Sent folders should also be rotated periodically.

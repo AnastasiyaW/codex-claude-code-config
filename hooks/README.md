@@ -39,6 +39,22 @@ without opening transcripts:
 python scripts/harness_feedback_report.py
 ```
 
+## Lifecycle Map
+
+Install only the stages that solve a real project risk. The scripts are not one
+mandatory preset.
+
+| Stage | Typical handlers | What stays out of the hook path |
+|---|---|---|
+| `UserPromptSubmit` | `keyword-skill-router.py`, `open-items-are-work-orders.py` | Full history scans and index rebuilds |
+| `SessionStart` | handoff, continuity, docs, and feedback checks | Reconstructing a whole past conversation |
+| `PreToolUse` | safety, dependency, transfer, and scope guards | Broad best-effort review unrelated to the tool |
+| `PostToolUse` | deletion/transfer proof and advisories | Declaring a result complete without observing it |
+| `PreCompact` / `Stop` | handoff, test, tracked-work, and closure gates | Auto-inventing a trustworthy handoff |
+
+See [runtime-wiring.md](../docs/runtime-wiring.md#hook-lifecycle-and-continuity)
+for the full cross-client lifecycle, durable-state pattern, and proof boundary.
+
 ## What Is Enforced
 
 | Concern | Primary scripts | Event |

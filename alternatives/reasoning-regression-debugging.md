@@ -1,6 +1,6 @@
 ---
 related_principles: [02, 03, 04, 11]
-last_reviewed: 2026-07-22
+last_reviewed: 2026-08-12
 ---
 
 # Reasoning Regression Debugging - detecting and mitigating quality degradation
@@ -26,65 +26,44 @@ The model feels dumber, but you can't prove it. You can't tell if it's a vendor-
 
 | Approach | Setup cost | Detection lag | False positives | Actionable | Best for |
 |---|---|---|---|---|---|
-| **A: Config reset** (env vars + settings.json) | 2 min | Instant | Low | Yes (one-shot) | Known vendor regressions with published fix |
+| **A: Configuration isolation** | 5 min | Instant | Low | Yes (one-shot) | Testing a documented setting change without polluting the baseline |
 | **B: Stop-phrase guard hook** | 20 min | Real-time | Medium | Yes (blocks session end) | Catching behavioral tells per-session |
 | **C: Metric monitoring** (Read:Edit ratio from JSONLs) | 1 hour | Weekly | Low | No (diagnostic only) | Longitudinal health tracking |
 | **D: Fresh-session A/B** | 5 min per test | Instant | High | Yes (manual) | One-off "is it me or the model?" check |
 | **E: Comparison against fixed baseline** (Proof Loop) | Existing | Continuous | None | Yes (blocks completion) | Production workflows where regression is unacceptable |
 
-All five compose. Config reset (A) is the first response. Stop-phrase guard (B) and Metric monitoring (C) run continuously. Fresh-session A/B (D) confirms hypotheses. Proof Loop (E) is the ultimate backstop - it makes output quality independent of model regression.
+All five compose. Configuration isolation (A) is the first response. Stop-phrase guard (B) and Metric monitoring (C) run continuously. Fresh-session A/B (D) confirms hypotheses. Proof Loop (E) is the ultimate backstop - it makes output quality independent of model regression.
 
 ---
 
-## A: Config reset (first response)
+## A: Configuration Isolation (first response)
 
-When a vendor-side regression is suspected, force the agent into known-good reasoning mode.
+When a vendor-side regression is suspected, first isolate one documented,
+reversible setting change. Record the client version, current configuration, test
+task, and result; do not paste unverified environment variables from old posts.
 
-### Environment variables
-
-```bash
-# Disable adaptive thinking - back to a fixed budget
-export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1
-
-# Raise the fixed thinking budget explicitly
-export MAX_THINKING_TOKENS=32000
-
-# Force a smaller working window (counters context dilution)
-export CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000
-
-# Simplified mode - strips extra system-prompt heuristics (isolation test)
-export CLAUDE_CODE_SIMPLE=1
-```
-
-### settings.json (project or global)
+Current Claude Code supports persisted `effortLevel` values `low`, `medium`,
+`high`, and `xhigh`, and a documented `autoCompactWindow` of 100,000 to
+1,000,000 tokens. For example, a bounded comparison may use:
 
 ```json
 {
   "effortLevel": "high",
-  "showThinkingSummaries": true,
-  "disableAdaptiveThinking": true
+  "autoCompactWindow": 500000
 }
 ```
 
-### Per-task overrides
-
-- `/effort high` or `/effort max` - raise max thinking budget for the current task
-- `ULTRATHINK` keyword anywhere in the prompt - forces max-effort on that single turn
-- `/effort medium` is the current default (85/100) as of Mar 3, 2026 - explicitly too low for architecture/debugging work
-
-### Effort scale reference
-
-| Level | Numeric | When |
-|---|---|---|
-| low | ~30 | trivial edits, one-file scripts |
-| medium | 85 | **current default**, OK for routine code |
-| high | ~95 | multi-file refactors, debugging |
-| max | 100 | architecture decisions, security audits, anything with >2 valid approaches |
+Use `/effort` or `/autocompact` for a reversible experiment where available,
+then compare the same fixed task in a fresh session. Confirm supported values in
+the [current Claude Code settings reference](https://code.claude.com/docs/en/settings)
+before changing a shared configuration.
 
 ### Trade-offs
 
-- **Pros:** cheapest intervention, reversible, takes 2 minutes
-- **Cons:** env vars and settings can vary across machines/teams → silent drift. Treat known-good config as tracked repo artifact, not tribal knowledge. Version-control your `settings.json`.
+- **Pros:** reversible and attributable: one documented configuration variable
+  changes in a controlled comparison.
+- **Cons:** settings can vary across machines and teams → silent drift. Record
+  the effective non-secret configuration and client version with the result.
 
 ---
 

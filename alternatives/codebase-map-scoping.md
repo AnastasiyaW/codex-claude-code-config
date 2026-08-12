@@ -1,6 +1,6 @@
 ---
 related_principles: [4, 7, 11]
-last_reviewed: 2026-06-24
+last_reviewed: 2026-08-12
 ---
 
 # Codebase Map Scoping

@@ -1,6 +1,6 @@
 ---
 related_principles: [16, 18]
-last_reviewed: 2026-07-22
+last_reviewed: 2026-08-12
 ---
 
 # Session Handoff: Seamless Transitions Between Sessions
@@ -58,10 +58,8 @@ What we're building/fixing and why.
 - Chose PostgreSQL over SQLite because [reason]
 - Using strategy pattern for [component] because [reason]
 
-## Next Steps
-1. [Most important thing to do first]
-2. [Second priority]
-3. [If time allows]
+## One Next Step
+[The exact first action that safely resumes this work]
 ```
 
 **Commands (from claude-handoff plugin):**
@@ -118,60 +116,43 @@ users, the trigger phrase handles deliberate session closure.
 
 **Source:** [GitHub Issue #11455](https://github.com/anthropics/claude-code/issues/11455), community patterns
 
-**Core idea:** A hook on the `Stop` event automatically generates HANDOFF.md. On session start, a `.claude/rules/` file tells Claude to check for it. Zero manual effort.
+**Core idea:** A hook on the `Stop` event can remind or gate session closure, but it cannot invent a trustworthy handoff. The handoff content is written before `Stop`; a `PreCompact` checkpoint covers the same risk before context is condensed.
 
 **Implementation:**
 
-Step 1 -- Create the hook script:
-```bash
-#!/bin/bash
-# .claude/scripts/write-handoff.sh
-# Called automatically on session Stop
-
-cat > .claude/HANDOFF.md << 'TEMPLATE'
-# Auto-Handoff (update me)
-Generated at: $(date -Iseconds)
-
-## Session Summary
-[Claude fills this in via the Stop hook prompt]
-
-## State
-[What's working, what's broken]
-
-## Next Steps
-[What to do next]
-TEMPLATE
-```
-
-Step 2 -- Configure the hook in settings.json:
+Step 1 -- configure a current-format reminder hook in `settings.json`:
 ```json
 {
   "hooks": {
     "Stop": [
       {
-        "type": "command",
-        "command": "echo 'Handoff reminder: consider writing .claude/HANDOFF.md'"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Handoff reminder: write a fresh .claude/HANDOFF.md before closing'"
+          }
+        ]
       }
     ]
   }
 }
 ```
 
-Step 3 -- Add a rule for session start (`.claude/rules/session-start.md`):
+Step 2 -- add a rule for session start (`.claude/rules/session-start.md`):
 ```markdown
 # Session Continuity
 
 At the start of every session, check if `.claude/HANDOFF.md` exists.
 If it does:
 1. Read it silently
-2. Briefly tell the user what the last session was about
-3. Ask if they want to continue from there or start fresh
+2. Briefly state the unfinished work and evidence boundary
+3. Continue from the one next step unless the user explicitly redirects
 
 After incorporating the handoff, archive it:
 - Move to `.claude/handoff-history/YYYY-MM-DD-HHMM.md`
 ```
 
-**Important limitation:** The `Stop` event hook runs a shell command, not a prompt. It cannot ask Claude to summarize the session. The hook can only remind/trigger -- the actual handoff writing must be done before the Stop event (via a prompt-based approach or a skill that writes the file).
+**Important limitation:** The `Stop` event hook runs a shell command, not a prompt. It cannot ask Claude to summarize the session. The hook can only remind or enforce a pre-existing condition -- the actual handoff writing must happen before `Stop` (via a rule, prompt-based hook, or skill). Pair it with `PreCompact` when context compaction is enabled. See [runtime wiring](../docs/runtime-wiring.md#hook-lifecycle-and-continuity).
 
 **Practical variant -- prompt-based reminder:**
 
@@ -180,7 +161,7 @@ Instead of generating content in the hook, use a `.claude/rules/` file:
 # Session Handoff Rule
 
 Before ending any session longer than 15 minutes:
-1. Write `.claude/HANDOFF.md` with: what was done, what failed, current state, next steps
+1. Write `.claude/HANDOFF.md` with: goal, what was done, what failed, current state, key decisions, and one next step
 2. Keep it under 1500 tokens
 3. Include actual error messages, not descriptions
 ```

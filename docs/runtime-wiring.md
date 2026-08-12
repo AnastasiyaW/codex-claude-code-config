@@ -49,6 +49,48 @@ Codex's current plugin loader accepts only a top-level `hooks` object in cached
 plugin hook files. `repair_codex_plugin_hook_schema.py --fix` safely removes the
 otherwise harmless Claude-compatible `description` field and preserves a backup.
 
+## Hook Lifecycle And Continuity
+
+The contract table names which runtime proves each concern. This map names when
+the work happens. Hooks in the synchronous agent path capture a small event or
+check one focused invariant; full archive sync, search indexing, embedding, and
+research enrichment run outside that path.
+
+```mermaid
+flowchart LR
+    U["User request"] --> P["UserPromptSubmit\nroute and capture"]
+    S["SessionStart\nrestore current state"] --> P
+    P --> W["Agent work"]
+    W --> T["PreToolUse\nprevent unsafe action"]
+    T --> X["Tool execution"]
+    X --> O["PostToolUse\nverify the effect"]
+    W --> C["PreCompact\nwrite checkpoint"]
+    W --> E["Stop\nclose only with proof"]
+    P --> I["Optional append-only inbox"]
+    I --> L["Single writer\nledger and read views"]
+    L --> S
+```
+
+| Lifecycle stage | Responsibility | Boundary |
+|---|---|---|
+| `UserPromptSubmit` | Route high-confidence skills, surface an open work order, or record a small request event. | Never scan a transcript archive or build an index synchronously. |
+| `SessionStart` | Validate configuration and show the current handoff, continuation contract, or open work. | Read durable state; do not infer completion from a prior chat response. |
+| `PreToolUse` | Deny unsafe operations or require the proof/contract that the script owns. | Match narrowly; a script must not silently approve unrelated work. |
+| `PostToolUse` | Verify an observable consequence, or emit an advisory signal. | A command's exit text alone is not proof that deletion, transfer, or launch succeeded. |
+| `PreCompact` | Preserve a compact checkpoint before context is condensed. | A fallback draft is evidence of risk, not a substitute for a reviewed handoff. |
+| `Stop` | Enforce handoff, test, and tracked-work closure conditions. | A completion claim needs durable evidence; an unresolved item needs an explicit recorded status. |
+
+For a long-running, multi-session project, record request and status changes as
+append-only events. A single writer can turn them into a canonical ledger and
+small read views such as active tasks. This avoids concurrent sessions corrupting
+a shared JSON/Markdown state file. Keep raw transcripts, credentials, and
+operational research in the private archive; the public repository documents
+only the pattern and the shareable handlers.
+
+Other clients can use the same lifecycle stages, but must map them to their own
+native events and permission model. Do not copy Claude Code event names into a
+different client without running the runtime wiring tests.
+
 ## Skill routing layers
 
 There are two deliberately separate routing layers:
