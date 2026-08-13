@@ -1,5 +1,8 @@
 # Proven Stage Contracts
 
+For the rationale, scope boundary, and a walkthrough of the model, see
+[A Passing Test Is Not a Release](../../../../docs/a-passing-test-is-not-a-release.md).
+
 Use this pattern when proof from one stage becomes an input to another: a module
 must be accepted before packaging, an artifact before integration, or a local
 candidate before a VM, signer, account, or production-like environment can use it.

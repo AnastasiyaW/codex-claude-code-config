@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-13T18:55:37+00:00",
+  "generated_at": "2026-08-13T22:26:32+00:00",
   "skill_count": 49,
-  "aggregate_hash": "sha256:50478d9973de92fef745b1286377b10f42c1d336f0754b9d4516cf22b32d16c6",
+  "aggregate_hash": "sha256:bf12fa4915d74856c0bfd7fd7e30e7a87d4615941dfab46e1ac1a05897fb60cd",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:9737ec747c5409c33f0e1eed31092010260cb857a39fcfdb0f64bff40c45f659",
@@ -302,14 +302,13 @@
       ]
     },
     "development/proof-verify": {
-      "content_hash": "sha256:7e6a024752c216d310cf10007f92981bd15fda4a4d6a9ec3b0da1d58ca989676",
-      "size_bytes": 35847,
-      "file_count": 5,
+      "content_hash": "sha256:9b0c2fa8cbf354490d515b9d06128256120c67372c84ee289a67e575f06fad3f",
+      "size_bytes": 24825,
+      "file_count": 4,
       "files": [
         "SKILL.md",
         "references/kb-aware-verification.md",
         "references/proven-stage-contracts.md",
-        "scripts/__pycache__/validate_stage_ledger.cpython-314.pyc",
         "scripts/validate_stage_ledger.py"
       ]
     },
