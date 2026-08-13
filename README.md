@@ -186,7 +186,7 @@ See [docs/rtk-integration.md](docs/rtk-integration.md) and
 | [test-gate-stop-hook](hooks/test-gate-stop-hook.py) | `Stop` | Selects fast/integration evidence by Git-visible risk and blocks closing while selected tests are red or unproven |
 | [problems-md-validator](hooks/problems-md-validator.py) | `Stop` | Blocks closing with OPEN problems lacking a valid deferral reason |
 | [task-inbox-show](hooks/task-inbox-show.py) | `SessionStart` | Surfaces pending tasks from `.claude/task-inbox/` |
-| [plan-gate](hooks/plan-gate.py) | `UserPromptSubmit` | Non-blocking nudge: substantive build/refactor ask + no plan artifact in the project -> one-line "freeze acceptance criteria first" reminder (max once/day) |
+| [plan-gate](hooks/plan-gate.py) | `UserPromptSubmit` | Non-blocking nudge: substantive build/refactor with no concrete plan -> freeze acceptance criteria; multi-stage/release work without `.proof/stage-ledger.json` also gets a separate once/day reminder to seal accepted inputs and record external blockers |
 
 **Supporting hooks and shared utilities** (wire these when the project needs the corresponding workflow):
 

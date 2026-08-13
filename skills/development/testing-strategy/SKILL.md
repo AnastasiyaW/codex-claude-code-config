@@ -24,6 +24,10 @@ Use `harness-feedback` when a gate is reported as overloaded or misplaced.
    the acceptance criteria explicitly require that evidence.
 8. For high-risk or long-horizon work, use a fresh-context verifier and store
    the command, revision, result, and skipped checks in a durable artifact.
+9. When a verified stage becomes the input to another stage, seal that boundary
+   with commit/tree, contract, input/output digests, and a fresh verdict. Mark an
+   unavailable external prerequisite as `BLOCKED`; do not rerun unrelated accepted
+   code merely because the following environment is unavailable.
 
 ## Compact Matrix
 
@@ -94,6 +98,8 @@ context must produce the final verdict. For a safe structural refactor use
 - Do not use retries, sleeps, snapshots, or `skip/xfail` to make red tests look
   green. A flaky test needs a cause, a bounded quarantine reason, or a fix.
 - Do not claim release readiness from a fast suite alone.
+- Do not treat a new external blocker as a failed upstream candidate. Verify the
+  stage that changed; promote the same sealed input when the prerequisite arrives.
 
 ## Gotchas
 
@@ -121,3 +127,4 @@ context must produce the final verdict. For a safe structural refactor use
 | Generated test passes without exposing the bug | Test asserts implementation details or never goes red | Reproduce the pre-fix failure and assert the user-visible invariant |
 | Agent claims completion with skipped checks | Missing evidence contract or verifier | Record the skip reason and run `proof-verify` for high-risk work |
 | Agent says the harness is too strict or blocks smoke | Profiles are coupled or a gate is misplaced | Invoke `harness-feedback`; capture the blocker, split profiles, and rerun the reduced smoke |
+| A later audit asks to repeat a green earlier stage | Proof identity was not recorded, or its source/input changed | Check the stage receipt; reuse a sealed matching receipt or record a superseding stage |

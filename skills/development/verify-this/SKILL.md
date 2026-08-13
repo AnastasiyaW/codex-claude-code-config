@@ -28,6 +28,7 @@ Record:
 
 - claim and threshold;
 - revision or baseline identity for both runs;
+- frozen contract and stage identity when this result will feed later work;
 - exact commands and input fixture;
 - environment differences and skipped checks;
 - artifact paths or hashes, with sensitive payloads kept outside public Git;
@@ -63,6 +64,10 @@ Reasoning:
 
 - Use `proof-verify` when the work has frozen multi-criterion acceptance
   criteria and needs a fresh-context verifier.
+- When the claim becomes an input to another stage, seal it in
+  `.proof/stage-ledger.json` with the exact commit/tree and input/output digests.
+  A changed contract, source, or input invalidates that claim; an unavailable
+  later environment does not.
 - Use `bug-reproducer` when a concrete defect needs a minimal red-to-green test
   and separate approval gates.
 - Use `testing-strategy` to choose test levels before running this comparison.

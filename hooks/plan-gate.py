@@ -2,9 +2,11 @@
 """UserPromptSubmit hook: gentle plan/spec-freeze reminder for substantive work.
 
 Non-blocking. When the user's message asks for a substantive build/feature/refactor
-AND the current project has NO plan artifact (PLAN.md / SPEC / feature_list.json /
-docs/ / .claude/), emit a ONE-LINE suggestion to freeze acceptance criteria first
-(Sprint Contract / Proof Loop, principles 01-02). Fires at most once per project per day.
+AND the current project has no concrete plan artifact, emit a one-line suggestion to
+freeze acceptance criteria first (Sprint Contract / Proof Loop, principles 01-02).
+For multi-stage/release/external-prerequisite work without a stage ledger, emit a
+separate reminder to seal prior stages before downstream work. Each fires at most
+once per project per day.
 
 Rationale: CLAUDE.md richly describes plan-validate-execute, but nothing nudges it.
 This is a nudge, not a gate — it never blocks, never forces. Companion to the
@@ -32,8 +34,14 @@ BUILD_PATTERNS = [
     r"\b(новый проект|new project|с нуля|from scratch|greenfield)\b",
 ]
 
-PLAN_ARTIFACTS = ["PLAN.md", "TODO.md", "feature_list.json", "docs", ".claude"]
+STAGE_PATTERNS = [
+    r"\b(release|релиз|stage|staged|phase|фаз\w*|pipeline|конвейер|promot\w*|продвиж\w*)\b",
+    r"\b(signer|подпис\w*|cms|msvc|staging|production|prod|внешн\w* зависим\w*|external (?:dependency|service)|инфраструктур\w*)\b",
+]
+
+PLAN_ARTIFACTS = ["PLAN.md", "TODO.md", "feature_list.json"]
 SPEC_GLOBS = ["PLAN*.md", "SPEC*.md", "*.spec.md", "DESIGN.md", "RFC*.md"]
+STAGE_LEDGER = Path(".proof") / "stage-ledger.json"
 
 
 def has_plan_artifact(cwd: Path) -> bool:
@@ -46,9 +54,9 @@ def has_plan_artifact(cwd: Path) -> bool:
     return False
 
 
-def already_reminded_today(cwd: Path) -> bool:
+def already_reminded_today(cwd: Path, kind: str) -> bool:
     key = hashlib.sha1(str(cwd).encode("utf-8", "ignore")).hexdigest()[:12]
-    marker = Path(os.environ.get("TEMP", "/tmp")) / f".plan-gate-{key}"
+    marker = Path(os.environ.get("TEMP", "/tmp")) / f".plan-gate-{kind}-{key}"
     if marker.exists() and (time.time() - marker.stat().st_mtime) < 86400:
         return True
     try:
@@ -73,13 +81,23 @@ def main() -> int:
         return 0
 
     cwd = Path.cwd()
+    if any(re.search(p, prompt, re.IGNORECASE) for p in STAGE_PATTERNS) and not (cwd / STAGE_LEDGER).is_file():
+        if already_reminded_today(cwd, "stage"):
+            return 0
+        print(
+            "[plan-gate] Multi-stage work has no .proof/stage-ledger.json. Before downstream edits, "
+            "freeze the stage contract and seal accepted inputs with commit/tree, input/output hashes, "
+            "and a fresh verdict. Record unavailable external prerequisites as BLOCKED. Non-blocking; shown once/day."
+        )
+        return 0
+
     if has_plan_artifact(cwd):
         return 0
-    if already_reminded_today(cwd):
+    if already_reminded_today(cwd, "plan"):
         return 0
 
     print(
-        "💡 [plan-gate] Substantive build with no PLAN.md / SPEC / feature_list.json in "
+        "[plan-gate] Substantive build with no PLAN.md / SPEC / feature_list.json in "
         f"'{cwd.name}'. Consider freezing acceptance criteria first (Sprint Contract / "
         "Proof Loop, principles 01-02) before mass edits. Non-blocking; shown once/day."
     )

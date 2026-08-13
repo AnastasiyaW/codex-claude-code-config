@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-04T22:36:13+00:00",
+  "generated_at": "2026-08-13T18:55:37+00:00",
   "skill_count": 49,
-  "aggregate_hash": "sha256:f3504551025bbd37600f8aab906ab177d5aa61329cf7ea58ec72dad64bcd3095",
+  "aggregate_hash": "sha256:50478d9973de92fef745b1286377b10f42c1d336f0754b9d4516cf22b32d16c6",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:9737ec747c5409c33f0e1eed31092010260cb857a39fcfdb0f64bff40c45f659",
@@ -196,8 +196,8 @@
       ]
     },
     "development/architecture-first": {
-      "content_hash": "sha256:961af5e1f58742f45fc33c3eb058a09693c0bfc324fb4a7ac7b2237d71f80299",
-      "size_bytes": 339517,
+      "content_hash": "sha256:37649bb37e9ab8847e86a032eec95e67d702354ffdaf66d0f7094a4bb4be121b",
+      "size_bytes": 340881,
       "file_count": 13,
       "files": [
         "SKILL.md",
@@ -302,12 +302,15 @@
       ]
     },
     "development/proof-verify": {
-      "content_hash": "sha256:3eb9ed403436dfe54958bfc4195be293c71fe1ba25cbbe2c59362e551da35046",
-      "size_bytes": 10312,
-      "file_count": 2,
+      "content_hash": "sha256:7e6a024752c216d310cf10007f92981bd15fda4a4d6a9ec3b0da1d58ca989676",
+      "size_bytes": 35847,
+      "file_count": 5,
       "files": [
         "SKILL.md",
-        "references/kb-aware-verification.md"
+        "references/kb-aware-verification.md",
+        "references/proven-stage-contracts.md",
+        "scripts/__pycache__/validate_stage_ledger.cpython-314.pyc",
+        "scripts/validate_stage_ledger.py"
       ]
     },
     "development/refactoring-safely": {
@@ -358,8 +361,8 @@
       ]
     },
     "development/testing-strategy": {
-      "content_hash": "sha256:3ef246f6ba3f6a1023520a144be85146d9ef1b1bba9f9562d46109345b9d7968",
-      "size_bytes": 7386,
+      "content_hash": "sha256:a7f366d4a5adfefffe83fa0fad680fa5e9f8004b6304b0375ca9d70f9092fff1",
+      "size_bytes": 8067,
       "file_count": 1,
       "files": [
         "SKILL.md"
@@ -374,8 +377,8 @@
       ]
     },
     "development/verify-this": {
-      "content_hash": "sha256:4814c3f00a784f532ca00f8075a6ae68e2fb2372c096042b5823ab9c176809e1",
-      "size_bytes": 4369,
+      "content_hash": "sha256:6a15f68eec33d4cbc0fd81030c0e84567e93bbe6ff989bbc694fdd9352be4743",
+      "size_bytes": 4698,
       "file_count": 1,
       "files": [
         "SKILL.md"

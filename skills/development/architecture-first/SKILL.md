@@ -34,6 +34,7 @@ Match the ceremony to the problem. Over-applying this is its own failure mode.
 | One module, <500 lines, one reason to change | Name the module and its one job. Stop. |
 | Service / site / API, several concerns | The full pre-code checklist below. |
 | Multiple teams or deployables, shared domain | Checklist + bounded-context map + one ADR per boundary |
+| Multi-stage work or external release prerequisite | Checklist + a small stage map before the first implementation boundary |
 
 ## The one law
 
@@ -67,6 +68,28 @@ and no framework?* If not, something outer leaked inward.
 7. **Record it.** One page: modules, ownership, data flow, external systems. Plus one
    short ADR per decision that was genuinely a choice (context, options, decision,
    consequences). Both live in git, next to the code.
+8. **Name the promotion boundaries.** When one verified result becomes the input to
+   another stage, name its contract, inputs, output, and invalidation keys before
+   implementation. A missing signer, VM, account, or remote service is a future
+   `BLOCKED` stage, not a reason to keep reopening already-proven code.
+
+## Stage contracts - when proof becomes an input
+
+For multi-stage work, architecture includes delivery boundaries as well as module
+boundaries. Keep these states separate:
+
+- `VERIFIED`: the scoped behavior passed at one exact revision.
+- `SEALED`: the verified scope has an immutable receipt and may be consumed by a
+  following stage.
+- `BLOCKED`: a named external prerequisite is absent; upstream proof remains valid.
+- `SUPERSEDED`: a contract, source, or input digest changed, so a successor must be
+  verified instead of editing history.
+
+The stage map is deliberately smaller than a release plan. For each boundary, name
+the owning scope, frozen contract, inputs, output, and what invalidates it. Use the
+machine-readable ledger only when there is a real hand-off between stages:
+`../proof-verify/references/proven-stage-contracts.md`. Do not add it to a one-file
+change merely because the word "stage" exists.
 
 ## Review checklist — once code exists
 
