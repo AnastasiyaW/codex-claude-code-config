@@ -84,7 +84,7 @@ artifact, не слова). Прямое следствие «Quality of Solutio
 дыры. Если её кодовая область действительно изменилась, явно отмечаем
 инвалидацию и проверяем новый кандидат. Для многоступенчатой работы используем
 `.proof/stage-ledger.json` и
-`proof-verify/scripts/validate_stage_ledger.py`; для docs-only, одной локальной
+`~/.claude/skills/proof-verify/scripts/validate_stage_ledger.py`; для docs-only, одной локальной
 функции и одношагового эксперимента ledger не создаём.
 
 ## Интенсив по запросу
