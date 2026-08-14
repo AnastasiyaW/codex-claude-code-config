@@ -53,8 +53,8 @@ python ~/claude-code-config/scripts/install_hooks.py --global
 mkdir -p ~/.claude/skills
 cp -r ~/claude-code-config/skills/ai-ml/ml-research-lab ~/.claude/skills/
 
-# Codex desktop: sync all public skills with backups for changed local copies
-python ~/claude-code-config/scripts/sync_skills_to_codex.py --apply
+# Codex desktop and Claude Code: sync all public skills with backups for changed local copies
+python ~/claude-code-config/scripts/sync_skills_to_codex.py --apply --also-claude
 ```
 
 `~/.claude/hooks/` stores the hook scripts; `~/.claude/settings.json` is where they are registered. The install script merges safe defaults into your existing settings.
@@ -163,6 +163,7 @@ See [docs/rtk-integration.md](docs/rtk-integration.md) and
 | [pre-push-public-repo-scan](hooks/pre-push-public-repo-scan.py) | git `pre-push` | Two independent scans — regex and semantic — of a push to a PUBLIC repo; either one alarming blocks it. Private repos skip. Host and script names load from a local list, never from this file |
 | [shape_common](hooks/shape_common.py) | *(library)* | Not a hook: the one definition of "what shape is this file in", shared by `module-shape-advisor` and `scripts/architecture_audit.py` so the two cannot answer differently |
 | [harness-load-advisor](hooks/harness-load-advisor.py) | `Stop` | Notices when a closing message reports a high-cost or specialized gate (signing, VM/GPU/OS/browser/performance) blocking lower-risk work, and says so. A feedback guard, not a bypass — it never lifts the gate |
+| [outward-claim-evidence-guard](hooks/outward-claim-evidence-guard.py) | `Stop` | Blocks a narrow set of externally measurable claims (hash, filename-derived hash, size, version, deploy) when the final report lacks a probe/result line. It enforces reporting discipline, not truth by itself. |
 | [repeated-attempt-guard](hooks/repeated-attempt-guard.py) | `PreToolUse` + `PostToolUse` | Stops the guess-and-retry loop: advisory on the third failed attempt at the same target, blocking on the fourth, unless something has been read since the last failure. One `Read` clears it — the block is lifted by the action that would have solved it three attempts earlier. Needs **both** events: `PostToolUse` records outcomes, `PreToolUse` decides |
 | [launch-watch-guard](hooks/launch-watch-guard.py) | `PostToolUse` + `Stop` | Starting a job is a promise to look at it. Records every launch (`nohup`, detached `docker run`, `sbatch`, `schtasks`, `run_in_background`) and refuses to end the session while one has never been probed — a job that died in its first second looks exactly like one running quietly. One `nvidia-smi`, `docker ps` or `tail` of its log clears it. Measured: 2,958 launches over 30 days, 42 never probed at all, across 28 of 175 sessions |
 | [open-items-are-work-orders](hooks/open-items-are-work-orders.py) | `UserPromptSubmit` | "What is still open?" is a work order, not a status request. Answers the question with the actual open `PROBLEMS.md` entries — oldest first, ages attached, dominant label called out — and states that they get closed in this turn rather than restated. Fires on 0.06% of real messages (context only, never blocks) |

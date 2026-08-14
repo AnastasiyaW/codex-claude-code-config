@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-13T22:26:32+00:00",
-  "skill_count": 49,
-  "aggregate_hash": "sha256:bf12fa4915d74856c0bfd7fd7e30e7a87d4615941dfab46e1ac1a05897fb60cd",
+  "generated_at": "2026-08-14T10:47:32+00:00",
+  "skill_count": 50,
+  "aggregate_hash": "sha256:414a1d5fde76b023fc97d13b92b1f576596af8446a12e4227519b952cdeadb8c",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:9737ec747c5409c33f0e1eed31092010260cb857a39fcfdb0f64bff40c45f659",
@@ -439,6 +439,16 @@
       "files": [
         "SKILL.md",
         "references/CONTINUITY.example.json"
+      ]
+    },
+    "operational/deepseek-provider-contract": {
+      "content_hash": "sha256:b0063d82b764281425f61e810ed0215260968e21644a641b1584073cb34aaf5f",
+      "size_bytes": 8616,
+      "file_count": 3,
+      "files": [
+        "SKILL.md",
+        "scripts/test_validate_deepseek_history.py",
+        "scripts/validate_deepseek_history.py"
       ]
     },
     "operational/desktop-sessions-discovery": {

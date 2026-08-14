@@ -65,6 +65,7 @@ for the full cross-client lifecycle, durable-state pattern, and proof boundary.
 | GitHub Actions workflow injection | `github-workflow-security.py` | `PreToolUse` |
 | Git source-of-truth adoption | `git-source-gate.py` | `Stop` |
 | Tests and code quality | `test-muting-guard.py`, `test-gate-stop-hook.py`, `over-engineering-advisor.py` | `PreToolUse` / `PostToolUse` / `Stop` |
+| Measured outward facts | `outward-claim-evidence-guard.py`, `rules/no-guessing.md` | `Stop` / rule |
 | Readable architecture and module shape | `architecture-first` skill, `architecture-quality` skill, `module-shape-advisor.py`, `scripts/architecture_audit.py` | router / `PostToolUse` / explicit audit |
 | Harness scope and overload feedback | `harness-load-advisor.py`, `harness-feedback` skill | `Stop` / router |
 | Documentation and long-run state | `docs-staleness-guard.py`, `kb-validate-gate.py`, `feature-list-validator.py` | `SessionStart` / `Stop` |
@@ -111,6 +112,15 @@ integrity may keep a known-good repeat install moving; otherwise use
 `scripts/dependency-alternatives.py`, which searches official PyPI/npm metadata
 and returns only age- and digest-verified candidates. It never installs or edits
 the manifest automatically.
+
+`outward-claim-evidence-guard.py` is deliberately narrow: it notices only
+measurement-shaped claims such as a SHA-256 equality, exact file size, installed
+version, or deployment state when the final answer lacks a probe/result line.
+It cannot validate the command's truth and must never be presented as proof by
+itself. General natural-language fact checking here would make every Stop noisy;
+the authoritative process remains `rules/no-guessing.md`, a direct measurement,
+and a fresh verifier for high-risk claims. Review its event count and false
+positives before expanding its patterns.
 
 See the current [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
 for supported events, handler types, and result schemas.
