@@ -24,7 +24,9 @@ Usage:
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from collections import defaultdict
 
@@ -238,12 +240,12 @@ def check_alternatives_freshness() -> list[str]:
     if not adir.exists() or not pdir.exists():
         return warnings
 
-    # Map principle number -> file mtime
-    p_mtime: dict[int, float] = {}
+    # Map principle number -> semantic revision date, not checkout mtime.
+    p_mtime: dict[int, date] = {}
     for p in pdir.glob("*.md"):
         m = re.match(r"^(\d+)-", p.name)
         if m:
-            p_mtime[int(m.group(1))] = p.stat().st_mtime
+            p_mtime[int(m.group(1))] = principle_revision_date(p)
 
     for a in adir.glob("*.md"):
         if a.name == "README.md":
@@ -257,7 +259,7 @@ def check_alternatives_freshness() -> list[str]:
         # Parse list like "[1, 6, 18]" or "1, 6, 18"
         nums = [int(x) for x in re.findall(r"\d+", related_raw)]
         try:
-            from datetime import datetime, date
+            from datetime import datetime
             reviewed_date = datetime.strptime(last_reviewed, "%Y-%m-%d").date()
         except ValueError:
             warnings.append(f"alternatives/{a.name}: invalid last_reviewed format, expected YYYY-MM-DD")
@@ -265,7 +267,7 @@ def check_alternatives_freshness() -> list[str]:
         for n in nums:
             if n not in p_mtime:
                 continue
-            principle_date = date.fromtimestamp(p_mtime[n])
+            principle_date = p_mtime[n]
             # Compare date-precision: flag only if principle was modified on a day
             # strictly after the review date
             if principle_date > reviewed_date:
@@ -274,6 +276,37 @@ def check_alternatives_freshness() -> list[str]:
                     f"after last_reviewed {last_reviewed} - re-audit trade-offs"
                 )
     return warnings
+
+
+def principle_revision_date(path: Path):
+    """Return the real revision date without treating a clean checkout as a change.
+
+    A new worktree assigns every file its checkout timestamp. That used to make
+    alternatives look stale even when Git showed no related principle change.
+    An uncommitted edit remains current; a clean file uses its last Git revision.
+    """
+    relative = path.relative_to(ROOT).as_posix()
+    try:
+        dirty = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", relative],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        ).returncode != 0
+        if not dirty:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%ct", "--", relative],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            stamp = result.stdout.strip()
+            if result.returncode == 0 and stamp.isdigit():
+                return date.fromtimestamp(int(stamp))
+    except OSError:
+        pass
+    return date.fromtimestamp(path.stat().st_mtime)
 
 
 def check_principle_antipatterns() -> list[str]:

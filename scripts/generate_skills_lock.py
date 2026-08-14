@@ -32,6 +32,8 @@ from pathlib import Path
 
 SKILL_FILES = ("SKILL.md",)           # the canonical entry
 SKILL_DIRS = ("references", "scripts")  # content trees included in hash
+IGNORED_DIRECTORY_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache"}
+IGNORED_SUFFIXES = {".pyc", ".pyo"}
 
 
 def _walk_skill(skill_dir: Path) -> list[Path]:
@@ -46,7 +48,11 @@ def _walk_skill(skill_dir: Path) -> list[Path]:
         if not subdir.is_dir():
             continue
         for fp in sorted(subdir.rglob("*")):
-            if fp.is_file():
+            if (
+                fp.is_file()
+                and not any(parent.name in IGNORED_DIRECTORY_NAMES for parent in fp.parents)
+                and fp.suffix.lower() not in IGNORED_SUFFIXES
+            ):
                 files.append(fp)
     return files
 

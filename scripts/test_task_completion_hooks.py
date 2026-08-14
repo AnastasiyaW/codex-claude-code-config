@@ -21,11 +21,14 @@ from pathlib import Path
 
 HOOKS_JSON = Path.home() / ".codex" / "hooks.json"
 CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
-STOP_GUARD = Path.home() / ".claude" / "claude-code-config" / "hooks" / "stop-phrase-guard.py"
+SOURCE_HOOKS = Path(__file__).resolve().parent.parent / "hooks"
+STOP_GUARD = SOURCE_HOOKS / "stop-phrase-guard.py"
+OUTWARD_CLAIM_GUARD = SOURCE_HOOKS / "outward-claim-evidence-guard.py"
 PLUGIN_CACHE = Path.home() / ".codex" / "plugins" / "cache"
 
 REQUIRED_STOP_HOOKS = (
     "stop-phrase-guard.py",
+    "outward-claim-evidence-guard.py",
     "test-gate-stop-hook.py",
     "harness-load-advisor.py",
     "problems-md-validator.py",
@@ -206,6 +209,66 @@ class TaskCompletionHookTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload.get("decision"), "block")
             self.assertIn("actually finish the work", payload.get("reason", ""))
+
+    def test_outward_claim_guard_requires_measurement_for_hash_equality(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claim-evidence-hook-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".claude").mkdir()
+            transcript = tmp_path / "transcript.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The filename is the SHA-256 of the emitted bytes.",
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            event = json.dumps({"transcript_path": str(transcript)}, ensure_ascii=False)
+            result = subprocess.run(
+                [sys.executable, str(OUTWARD_CLAIM_GUARD)],
+                input=event,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload.get("decision"), "block")
+            self.assertIn("measurement", payload.get("reason", ""))
+
+    def test_outward_claim_guard_allows_measured_hash_and_hypothesis(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claim-evidence-hook-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".claude").mkdir()
+            digest = "b" * 64
+            for content in (
+                f"Claim: SHA-256 equals {digest}.\nEvidence: Get-FileHash payload.bin -> {digest}\nScope: payload.bin now.",
+                f"HYPOTHESIS: code appears to name an output after SHA-256 {digest}; not measured.",
+            ):
+                transcript = tmp_path / "transcript.jsonl"
+                transcript.write_text(
+                    json.dumps({"message": {"role": "assistant", "content": content}}, ensure_ascii=False)
+                    + "\n",
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    [sys.executable, str(OUTWARD_CLAIM_GUARD)],
+                    input=json.dumps({"transcript_path": str(transcript)}, ensure_ascii=False),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=tmp,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.strip(), "", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

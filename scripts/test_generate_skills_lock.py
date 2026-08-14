@@ -38,6 +38,19 @@ class GenerateSkillsLockTests(unittest.TestCase):
         after = hash_skill(skill)
         self.assertNotEqual(before["content_hash"], after["content_hash"])
 
+    def test_python_cache_does_not_change_identity(self) -> None:
+        skill = self.make_skill()
+        entry = skill / "SKILL.md"
+        entry.write_text("---\ndescription: demo\n---\nsource\n", encoding="utf-8")
+        before = hash_skill(skill)
+
+        cache = skill / "scripts" / "__pycache__"
+        cache.mkdir(parents=True)
+        (cache / "demo.cpython-314.pyc").write_bytes(b"machine-specific cache")
+        after = hash_skill(skill)
+
+        self.assertEqual(before, after)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

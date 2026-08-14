@@ -42,9 +42,11 @@ Opt-in extras (use --extras):
   - continuity-session-check     SessionStart  surfaces the shared continuation contract
   - test-gate-stop-hook          Stop          selects fast/integration tests by Git-visible risk and blocks red/unproven evidence
   - harness-load-advisor         Stop          reports overloaded or mis-scoped test/release profiles
+  - outward-claim-evidence-guard Stop          blocks unmeasured hash/version/deploy claims in final reports
   - problems-md-validator        Stop          blocks closing with unresolved OPEN problems
   - plan-gate                    UserPromptSubmit  plan-artifact discipline for risky asks
   - conversation-history-capture Stop          archives and indexes local Codex session JSONL histories
+  - shared-branch-guard          PreToolUse    protects marked checkouts shared by several workers
 
 Usage
 -----
@@ -56,6 +58,9 @@ Usage
 
     # Same but under the current project's .claude/
     python scripts/install_hooks.py --local
+
+    # Install the same shared scripts into Codex desktop's user hook config
+    python scripts/install_hooks.py --codex --extras
 
     # Install everything (safe defaults + extras)
     python scripts/install_hooks.py --global --extras
@@ -120,9 +125,11 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("handoff-closure-audit-guard.py", "PreToolUse", "Write|Edit|MultiEdit"),
     ("test-gate-stop-hook.py",       "Stop", None),
     ("harness-load-advisor.py",       "Stop", None),
+    ("outward-claim-evidence-guard.py", "Stop", None),
     ("problems-md-validator.py",     "Stop", None),
     ("plan-gate.py",                 "UserPromptSubmit", None),
     ("conversation-history-capture.py", "Stop", None),
+    ("shared-branch-guard.py", "PreToolUse", "Bash|PowerShell"),
 ]
 
 # Shared utility (not a hook itself - but needed by hooks)
@@ -131,8 +138,10 @@ SHARED = ["safety_common.py"]
 
 def _resolve_targets(args: argparse.Namespace) -> tuple[Path, Path]:
     """Return (hooks_dir, settings_path)."""
-    if args.global_install and args.local:
-        sys.exit("ERROR: pick --global OR --local, not both")
+    if args.codex:
+        # Codex and Claude share the copied hook scripts. The configuration is
+        # client-specific, while the Python handlers remain one tested artifact.
+        return Path.home() / ".claude" / "hooks", Path.home() / ".codex" / "hooks.json"
     if args.local:
         base = Path.cwd() / ".claude"
     else:
@@ -203,7 +212,10 @@ def _merge_hook(settings: dict, event: str, script_path: Path,
             if existing == command or _script_name_from_command(existing) == script_name:
                 return False  # already present
 
-    new_entry: dict = {"hooks": [{"type": "command", "command": command}]}
+    hook: dict = {"type": "command", "command": command}
+    if script_name == "outward-claim-evidence-guard.py":
+        hook["statusMessage"] = "Checking evidence for reported facts..."
+    new_entry: dict = {"hooks": [hook]}
     if matcher:
         new_entry["matcher"] = matcher
     settings["hooks"][event].append(new_entry)
@@ -217,6 +229,8 @@ def main() -> int:
                         help="Install to ~/.claude/ (available in all projects)")
     target.add_argument("--local", action="store_true",
                         help="Install to ./.claude/ (this project only)")
+    target.add_argument("--codex", action="store_true",
+                        help="Install to ~/.codex/hooks.json using shared ~/.claude/hooks scripts")
     p.add_argument("--extras", action="store_true",
                    help="Also install opt-in hooks (session-handoff, skill-router, ...)")
     p.add_argument("--skip-copy", action="store_true",

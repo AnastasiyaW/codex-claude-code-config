@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synchronize this repo's shareable skills into Codex's active skills directory.
+"""Synchronize this repo's shareable skills into active Codex and Claude directories.
 
 The repository is the source of truth. The sync is additive: it updates every
 source file and backs up an existing target skill before writing, but never
@@ -93,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", type=Path, default=Path.home() / ".codex" / "skills",
                         help="active Codex skills directory (default: user-level ~/.codex/skills)")
     parser.add_argument("--backup-root", type=Path, default=Path.home() / ".codex" / "skill-backups")
+    parser.add_argument(
+        "--also-claude",
+        action="store_true",
+        help="also synchronize the same source into ~/.claude/skills",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="report drift without writing (default)")
     mode.add_argument("--apply", action="store_true", help="copy source files and back up changed targets")
@@ -101,20 +106,29 @@ def main(argv: list[str] | None = None) -> int:
     if not args.source.is_dir():
         print(f"[skill-sync] source missing: {args.source}")
         return 2
-    changes, errors = sync(args.source, args.target, args.backup_root, args.apply)
-    for error in errors:
-        print(f"[skill-sync] ERROR: {error}")
-    if errors:
-        return 2
-    if changes:
-        action = "remaining drift" if args.apply else "needs sync"
-        print(f"[skill-sync] {action}: {len(changes)} skill(s)")
-        for name, paths in sorted(changes.items()):
-            print(f"  - {name}: {len(paths)} file(s)")
-        return 1
-    state = "synchronized" if args.apply else "OK"
-    print(f"[skill-sync] {state}: {len(source_skills(args.source))} skill(s)")
-    return 0
+    targets = [args.target]
+    claude_target = Path.home() / ".claude" / "skills"
+    if args.also_claude and claude_target not in targets:
+        targets.append(claude_target)
+
+    had_drift = False
+    for target in targets:
+        backup_root = args.backup_root if target == args.target else Path.home() / ".claude" / "skill-backups"
+        changes, errors = sync(args.source, target, backup_root, args.apply)
+        for error in errors:
+            print(f"[skill-sync] ERROR {target}: {error}")
+        if errors:
+            return 2
+        if changes:
+            had_drift = True
+            action = "remaining drift" if args.apply else "needs sync"
+            print(f"[skill-sync] {action}: {target} ({len(changes)} skill(s))")
+            for name, paths in sorted(changes.items()):
+                print(f"  - {name}: {len(paths)} file(s)")
+        else:
+            state = "synchronized" if args.apply else "OK"
+            print(f"[skill-sync] {state}: {target} ({len(source_skills(args.source))} skill(s))")
+    return 1 if had_drift else 0
 
 
 if __name__ == "__main__":

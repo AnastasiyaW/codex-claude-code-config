@@ -35,13 +35,14 @@ pass.
 | Destructive-operation guards | `PreToolUse` | `PreToolUse` | hook eval cases |
 | Dependency supply-chain guards | `PreToolUse` on manifest edits and install commands | `PreToolUse` on manifest edits and install commands | `scripts/test_dependency_provenance_guard.py` + both guard self-tests + `scripts/dependency-alternatives.py --self-test` |
 | Test scope and overload routing | `Stop` | `Stop` | `scripts/test_test_strategy.py` + `scripts/test_high_risk_review_gate.py` + `scripts/test_harness_load_advisor.py` |
+| Measured outward facts | `Stop` | `Stop` | `scripts/test_task_completion_hooks.py` (hash claim red/green fixtures) |
 | Handoff completeness | `PreToolUse`, `Stop`, `PreCompact` | `PreToolUse`, `Stop`, `PreCompact` | `test_task_completion_hooks.py` |
 | Handoff to memory continuity | `SessionStart` | `SessionStart` | `test_review_handoff_memory_loop.py` |
 | Claude/Codex continuation contract | `PreToolUse`, `SessionStart` | `PreToolUse`, `SessionStart` | `scripts/test_continuity_contract.py` |
 | Agent-doc freshness | `SessionStart` advisory + `Stop` gate | `SessionStart` advisory + `Stop` gate | hook self-tests |
 | Git source-of-truth setup | `Stop` for long-run projects | `Stop` for long-run projects | `test_lifecycle_hook_contracts.py` |
 | File transfer continuity | `PreToolUse` + `PostToolUse` + `Stop` | `PreToolUse` + `PostToolUse` + `Stop` | `scripts/test_transfer_contract.py` |
-| Skills availability | active skill directory | `~/.claude/skills` | `sync_skills_to_codex.py --check` and `skills-lock.json` |
+| Skills availability | active skill directory | `~/.claude/skills` | `sync_skills_to_codex.py --check --also-claude` and `skills-lock.json` |
 | Skills survive a machine/account move | active skill directory | `~/.claude/skills` | `recover_skill_trees.py --report` |
 | Optional RTK output compression | instruction-level (`AGENTS.md`) | native `PreToolUse` hook | `scripts/test_rtk_integration.py` plus pinned binary verification |
 
@@ -55,6 +56,27 @@ The contract table names which runtime proves each concern. This map names when
 the work happens. Hooks in the synchronous agent path capture a small event or
 check one focused invariant; full archive sync, search indexing, embedding, and
 research enrichment run outside that path.
+
+## Context Budget And Hook Admission
+
+Context discipline is an architecture constraint, not an invitation to put every
+good idea into `UserPromptSubmit` or `Stop`. The default shape is one semantic
+skill router, narrow event-matched guards, and JIT skill loading. Full archive
+search, graph rebuilding, embeddings, and broad audits stay outside the
+synchronous hook path.
+
+Add a hook only when all four answers are concrete:
+
+1. What observed failure or project risk does it own?
+2. What narrow event and input does it need?
+3. What deterministic red/green fixture proves it fires and stays quiet?
+4. Which aggregate signal or review removes it if it proves noisy or redundant?
+
+A hook count alone is not a latency or false-positive measurement. Do not claim a
+harness is low-noise until a real event sample exists; report `UNOBSERVED` rather
+than manufacturing a clean verdict. This follows Anthropic's guidance to pass the
+right context precisely and to use structured handoffs across fresh sessions, not
+an ever-growing active prompt ([long-running harness design](https://www.anthropic.com/engineering/harness-design-long-running-apps)).
 
 ```mermaid
 flowchart LR
@@ -78,7 +100,7 @@ flowchart LR
 | `PreToolUse` | Deny unsafe operations or require the proof/contract that the script owns. | Match narrowly; a script must not silently approve unrelated work. |
 | `PostToolUse` | Verify an observable consequence, or emit an advisory signal. | A command's exit text alone is not proof that deletion, transfer, or launch succeeded. |
 | `PreCompact` | Preserve a compact checkpoint before context is condensed. | A fallback draft is evidence of risk, not a substitute for a reviewed handoff. |
-| `Stop` | Enforce handoff, test, and tracked-work closure conditions. | A completion claim needs durable evidence; an unresolved item needs an explicit recorded status. |
+| `Stop` | Enforce handoff, test, tracked-work, and narrowly scoped evidence closure conditions. | A completion claim needs durable evidence; an unresolved item needs an explicit recorded status. Do not turn it into a generic natural-language fact checker. |
 
 For a long-running, multi-session project, record request and status changes as
 append-only events. A single writer can turn them into a canonical ledger and
