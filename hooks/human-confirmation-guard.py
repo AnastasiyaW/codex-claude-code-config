@@ -71,6 +71,18 @@ DESTRUCTIVE_INTENT = [
     r"\brmdir\s+",
     r"(?:^|[;&|])\s*mv\s+",
     r"\bmove-item\b",
+    # PowerShell, which this guard explicitly accepts as a tool and which is the
+    # primary shell on this machine. An independent review scanned the raw list
+    # and found `Remove-Item` - the commonest destructive PowerShell command -
+    # matched NOTHING at all, along with Clear-Content, Stop-Service and the
+    # machine-stopping verbs. Only `Move-Item` was covered, by luck of naming.
+    r"\bremove-item\b",
+    r"\bclear-content\b",
+    r"\bstop-service\b",
+    r"\bstop-computer\b",
+    r"\brestart-computer\b",
+    r"\bremove-partition\b",
+    r"\bformat-volume\b",
     r"\brobocopy\b.*\/(?:move|mov)\b",
     r"\brclone\s+move\b",
     r"\bfind\s+\S+.*-delete\b",

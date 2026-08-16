@@ -251,13 +251,28 @@ _SEGMENT_SPLIT = re.compile(r"(\|\||&&|[;|&])")
 # PowerShell's `% { iex $_ }`. Enumerating danger fails open on every spelling
 # nobody listed; enumerating safety fails closed, which is the only direction a
 # guard may fail in.
+#
+# `tee` and `out-file` are NOT here, and neither is anything else that writes:
+# `echo '<payload>' | tee /tmp/x.sh && bash /tmp/x.sh` blanks the payload and
+# leaves the command that runs it in plain sight, matching nothing. A consumer
+# that puts bytes on disk is a bridge to a later executor, so writing is not
+# inertness.
 _INERT_CONSUMER = re.compile(
     r"^\s*(?:sudo\s+|timeout\s+\S+\s+|env\s+|nohup\s+|command\s+)*"
-    r"(?:cat|tee|jq|wc|head|tail|sort|uniq|less|column|base64|md5sum|sha256sum|"
-    r"grep|egrep|fgrep|rg|ag|findstr|select-string|out-file|out-string)"
+    # `sort` and `uniq` are gone too, and not for a redirect: `sort -o file`
+    # writes through a flag and `uniq in out` through a positional argument.
+    # Anything that can name an output path is a bridge to a later executor.
+    r"(?:cat|jq|wc|head|tail|less|column|base64|md5sum|sha256sum|"
+    r"grep|egrep|fgrep|rg|ag|findstr|select-string|out-string)"
     r"(?=\s|$)",
     re.IGNORECASE,
 )
+# Output reaches an executor without any pipe at all: `echo 'x' > >(bash)` is a
+# proven one-line bypass, and `>> ~/.bashrc` is the same trick deferred to the
+# next shell. Discarding output and merging stderr are the only redirections
+# that cannot carry a payload anywhere, so they are the only ones allowed.
+_HARMLESS_REDIRECT = re.compile(r"(?:\d?>&\d|\d?>\s*/dev/null|\d?>\s*\$null)", re.IGNORECASE)
+_ANY_REDIRECT = re.compile(r"(?:\d?>>?|<\(|>\()")
 
 
 def _split_segments(line: str) -> list[str]:
@@ -292,6 +307,17 @@ def _split_segments(line: str) -> list[str]:
             current = []
             index += 2
             continue
+        if char == "&":
+            # `2>&1` and `&>file` are redirections, not command separators.
+            # Splitting them left `... 2>` behind, which then read as "this
+            # segment sends its output somewhere" and silently disabled masking
+            # for every command that merges stderr.
+            previous = "".join(current).rstrip()[-1:]
+            following = line[index + 1:index + 2]
+            if previous == ">" or following == ">":
+                current.append(char)
+                index += 1
+                continue
         if char in ";|&":
             parts.append("".join(current))
             parts.append(char)
@@ -313,9 +339,14 @@ def _mask_printed_arguments(line: str) -> str:
       * the quoted run holds no substitution - `echo "$(rm -rf x)"` runs the
         delete before echo exists.
     """
+    def carries_output_away(segment: str) -> bool:
+        """Does this segment send its bytes somewhere other than the next pipe?"""
+        remainder = _HARMLESS_REDIRECT.sub(" ", segment)
+        return bool(_ANY_REDIRECT.search(remainder))
+
     parts = _split_segments(line)
     if len(parts) == 1:
-        segments_safe = [True]
+        segments_safe = [not carries_output_away(parts[0])]
     else:
         # Only what follows a PIPE consumes this segment's output. `&&`, `;` and
         # `&` start a new command, and treating them as consumers made
@@ -323,12 +354,18 @@ def _mask_printed_arguments(line: str) -> str:
         # the consumer of `cd`.
         segments_safe = []
         for index in range(0, len(parts), 2):
-            safe = True
+            # A segment that redirects sends its output somewhere this rule
+            # cannot follow - a process substitution, a file, a shell profile.
+            safe = not carries_output_away(parts[index])
             cursor = index + 1
-            while cursor < len(parts) and parts[cursor] == "|":
+            while safe and cursor < len(parts) and parts[cursor] == "|":
                 consumer = parts[cursor + 1] if cursor + 1 < len(parts) else ""
-                if not consumer.strip() or not _INERT_CONSUMER.match(consumer):
-                    safe = False        # unknown or absent consumer: it may execute this
+                # The WHOLE consumer must be inert, not just its first word:
+                # `tee >(bash)` matches on `tee` and executes on the argument.
+                if (not consumer.strip()
+                        or not _INERT_CONSUMER.match(consumer)
+                        or carries_output_away(consumer)):
+                    safe = False
                     break
                 cursor += 2
             segments_safe.append(safe)
