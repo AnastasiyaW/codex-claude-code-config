@@ -54,6 +54,11 @@ TREES = ("hooks", "claude-code-config/hooks", "private-hooks", "claude-code-conf
 # registered entries do live there - but a utility script nobody registers is
 # not a finding, and listing 110 of them buries the 19 that matter.
 HOOK_TREES = ("hooks", "claude-code-config/hooks", "private-hooks")
+# The matcher problem was a shared import in the two equivalent hook trees,
+# not a claim that every unrelated private/script module with this basename has
+# the same contract.  Compare the canonical/legacy pair only; otherwise three
+# active parents create an N×(N-1) wall of duplicate, unactionable SHADOWs.
+SHARED_DEPENDENCY_TREES = ("hooks", "claude-code-config/hooks")
 SCRIPT_IN_COMMAND = re.compile(r"[A-Za-z0-9_./\\:$~-]+\.py")
 
 
@@ -136,7 +141,10 @@ def survey(home: Path) -> list[tuple[str, str]]:
                 + (f", identical copy at {where}" if same
                    else f", but a DIFFERENT copy sits at {where}"),
             ))
+    comparable_dependency_dirs = {(home / tree).resolve() for tree in SHARED_DEPENDENCY_TREES}
     for live_parent, declared in sorted(active_parents.items(), key=lambda item: str(item[0])):
+        if live_parent not in comparable_dependency_dirs:
+            continue
         module = live_parent / "safety_common.py"
         if not module.exists():
             continue
@@ -147,6 +155,8 @@ def survey(home: Path) -> list[tuple[str, str]]:
         for other in present.get(module.name, []):
             try:
                 if other.resolve() == module.resolve():
+                    continue
+                if other.parent.resolve() not in comparable_dependency_dirs:
                     continue
                 same = _digest(other) == live
             except OSError:

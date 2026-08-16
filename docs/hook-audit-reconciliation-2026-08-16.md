@@ -39,10 +39,12 @@ the legacy `~/.claude/hooks` tree has been removed.
 ## Tree-drift invariant
 
 `hook-tree-drift-check.py` still reads `settings.json` as the authority for
-which entry script runs. It also now compares `safety_common.py` beside every
-registered hook parent: the matcher is imported rather than directly registered
-and was therefore the precise class of live-versus-shadow drift that the first
-version missed. Its self-test includes that dependency shadow.
+which entry script runs. It also now compares `safety_common.py` across the
+canonical/legacy hook-tree pair: the matcher is imported rather than directly
+registered and was therefore the precise class of live-versus-shadow drift that
+the first version missed. Its self-test includes that dependency shadow. Private
+and utility script trees are intentionally outside this comparison because a
+same-named local helper is not evidence that it shares the guard contract.
 
 ## Task loop invariant
 
