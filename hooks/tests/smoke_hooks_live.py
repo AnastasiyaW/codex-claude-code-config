@@ -27,7 +27,7 @@ CASES = [
     # Two corrections live in this one case, both found by running the guard for
     # real rather than trusting the matcher:
     #  * this guard's contract is catastrophic ROOTS, not any recursive delete -
-    #    `rm -rf /home/example/data` matches none of its patterns;
+    #    `rm -rf /srv/scratch/data` matches none of its patterns;
     #  * CLAUDE_ALLOW_DESTRUCTIVE=1 is live in the inherited environment, so it
     #    ALLOWS even `rm -rf /home` - correctly, and now visibly.
     ("destructive-command-guard.py",

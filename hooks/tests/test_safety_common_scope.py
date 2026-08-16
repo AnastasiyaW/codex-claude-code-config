@@ -26,7 +26,7 @@ CASES = [
 
     ("sudo reboot", True, "a real restart"),
     ("shutdown -h now", True, "a real halt"),
-    ("rm -rf /home/example/data", True, "a real recursive delete"),
+    ("rm -rf /srv/scratch/data", True, "a real recursive delete"),
     ('psql -c "DROP TABLE prices"', True, "a real drop, quoted but executed by psql"),
     ("ssh host 'bash -s' <<'EOF'\nrm -rf /var/lib/thing\nEOF", True,
      "a here-doc executed as a remote shell really deletes"),
