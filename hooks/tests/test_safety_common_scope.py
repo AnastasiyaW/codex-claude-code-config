@@ -33,8 +33,17 @@ CASES = [
 ]
 
 CASES.append((
+    # This expectation was False in the first version, and an independent review
+    # showed why that was wrong: `python -` EXECUTES what arrives on stdin, and
+    # the same shape reaches psql, mysql and every other client that runs its
+    # input. Exempting it bought a nicer workflow and cost the invariant. The
+    # cost of keeping it in scope is mine to pay: write data files with an editor
+    # rather than through an interpreter here-doc.
     "python - <<'PY'\ntext = 'the reboot history is in journalctl'\nopen('n.md','w').write(text)\nPY",
-    False, "a python here-doc whose data merely mentions the word"))
+    True, "a here-doc read by python, which executes what it is given"))
+CASES.append((
+    "cat <<'NOTE' > note.md\nthe reboot history is in journalctl\nNOTE",
+    False, "a here-doc read by cat, which cannot execute anything"))
 CASES.append((
     "python - <<'PY'\nimport os\nos.system('reboot')\nPY",
     True, "the same shape, but this data really does run it"))

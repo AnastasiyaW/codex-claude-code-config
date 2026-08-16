@@ -199,63 +199,97 @@ def file_path(tool_input: dict) -> str:
 # or searching command is data. Everything else stays in scope - in particular a
 # here-doc piped into `bash -s` over ssh, whose body really does execute.
 _COMMENT_LINE = re.compile(r"^\s*#")
+# `awk` and `sed` are NOT here, and that is the point: awk's system() and GNU
+# sed's `e` flag execute shell commands, so `awk 'BEGIN{system("rm -rf /home")}'`
+# is a delete, not a print. An independent review found them sitting next to
+# `grep` in the first version of this list and defeating three guards with one
+# token. The list holds only commands that cannot execute their argument.
 _PRINTS_OR_SEARCHES = re.compile(
     r"^\s*(?:sudo\s+|timeout\s+\S+\s+)*"
-    r"(?:echo|printf|grep|egrep|fgrep|rg|ag|findstr|awk|sed|"
-    r"write-output|write-host|select-string)\b",
+    r"(?:echo|printf|grep|egrep|fgrep|rg|ag|findstr|"
+    r"write-output|write-host|select-string)(?=\s|$)",
     re.IGNORECASE,
 )
 _QUOTED_ARG = re.compile(r"""'[^']*'|"[^"]*\"""")
+# A quoted run that contains a substitution is not inert: `echo "$(rm -rf /home)"`
+# runs the delete before echo ever starts.
+_SUBSTITUTION = re.compile(r"\$\(|\$\{|`")
 _HEREDOC_START = re.compile(r"<<-?\s*(['\"]?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)\1")
-_SHELL_ON_LINE = re.compile(r"\b(?:bash|sh|zsh|ssh|dash|ksh)\b", re.IGNORECASE)
-# A here-doc read by python, cat or jq is DATA. Unless that data shells out -
-# then whatever it names is really run, and the guard must still see it.
+# Readers that provably cannot execute their input. Everything else - a shell, a
+# database client, an interpreter, anything unrecognised - keeps its here-doc
+# body in scope. The first version asked "is this a shell?" and let
+# `psql <<SQL DROP TABLE ...` through, which also suppressed the snapshot guard.
+# Allowlisting the inert is the only direction that fails safe.
+_INERT_READER = re.compile(
+    r"^\s*(?:sudo\s+|timeout\s+\S+\s+)*(?:cat|tee|jq|wc|head|tail|sort|uniq|"
+    r"base64|md5sum|sha256sum)(?=\s|$)",
+    re.IGNORECASE,
+)
+# Anything that shells out, in any of the languages an inline script may be
+# written in. Used to decide that a body which looked inert is not.
 _RUNS_A_PROCESS = re.compile(
-    r"\b(?:subprocess|os\.system|popen|check_call|check_output|"
-    r"shutil\.(?:copy|copy2|copytree|move|rmtree))\b",
+    r"\b(?:subprocess|os\.system|os\.exec\w*|os\.spawn\w*|popen|check_call|check_output|"
+    r"shutil\.(?:copy|copy2|copytree|move|rmtree)|os\.remove|os\.unlink|os\.rmdir|"
+    r"pathlib|\.unlink\s*\(|child_process|exec(?:Sync|File|FileSync)?\s*\(|"
+    r"spawn(?:Sync)?\s*\(|system\s*\(|shell_exec|passthru|proc_open|IO\.popen|"
+    r"Open3|\bqx\b|pty\.spawn|eval\s*\(|importlib)\b",
     re.IGNORECASE,
 )
 
-
-_SEGMENT_SPLIT = re.compile(r"(\|\||&&|[;|])")
-# `python -c "<code>"` is the here-doc case wearing a different hat: the string
-# is executed by an interpreter, not by the shell. Blocked twice on it while
-# repairing these guards - once on the word `reboot` inside documentation text,
-# once on `rm -rf` inside an evidence file being written. Same rule applies: it
-# is data unless the data itself shells out.
-_INLINE_SCRIPT = re.compile(
-    r"\b(?:python[0-9.]*|node|ruby|perl|php)\b[^\n|;&]*?\s-(?:c|e)\s+(?P<code>'[^']*'|\"[^\"]*\")",
+# A single `&` separates commands too. Without it, `echo x & sh -c 'rm -rf /home'`
+# read as one segment beginning with `echo`, and the SECOND command's argument
+# was blanked.
+_SEGMENT_SPLIT = re.compile(r"(\|\||&&|[;|&])")
+# Anything that executes what arrives on its stdin. If one of these appears later
+# on the line, nothing earlier on that line may be masked: the blanked text is
+# precisely what runs. `echo 'rm -rf /home' | bash` defeated four guards.
+#
+# An interpreter executes stdin only when it is given no script to run: `bash`,
+# `bash -s`, `python`, `python -` all run what arrives, while `python parse.py`
+# hands it to the script as data. `xargs` and `ssh` are unconditional - xargs
+# turns stdin into ARGUMENTS of the command it runs, which is how
+# `echo /srv/data | xargs rm -rf` deletes.
+_EXECUTES_STDIN = re.compile(
+    r"^\s*(?:sudo\s+|timeout\s+\S+\s+)*(?:"
+    r"(?:bash|sh|zsh|ksh|dash|python[0-9.]*|perl|ruby|node|php)"
+    r"(?:\s+-[A-Za-z]+)*\s*-?\s*$"          # no script argument: stdin is code
+    r"|(?:ssh|xargs|invoke-expression|iex)(?=\s|$)"
+    r")",
     re.IGNORECASE,
 )
 
 
 def _mask_printed_arguments(line: str) -> str:
-    """Blank the quoted arguments of printing and searching commands.
+    """Blank the quoted arguments of printing commands - when that is safe.
 
-    Per pipeline segment, not per line: `cd /tmp && echo 'rm -rf /home' | python x`
-    was blocked because the masking only looked at what the LINE started with,
-    and the line started with `cd`. Separators are preserved, because some
-    patterns anchor on them - `(?:^|[;&|])\\s*cp\\s+` is one.
+    Three conditions, each of them a hole an independent review found in the
+    first version: nothing is masked if any later segment executes stdin, a
+    quoted run containing a substitution is left alone, and `&` separates
+    segments like `;` does. Separators are preserved, because some patterns
+    anchor on them - `(?:^|[;&|])\\s*cp\\s+` is one.
     """
     parts = _SEGMENT_SPLIT.split(line)
+    segments = parts[0::2]
+    if any(_EXECUTES_STDIN.match(segment) for segment in segments[1:]):
+        return line
     for index in range(0, len(parts), 2):
-        if _PRINTS_OR_SEARCHES.match(parts[index]):
-            parts[index] = _QUOTED_ARG.sub(" ", parts[index])
+        if not _PRINTS_OR_SEARCHES.match(parts[index]):
             continue
-        inline = _INLINE_SCRIPT.search(parts[index])
-        if inline and not _RUNS_A_PROCESS.search(inline.group("code")):
-            start, end = inline.span("code")
-            parts[index] = parts[index][:start] + " " + parts[index][end:]
+        parts[index] = _QUOTED_ARG.sub(
+            lambda m: m.group(0) if _SUBSTITUTION.search(m.group(0)) else " ",
+            parts[index],
+        )
     return "".join(parts)
 
 
 def executable_text(command: str) -> str:
     """Drop the parts of a command that cannot execute anything.
 
-    Removed: comment lines, the quoted arguments of printing and searching
-    commands, and here-doc bodies fed to a non-shell reader. Kept: everything
-    else - in particular a here-doc piped into `bash -s` over ssh, whose body
-    really does execute on the far end.
+    Removed: comment lines, the quoted arguments of printing commands when that
+    is provably safe, and here-doc bodies fed to a reader that cannot execute
+    them. Kept: everything else - which now includes every unrecognised reader,
+    every interpreter, and every database client, because a rule that asks "is
+    this a shell?" loses to the next thing that executes its input.
 
     Kept in ONE place on purpose: the same blind spot living in two guards is
     the duplicated-invariant bug this codebase has already paid for once.
@@ -272,7 +306,11 @@ def executable_text(command: str) -> str:
             continue
         kept.append(_mask_printed_arguments(line))
         opening = _HEREDOC_START.search(line)
-        if not opening or _SHELL_ON_LINE.search(line):
+        if not opening:
+            continue
+        # Only a reader that provably cannot execute its input lets the body go.
+        reader = line[:opening.start()].split("|")[-1]
+        if not _INERT_READER.match(reader):
             continue
         tag = opening.group("tag")
         body: list[str] = []
@@ -280,6 +318,8 @@ def executable_text(command: str) -> str:
         while cursor < len(lines) and lines[cursor].strip() != tag:
             body.append(lines[cursor])
             cursor += 1
+        if cursor >= len(lines):
+            continue                      # the tag never closes: keep everything
         if _RUNS_A_PROCESS.search("\n".join(body)):
             continue                      # the data itself runs something: keep it
         index = cursor                    # skip the body, keep the closing tag
