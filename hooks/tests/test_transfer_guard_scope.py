@@ -7,6 +7,7 @@ or mention a tool in a comment - and each of them was blocked. The ones marked
 True must keep blocking after the fix, or the repair is a hole.
 """
 import importlib.util
+import os
 import pathlib
 import sys
 
@@ -14,7 +15,8 @@ import sys
 # version of this test loaded ~/.claude/hooks/transfer-contract-guard.py, which
 # the harness does not run - so twelve green checks described a file that never
 # executed. An independent review found that by reading the manifest.
-GUARD = pathlib.Path.home() / ".claude" / "claude-code-config" / "hooks" / "transfer-contract-guard.py"
+HOOKS = pathlib.Path(os.environ.get("HOOKS_DIR", pathlib.Path(__file__).resolve().parents[1]))
+GUARD = HOOKS / "transfer-contract-guard.py"
 spec = importlib.util.spec_from_file_location("guard", GUARD)
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)

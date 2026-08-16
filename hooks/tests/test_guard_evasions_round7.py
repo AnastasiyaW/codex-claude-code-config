@@ -17,10 +17,12 @@ this whole change set was built to remove - one level down, inside a here-doc.
 Bodies are still skipped for DEPTH; their content is treated per line again.
 """
 import importlib.util
+import os
 import pathlib
 import sys
 
-MODULE = pathlib.Path.home() / ".claude" / "claude-code-config" / "hooks" / "safety_common.py"
+HOOKS = pathlib.Path(os.environ.get("HOOKS_DIR", pathlib.Path(__file__).resolve().parents[1]))
+MODULE = HOOKS / "safety_common.py"
 spec = importlib.util.spec_from_file_location("safety_common", MODULE)
 sc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sc)
@@ -41,11 +43,24 @@ BODY_STILL_BLOCKS = [
     "ssh h 'bash -s' <<'EOF'\nrm -rf /srv/data/old\nEOF",
     "ssh h 'bash -s' <<'EOF'\necho 'rm -rf /home ' | bash\nEOF",
     "psql <<SQL\nSELECT 1;\nSQL\nrm -rf /srv/data/old",
+    "ssh h 'bash -s' <<'EOF'\necho 'rm -rf /srv/data/old' > /tmp/x.sh && bash /tmp/x.sh\nEOF",
+    "ssh h 'bash -s' <<'EOF'\necho 'rm -rf /srv/data/old' > >(bash)\nEOF",
+    "ssh h 'bash -s' <<'EOF'\n{ echo 'rm -rf /srv/data/old'; } | bash\nEOF",
+    "ssh h 'bash -s' <<'EOF'\necho 'rm -rf /srv/data/old' | tee /tmp/x.sh && bash /tmp/x.sh\nEOF",
+]
+
+# Each of these transfers a destructive byte sequence to an executor without
+# the ordinary direct pipe spelling.  The first is the exact redirection bridge
+# whose apparent false-positive fix was measured to reopen it.
+EXECUTION_BRIDGES = [
+    "{ echo 'rm -rf /srv/data/old' } > /tmp/x.sh && bash /tmp/x.sh",
+    "{ ssh h 'bash -s' <<'EOF'\nrm -rf /srv/data/old\nEOF\n} | cat",
 ]
 
 GROUPS = [
     ("case arm desync", CASE_ARM_DESYNC),
     ("here-doc body still blocks", BODY_STILL_BLOCKS),
+    ("redirect and group execution bridges", EXECUTION_BRIDGES),
 ]
 
 # The founding false positives of this whole change set, one level down. Each

@@ -12,7 +12,7 @@ Copy a selected skill directory, not its parent category:
 cp -r skills/<category>/<skill-name> ~/.claude/skills/
 
 # Codex desktop on this setup: synchronize the public source safely
-python scripts/sync_skills_to_codex.py --apply --also-claude
+python scripts/sync_skills_to_codex.py --apply
 ```
 
 The Codex sync keeps a timestamped backup of changed local skills and does not

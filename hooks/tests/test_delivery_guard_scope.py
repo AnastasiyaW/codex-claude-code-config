@@ -20,8 +20,11 @@ import sys
 import tempfile
 import time
 import contextlib
+import atexit
+import shutil
 
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="delivery-guard-test-"))
+atexit.register(shutil.rmtree, TMP, ignore_errors=True)
 STATE = TMP / "state"
 STATE.mkdir(parents=True, exist_ok=True)
 os.environ["AGENT_ROOT_CAUSE_STATE_DIR"] = str(STATE)
@@ -31,7 +34,8 @@ REPO.mkdir()
 subprocess.run(["git", "init", "-q", str(REPO)], check=True, capture_output=True)
 (REPO / "thing.py").write_text("print('someone else was here')\n", encoding="utf-8")
 
-GUARD = pathlib.Path.home() / ".claude" / "hooks" / "root-cause-delivery-guard.py"
+HOOKS = pathlib.Path(os.environ.get("HOOKS_DIR", pathlib.Path(__file__).resolve().parents[1]))
+GUARD = HOOKS / "root-cause-delivery-guard.py"
 spec = importlib.util.spec_from_file_location("delivery_guard", GUARD)
 g = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(g)

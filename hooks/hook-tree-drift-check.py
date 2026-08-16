@@ -105,11 +105,19 @@ def survey(home: Path) -> list[tuple[str, str]]:
             present.setdefault(script.name, []).append(script)
 
     findings: list[tuple[str, str]] = []
+    # A hook's private imports are part of the executable path even though the
+    # manifest names only its entry script.  `safety_common.py` is the shared
+    # matcher used by the command guards; omitting it made the most dangerous
+    # historical drift invisible precisely because it is never registered
+    # directly.  One representative manifest command per live parent is enough
+    # to identify which copy owns that dependency.
+    active_parents: dict[Path, str] = {}
     for name, declared in sorted(registered.items()):
         target = _resolve(declared, home)
         if not target.exists():
             findings.append(("DEAD", f"{name}: registered as {declared}, which does not exist"))
             continue
+        active_parents.setdefault(target.parent.resolve(), declared)
         try:
             live = _digest(target)
         except OSError:
@@ -125,6 +133,28 @@ def survey(home: Path) -> list[tuple[str, str]]:
             findings.append((
                 "TWIN" if same else "SHADOW",
                 f"{name}: runs from {declared}"
+                + (f", identical copy at {where}" if same
+                   else f", but a DIFFERENT copy sits at {where}"),
+            ))
+    for live_parent, declared in sorted(active_parents.items(), key=lambda item: str(item[0])):
+        module = live_parent / "safety_common.py"
+        if not module.exists():
+            continue
+        try:
+            live = _digest(module)
+        except OSError:
+            continue
+        for other in present.get(module.name, []):
+            try:
+                if other.resolve() == module.resolve():
+                    continue
+                same = _digest(other) == live
+            except OSError:
+                continue
+            where = str(other).replace("\\", "/")
+            findings.append((
+                "TWIN" if same else "SHADOW",
+                f"safety_common.py: dependency of {declared} runs from {module}"
                 + (f", identical copy at {where}" if same
                    else f", but a DIFFERENT copy sits at {where}"),
             ))
@@ -200,6 +230,8 @@ def _self_test() -> int:
         (old / "guard.py").write_text("print('OLD - never runs')\n", encoding="utf-8")
         (live / "same.py").write_text("print('x')\n", encoding="utf-8")
         (old / "same.py").write_text("print('x')\n", encoding="utf-8")
+        (live / "safety_common.py").write_text("VERSION = 'new'\n", encoding="utf-8")
+        (old / "safety_common.py").write_text("VERSION = 'old'\n", encoding="utf-8")
         (old / "nobody-calls-me.py").write_text("print('orphan')\n", encoding="utf-8")
         settings = {"hooks": {"PreToolUse": [{"hooks": [
             {"type": "command", "command": f"python {live / 'guard.py'}"},
@@ -217,11 +249,15 @@ def _self_test() -> int:
             fails.append("the differing copy was not the one named as SHADOW")
         if any("same.py" in m for m in shadow):
             fails.append("an identical copy was reported as a SHADOW")
+        if not any("safety_common.py" in m for m in shadow):
+            fails.append("a shadowed shared dependency was not reported")
 
         # A tree with no duplicates and no dead registration must be silent.
         (old / "guard.py").unlink()
         (old / "same.py").unlink()
+        (old / "safety_common.py").unlink()
         (old / "nobody-calls-me.py").unlink()
+        (live / "safety_common.py").unlink()
         (live / "vanished.py").write_text("print('now it exists')\n", encoding="utf-8")
         if survey(home):
             fails.append(f"a clean tree was not silent: {survey(home)}")

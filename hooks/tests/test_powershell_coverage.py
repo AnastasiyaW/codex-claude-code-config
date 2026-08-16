@@ -12,10 +12,11 @@ This suite is about the pattern list, not about scoping: every command here is
 plain, unquoted and uncommented.
 """
 import importlib.util
+import os
 import pathlib
 import sys
 
-HOOKS = pathlib.Path.home() / ".claude" / "claude-code-config" / "hooks"
+HOOKS = pathlib.Path(os.environ.get("HOOKS_DIR", pathlib.Path(__file__).resolve().parents[1]))
 spec = importlib.util.spec_from_file_location("hcg", HOOKS / "human-confirmation-guard.py")
 hcg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hcg)

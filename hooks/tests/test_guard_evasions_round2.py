@@ -12,10 +12,12 @@ must be seen as dangerous. The inert cases at the end must still pass, including
 the `grep` alternation that the naive segment splitter used to block.
 """
 import importlib.util
+import os
 import pathlib
 import sys
 
-MODULE = pathlib.Path.home() / ".claude" / "claude-code-config" / "hooks" / "safety_common.py"
+HOOKS = pathlib.Path(os.environ.get("HOOKS_DIR", pathlib.Path(__file__).resolve().parents[1]))
+MODULE = HOOKS / "safety_common.py"
 spec = importlib.util.spec_from_file_location("safety_common", MODULE)
 sc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sc)

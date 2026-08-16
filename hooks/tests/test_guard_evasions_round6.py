@@ -15,10 +15,12 @@ Also here: the latent here-doc depth defect (a `}` in a body is data, not
 syntax) and the documented conservative false positive.
 """
 import importlib.util
+import os
 import pathlib
 import sys
 
-MODULE = pathlib.Path.home() / ".claude" / "claude-code-config" / "hooks" / "safety_common.py"
+HOOKS = pathlib.Path(os.environ.get("HOOKS_DIR", pathlib.Path(__file__).resolve().parents[1]))
+MODULE = HOOKS / "safety_common.py"
 spec = importlib.util.spec_from_file_location("safety_common", MODULE)
 sc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sc)

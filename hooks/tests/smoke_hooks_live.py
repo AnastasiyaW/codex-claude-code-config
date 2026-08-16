@@ -8,11 +8,12 @@ there (this codebase has been bitten by exactly that: a hook that failed to
 import and therefore failed open for five days).
 """
 import json
+import os
 import pathlib
 import subprocess
 import sys
 
-HOOKS = pathlib.Path.home() / ".claude" / "claude-code-config" / "hooks"
+HOOKS = pathlib.Path(os.environ.get("HOOKS_DIR", pathlib.Path(__file__).resolve().parents[1]))
 
 CASES = [
     ("human-confirmation-guard.py",
@@ -32,7 +33,7 @@ CASES = [
     #    ALLOWS even `rm -rf /home` - correctly, and now visibly.
     ("destructive-command-guard.py",
      {"tool_name": "Bash", "tool_input": {"command": "rm -rf /home"}},
-     bool(__import__("os").environ.get("CLAUDE_ALLOW_DESTRUCTIVE", "").strip().lower()
+     bool(os.environ.get("CLAUDE_ALLOW_DESTRUCTIVE", "").strip().lower()
           not in {"1", "true", "yes", "on"}),
      "a catastrophic root: blocked, unless the environment bypass is on"),
     ("git-destructive-guard.py",
