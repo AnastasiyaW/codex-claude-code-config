@@ -145,8 +145,14 @@ def _session_alive(session_id: str, now: float | None = None) -> bool:
 
 
 def _foreign_and_live(contract: dict[str, Any], current_session: str) -> str:
-    """Owner id when this record belongs to a different, still-live session."""
-    owner = _text(contract.get("session_id"))
+    """Owner id when this record belongs to a different, still-live session.
+
+    `opened_by` counts too. The stamp writes `session_id`, but a record opened by
+    hand names its opener in `opened_by` - and reading only one key made those
+    records look ownerless, so a peer's finished-but-old-shaped contract blocked
+    every other session instead of only its own.
+    """
+    owner = _text(contract.get("session_id")) or _text(contract.get("opened_by"))
     if not owner or _same_session(owner, current_session):
         return ""
     return owner if _session_alive(owner) else ""
@@ -555,6 +561,12 @@ def _self_test() -> int:
             ("open record with no owner at all", {}, True),
             ("closed record, owner live", {"session_id": live, "status": "cancelled",
                                            "closure_reason": "c"}, False),
+            # A record opened by hand names its opener in `opened_by`. Reading
+            # only `session_id` made it look ownerless, so one peer's record
+            # blocked every other session's Stop instead of only its owner's.
+            ("open record, opened_by a live session", {"opened_by": live}, False),
+            ("open record, opened_by a stale session", {"opened_by": stale}, True),
+            ("open record, opened_by me", {"opened_by": mine}, True),
         ]
         for label, over, should_block in cases:
             for leftover in transfers.glob("*.json"):
