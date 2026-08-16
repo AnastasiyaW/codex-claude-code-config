@@ -205,7 +205,11 @@ _COMMENT_LINE = re.compile(r"^\s*#")
 # `grep` in the first version of this list and defeating three guards with one
 # token. The list holds only commands that cannot execute their argument.
 _PRINTS_OR_SEARCHES = re.compile(
-    r"^\s*(?:sudo\s+|timeout\s+\S+\s+)*"
+    # An opening brace or paren may precede the command: `{ echo 'x'; } | sort`
+    # is a print inside a group, and refusing to recognise it blocked an
+    # ordinary pipeline. Safety is unaffected - what decides is the consumer
+    # check, which still refuses `{ echo 'x'; } | sh`.
+    r"^\s*[({]?\s*(?:sudo\s+|timeout\s+\S+\s+)*"
     r"(?:echo|printf|grep|egrep|fgrep|rg|ag|findstr|"
     r"write-output|write-host|select-string)(?=\s|$)",
     re.IGNORECASE,
@@ -280,13 +284,25 @@ _INERT_CONSUMER = re.compile(
 # descriptor is never masked at all.
 _HARMLESS_REDIRECT = re.compile(r"(?:\d?>&[12](?!\d)|\d?>\s*/dev/null|\d?>\s*\$null)", re.IGNORECASE)
 _ANY_REDIRECT = re.compile(r"(?:\d?>>?|<\(|>\()")
-_REBINDS_A_DESCRIPTOR = re.compile(r"\bexec\b[^\n]*[<>]")
+# Anchored to command position. The first version matched the word `exec`
+# anywhere, so an ordinary search over a path containing `exec` stopped being
+# masked - the same "reading words rather than operations" failure this whole
+# change exists to remove.
+_REBINDS_A_DESCRIPTOR = re.compile(r"(?:^|[;&|]\s*)exec\s+\d*[<>]")
+# A line that defines a function can rebind any name the allowlist trusts:
+# `cat() { bash; }; echo '<payload>' | cat` was proven to execute. Definitions
+# are rare in a one-liner, so refusing to mask the whole command when one is
+# present costs almost nothing and needs no name matching.
+_DEFINES_A_FUNCTION = re.compile(r"\b\w+\s*\(\s*\)\s*\{|\bfunction\s+\w+\s*(?:\(\s*\))?\s*\{")
 # A consumer that can be told where to put its output is a bridge, not a dead
 # end - but only when it is actually told. `sort -u` is inert; `sort -o file`
 # and `uniq in out` are not.
 _CAN_NAME_AN_OUTPUT = re.compile(r"^\s*(?:sudo\s+|timeout\s+\S+\s+|env\s+|nohup\s+|command\s+)*"
                                  r"(?:sort|uniq)(?=\s|$)", re.IGNORECASE)
-_OUTPUT_FLAG = re.compile(r"(?:^|\s)(?:-o|--output)(?:[=\s]|$)", re.IGNORECASE)
+# `-o/tmp/x.sh` attaches the path to the flag, and GNU sort accepts it. The
+# first version required a separator after `-o` and therefore missed it - and
+# the bundled `-uo /path` only blocked by accident, through the token count.
+_OUTPUT_FLAG = re.compile(r"(?:^|\s)(?:--output|-[A-Za-z]*o)(?:[=\s/.~]|$)", re.IGNORECASE)
 
 
 def _split_segments(line: str) -> list[str]:
@@ -301,7 +317,23 @@ def _split_segments(line: str) -> list[str]:
     return _scan_segments(line)[0]
 
 
-def _scan_segments(line: str) -> tuple[list[str], list[int]]:
+def _all_pipe_consumers(command: str) -> list[str]:
+    """Every consumer that follows a pipe, anywhere in the command.
+
+    A segment inside a group does not own its stdout, and the group's pipe can
+    be on a later line - so the question "is my consumer inert" has to be asked
+    of the whole command, not of one line.
+    """
+    consumers: list[str] = []
+    for line in command.splitlines():
+        parts, _, _ = _scan_segments(line)
+        for position in range(1, len(parts), 2):
+            if parts[position] == "|" and position + 1 < len(parts):
+                consumers.append(parts[position + 1])
+    return consumers
+
+
+def _scan_segments(line: str, start_depth: int = 0) -> tuple[list[str], list[int], int]:
     """As `_split_segments`, plus the brace/paren depth each segment sits at.
 
     Depth is what tells a segment whether it owns its own output. Inside
@@ -314,8 +346,11 @@ def _scan_segments(line: str) -> tuple[list[str], list[int]]:
     depths: list[int] = []
     current: list[str] = []
     quote: str | None = None
-    depth = 0
-    segment_depth = 0
+    # Depth is threaded IN from the previous line and handed back out. A group
+    # written across lines - which is ordinary formatting, not an evasion - reset
+    # to zero otherwise, and `{\n echo '<payload>'\n} | bash` masked and ran.
+    depth = start_depth
+    segment_depth = start_depth
     index = 0
     while index < len(line):
         char = line[index]
@@ -342,7 +377,7 @@ def _scan_segments(line: str) -> tuple[list[str], list[int]]:
             continue
         if line.startswith("||", index) or line.startswith("&&", index):
             parts.append("".join(current))
-            depths.append(segment_depth)
+            depths.append(max(segment_depth, depth))  # a segment that OPENS a group is inside it
             segment_depth = depth
             parts.append(line[index:index + 2])
             current = []
@@ -361,7 +396,7 @@ def _scan_segments(line: str) -> tuple[list[str], list[int]]:
                 continue
         if char in ";|&":
             parts.append("".join(current))
-            depths.append(segment_depth)
+            depths.append(max(segment_depth, depth))  # a segment that OPENS a group is inside it
             segment_depth = depth
             parts.append(char)
             current = []
@@ -370,11 +405,12 @@ def _scan_segments(line: str) -> tuple[list[str], list[int]]:
         current.append(char)
         index += 1
     parts.append("".join(current))
-    depths.append(segment_depth)
-    return parts, depths
+    depths.append(max(segment_depth, depth))  # a segment that OPENS a group is inside it
+    return parts, depths, depth
 
 
-def _mask_printed_arguments(line: str) -> str:
+def _mask_printed_arguments(line: str, start_depth: int = 0,
+                            command_consumers: list[str] | None = None) -> tuple[str, int]:
     """Blank the quoted arguments of printing commands - only when provably safe.
 
     Masking happens when every one of these holds:
@@ -405,18 +441,21 @@ def _mask_printed_arguments(line: str) -> str:
     # Once a line rebinds a descriptor, no `>&N` on it can be read: the payload
     # may be going to a file. `exec 3>/tmp/x.sh; echo '…' >&3; bash /tmp/x.sh`.
     if _REBINDS_A_DESCRIPTOR.search(line):
-        return line
+        return line, _scan_segments(line, start_depth)[2]
 
-    parts, depths = _scan_segments(line)
-    if len(parts) == 1:
+    parts, depths, end_depth = _scan_segments(line, start_depth)
+    if len(parts) == 1 and start_depth == 0:
         segments_safe = [not carries_output_away(parts[0])]
     else:
         # Only what follows a PIPE consumes this segment's output. `&&`, `;` and
         # `&` start a new command, and treating them as consumers made
         # `cd /tmp && echo 'x' | cat` unmaskable - the `echo` segment was read as
         # the consumer of `cd`.
-        pipe_consumers = [parts[position + 1] for position in range(1, len(parts), 2)
-                          if parts[position] == "|" and position + 1 < len(parts)]
+        # Inside a group the pipe that matters can be on a LATER LINE, so the
+        # question is asked of the whole command when one is supplied.
+        wider_consumers = (command_consumers if command_consumers is not None
+                           else [parts[position + 1] for position in range(1, len(parts), 2)
+                                 if parts[position] == "|" and position + 1 < len(parts)])
         segments_safe = []
         for slot, index in enumerate(range(0, len(parts), 2)):
             # A segment that redirects sends its output somewhere this rule
@@ -426,7 +465,8 @@ def _mask_printed_arguments(line: str) -> str:
                 # Inside `{ cd /tmp; echo '…'; } | bash` the GROUP owns stdout,
                 # so the pipe that matters is past the closing brace and the
                 # ordinary walk stops at the `;` before it ever gets there.
-                safe = all(consumer_is_inert(consumer) for consumer in pipe_consumers)
+                safe = bool(wider_consumers) and all(
+                    consumer_is_inert(consumer) for consumer in wider_consumers)
             elif safe:
                 cursor = index + 1
                 while cursor < len(parts) and parts[cursor] == "|":
@@ -445,7 +485,7 @@ def _mask_printed_arguments(line: str) -> str:
             lambda m: m.group(0) if _SUBSTITUTION.search(m.group(0)) else " ",
             parts[index],
         )
-    return "".join(parts)
+    return "".join(parts), end_depth
 
 
 def executable_text(command: str) -> str:
@@ -474,14 +514,21 @@ def executable_text(command: str) -> str:
             continue
         spliced.append(stripped)
     lines = spliced
+    # A function definition anywhere in the command can rebind a trusted name,
+    # so nothing in it may be masked.
+    if _DEFINES_A_FUNCTION.search(command):
+        return command
+    consumers = _all_pipe_consumers(command)
     kept: list[str] = []
+    depth = 0
     index = 0
     while index < len(lines):
         line = lines[index]
         index += 1
         if _COMMENT_LINE.match(line):
             continue
-        kept.append(_mask_printed_arguments(line))
+        masked, depth = _mask_printed_arguments(line, depth, consumers)
+        kept.append(masked)
         opening = _HEREDOC_START.search(line)
         if not opening:
             continue
