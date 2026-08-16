@@ -1,0 +1,33 @@
+{
+  "schema": "agent-task-findings/v1",
+  "findings": [
+    {
+      "finding_id": "F-001",
+      "classification": "INTERNAL_FIXABLE",
+      "accepted_requirement": "AC1: describe the behaviour that must hold",
+      "boundary": "src/example.py: exact causal component",
+      "next_action": "Write the focused red reproducer, then repair this boundary.",
+      "proof_requirements": [
+        "focused_test",
+        "runtime_proof",
+        "independent_review"
+      ],
+      "proof_plan": {
+        "focused_test": "pytest -q tests/test_example.py",
+        "runtime_proof": "Run the real staging probe and save its trace under evidence/.",
+        "independent_review": "Fresh evaluator checks only the changed boundary and evidence."
+      }
+    },
+    {
+      "finding_id": "F-002",
+      "classification": "EXTERNAL_REQUIRED",
+      "accepted_requirement": "AC2: external authority is required before promotion",
+      "boundary": "release signing authority",
+      "next_action": "Re-read the named authority receipt at the next scheduled check.",
+      "blocker": "The named external signer/receipt has not been provided.",
+      "last_checked_at": "{{YYYY-MM-DDTHH:MM:SSZ}}",
+      "next_check_at": "{{YYYY-MM-DDTHH:MM:SSZ}}",
+      "last_check_evidence": "evidence/external-recheck-{{YYYYMMDDTHHMMSSZ}}.md"
+    }
+  ]
+}

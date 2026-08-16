@@ -10,6 +10,8 @@ Copy the files into the project task directory, then fill in placeholders. Keep 
 |---|---|
 | `spec.md` | Frozen objective, acceptance criteria, and global constraints |
 | `state.json` | Machine-readable task state for resumption |
+| `findings.json` | Structured evaluator findings that become work orders |
+| `cycle.json` | Controller-owned queue; generated from `findings.json` |
 | `scratchpad.md` | Human-readable working notes; keep current, not exhaustive |
 | `trace.jsonl` | Append-only event log with evidence pointers |
 | `evidence/` | Raw test output, screenshots, logs, diffs, verifier outputs |
@@ -21,3 +23,19 @@ Copy the files into the project task directory, then fill in placeholders. Keep 
 ## Context Rule
 
 Treat the model context window as RAM and this folder as disk. The chat should carry only the current state, next action, and pointers to evidence, not every raw observation.
+
+## Scheduled work loop
+
+For a task that must keep moving between sessions, use the controller from the
+configuration repository rather than embedding a changing prose backlog in the
+scheduled prompt:
+
+```text
+python scripts/task_cycle_controller.py reconcile --task-dir .agent/tasks/<task-id>
+python scripts/task_cycle_controller.py next --task-dir .agent/tasks/<task-id> --json
+```
+
+The heartbeat treats `WORK` as its exact current focus. It stores real test,
+runtime, and fresh-review artifacts before calling `record-proof`. `WAIT_EXTERNAL`
+is legal only when every external work order names both its last live check and
+the next scheduled recheck; an overdue one returns `RECHECK_EXTERNAL` instead.
