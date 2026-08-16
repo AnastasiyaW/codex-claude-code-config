@@ -347,6 +347,13 @@ def _scan_segments(line: str, start_depth: int = 0) -> tuple[list[str], list[int
     that matters is past the closing brace - and the consumer walk, which stops
     at the first separator that is not a pipe, never reached it. Proven to
     execute; four guards passed it.
+
+    Each segment records `max(start_depth, segment_depth, depth)`. `start_depth`
+    is in there because not every `)` this scanner sees closes a group: a `case`
+    arm's `)` closes nothing in shell grammar, and counting it dropped a segment
+    inside `{ case a in` back to depth 0, which masked a payload that ran.
+    An unmatched close can only ever LOWER depth, and lower is the unsafe
+    direction, so the line's entry depth is a floor.
     """
     parts: list[str] = []
     depths: list[int] = []
@@ -383,7 +390,7 @@ def _scan_segments(line: str, start_depth: int = 0) -> tuple[list[str], list[int
             continue
         if line.startswith("||", index) or line.startswith("&&", index):
             parts.append("".join(current))
-            depths.append(max(segment_depth, depth))  # a segment that OPENS a group is inside it
+            depths.append(max(start_depth, segment_depth, depth))  # see _record_depth note
             segment_depth = depth
             parts.append(line[index:index + 2])
             current = []
@@ -402,7 +409,7 @@ def _scan_segments(line: str, start_depth: int = 0) -> tuple[list[str], list[int
                 continue
         if char in ";|&":
             parts.append("".join(current))
-            depths.append(max(segment_depth, depth))  # a segment that OPENS a group is inside it
+            depths.append(max(start_depth, segment_depth, depth))  # see _record_depth note
             segment_depth = depth
             parts.append(char)
             current = []
@@ -411,7 +418,7 @@ def _scan_segments(line: str, start_depth: int = 0) -> tuple[list[str], list[int
         current.append(char)
         index += 1
     parts.append("".join(current))
-    depths.append(max(segment_depth, depth))  # a segment that OPENS a group is inside it
+    depths.append(max(start_depth, segment_depth, depth))  # see _record_depth note
     return parts, depths, depth
 
 
@@ -560,7 +567,16 @@ def executable_text(command: str) -> str:
         # closes, and the data does not itself run something.
         if not (reader_is_inert and closes
                 and not _RUNS_A_PROCESS.search("\n".join(body))):
-            kept.extend(body)             # data, kept verbatim - never masked
+            # A body kept because its reader is a shell IS shell code, so it gets
+            # the same per-line treatment as any other line: comments dropped,
+            # print arguments masked under the same consumer rules. Keeping it
+            # verbatim instead reinstated the two false positives this whole
+            # change set exists to remove - the word inside an `echo` label and
+            # the word inside the agent's own comment - one level down.
+            for body_line in body:
+                if _COMMENT_LINE.match(body_line):
+                    continue
+                kept.append(_mask_printed_arguments(body_line, depth, consumers)[0])
         # Either way the body is skipped by the loop, so it can no longer thread
         # depth: a `}` inside a here-doc body is a byte of data to the real shell,
         # but it was decrementing the guard's brace depth and could make a later
