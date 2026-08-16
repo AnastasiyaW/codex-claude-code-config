@@ -46,6 +46,13 @@ CASES.append((
     "cd /tmp && rm -rf /home", True,
     "a real delete that is not the first word on the line"))
 
+CASES.append((
+    """python -c "note = 'the restart history lives in journalctl'" """,
+    False, "an inline script whose text merely names a dangerous word"))
+CASES.append((
+    """python -c "import os; os.system('shutdown -h now')" """,
+    True, "an inline script that really runs one"))
+
 failures = []
 for command, expected, why in CASES:
     hit = sc.any_match(command, DESTRUCTIVE, command=True) is not None

@@ -218,6 +218,15 @@ _RUNS_A_PROCESS = re.compile(
 
 
 _SEGMENT_SPLIT = re.compile(r"(\|\||&&|[;|])")
+# `python -c "<code>"` is the here-doc case wearing a different hat: the string
+# is executed by an interpreter, not by the shell. Blocked twice on it while
+# repairing these guards - once on the word `reboot` inside documentation text,
+# once on `rm -rf` inside an evidence file being written. Same rule applies: it
+# is data unless the data itself shells out.
+_INLINE_SCRIPT = re.compile(
+    r"\b(?:python[0-9.]*|node|ruby|perl|php)\b[^\n|;&]*?\s-(?:c|e)\s+(?P<code>'[^']*'|\"[^\"]*\")",
+    re.IGNORECASE,
+)
 
 
 def _mask_printed_arguments(line: str) -> str:
@@ -232,6 +241,11 @@ def _mask_printed_arguments(line: str) -> str:
     for index in range(0, len(parts), 2):
         if _PRINTS_OR_SEARCHES.match(parts[index]):
             parts[index] = _QUOTED_ARG.sub(" ", parts[index])
+            continue
+        inline = _INLINE_SCRIPT.search(parts[index])
+        if inline and not _RUNS_A_PROCESS.search(inline.group("code")):
+            start, end = inline.span("code")
+            parts[index] = parts[index][:start] + " " + parts[index][end:]
     return "".join(parts)
 
 
