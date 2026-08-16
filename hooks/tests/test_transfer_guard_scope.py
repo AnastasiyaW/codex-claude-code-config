@@ -10,7 +10,11 @@ import importlib.util
 import pathlib
 import sys
 
-GUARD = pathlib.Path.home() / ".claude" / "hooks" / "transfer-contract-guard.py"
+# The REGISTERED copy, taken from settings.json rather than assumed. The first
+# version of this test loaded ~/.claude/hooks/transfer-contract-guard.py, which
+# the harness does not run - so twelve green checks described a file that never
+# executed. An independent review found that by reading the manifest.
+GUARD = pathlib.Path.home() / ".claude" / "claude-code-config" / "hooks" / "transfer-contract-guard.py"
 spec = importlib.util.spec_from_file_location("guard", GUARD)
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
@@ -23,8 +27,14 @@ CASES = [
      "same search, PowerShell spelling"),
     ('# copy the models later\nls -la /tmp', False,
      "the word lives in a comment"),
-    ('python - <<\'PY\'\ntext = "rsync --exclude models/** cost us a model"\nopen("note.md","w").write(text)\nPY', False,
-     "a python here-doc writing documentation that mentions rsync"),
+    # Expected False in the first version; an independent review showed why that
+    # is wrong. `python -` executes what arrives on stdin, and the same shape
+    # reaches psql and every other client that runs its input. Only a reader that
+    # provably cannot execute - cat, tee, jq - lets its body go.
+    ('python - <<\'PY\'\ntext = "rsync --exclude models/** cost us a model"\nopen("note.md","w").write(text)\nPY', True,
+     "a here-doc read by python, which executes what it is given"),
+    ('cat <<\'NOTE\' > note.md\nrsync --exclude models/** cost us a model\nNOTE', False,
+     "the same text handed to cat, which cannot execute anything"),
     ('echo "we will scp this tomorrow"', False,
      "a word inside an echo string"),
 

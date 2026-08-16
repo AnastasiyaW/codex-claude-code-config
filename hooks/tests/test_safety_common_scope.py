@@ -49,8 +49,16 @@ CASES.append((
     True, "the same shape, but this data really does run it"))
 
 CASES.append((
+    # Expected False in the first version. Under the inverted rule a consumer is
+    # trusted only if it provably cannot act on what it receives, and a script
+    # can do anything with its stdin - so this is scanned. The cost is a false
+    # positive on `echo json | python script.py`; the alternative was eight
+    # spellings of `| bash` walking straight through.
     "cd /tmp && echo '{\"cmd\":\"rm -rf /home\"}' | python guard.py",
-    False, "the phrase inside an echo that is not the first word on the line"))
+    True, "piped into a script, which may act on what it reads"))
+CASES.append((
+    "cd /tmp && echo '{\"cmd\":\"rm -rf /home\"}' | cat",
+    False, "piped into cat, which cannot"))
 CASES.append((
     "cd /tmp && rm -rf /home", True,
     "a real delete that is not the first word on the line"))

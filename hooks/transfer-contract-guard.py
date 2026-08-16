@@ -27,6 +27,21 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from safety_common import allow, block, log, read_event  # noqa: E402
 
+# One definition of "what in this command can actually run", shared with the
+# destructive guards. This copy is the one settings.json registers - a second,
+# divergent copy under ~/.claude/hooks/ received an earlier repair and never
+# ran, which an independent review caught by reading the manifest rather than
+# the file. A swallowed ImportError here would repeat exactly that, so it is
+# announced instead: a guard that quietly loses a security helper is a guard
+# that is not there.
+try:
+    from safety_common import executable_text as _executable_text  # noqa: E402
+except ImportError as error:  # pragma: no cover - deployment fault, not logic
+    print(f"[transfer-contract-guard] safety_common.executable_text is missing "
+          f"({error}); scanning the RAW command text, which over-blocks on "
+          f"quoted and commented mentions.", file=sys.stderr)
+    _executable_text = None
+
 
 # Transfer records live in one shared directory, but a Stop gate belongs to one
 # session. Without an owner, session A is blocked by session B's in-flight
@@ -197,6 +212,12 @@ def _marker_path(command: str, cwd: Path) -> Path | None:
 
 
 def _transfer_kind(command: str) -> tuple[str, str] | None:
+    # Read what executes, not what is written: a `grep` for the word rsync, a
+    # comment mentioning scp, and a here-doc documenting an rsync flag are not
+    # transfers. A here-doc piped into `bash -s` over ssh is one, and stays in
+    # scope. See safety_common.executable_text for the rule and its limits.
+    if _executable_text is not None:
+        command = _executable_text(command)
     checks = (
         (r"\bgit\s+clone\b", "clone", "git"),
         (r"\bgh\s+repo\s+clone\b", "clone", "gh"),

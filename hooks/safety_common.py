@@ -244,35 +244,97 @@ _SEGMENT_SPLIT = re.compile(r"(\|\||&&|[;|&])")
 # on the line, nothing earlier on that line may be masked: the blanked text is
 # precisely what runs. `echo 'rm -rf /home' | bash` defeated four guards.
 #
-# An interpreter executes stdin only when it is given no script to run: `bash`,
-# `bash -s`, `python`, `python -` all run what arrives, while `python parse.py`
-# hands it to the script as data. `xargs` and `ssh` are unconditional - xargs
-# turns stdin into ARGUMENTS of the command it runs, which is how
-# `echo /srv/data | xargs rm -rf` deletes.
-_EXECUTES_STDIN = re.compile(
-    r"^\s*(?:sudo\s+|timeout\s+\S+\s+)*(?:"
-    r"(?:bash|sh|zsh|ksh|dash|python[0-9.]*|perl|ruby|node|php)"
-    r"(?:\s+-[A-Za-z]+)*\s*-?\s*$"          # no script argument: stdin is code
-    r"|(?:ssh|xargs|invoke-expression|iex)(?=\s|$)"
-    r")",
+# Downstream of a pipe, masking is allowed only when EVERY consumer is provably
+# inert. The first version tried to enumerate what executes, and a second review
+# walked past it eight ways in one sitting: `/bin/bash`, `env bash`, `nohup bash`,
+# `command sh`, `sudo -u root bash`, `bash -O extglob`, `bash 2>/dev/null`, and
+# PowerShell's `% { iex $_ }`. Enumerating danger fails open on every spelling
+# nobody listed; enumerating safety fails closed, which is the only direction a
+# guard may fail in.
+_INERT_CONSUMER = re.compile(
+    r"^\s*(?:sudo\s+|timeout\s+\S+\s+|env\s+|nohup\s+|command\s+)*"
+    r"(?:cat|tee|jq|wc|head|tail|sort|uniq|less|column|base64|md5sum|sha256sum|"
+    r"grep|egrep|fgrep|rg|ag|findstr|select-string|out-file|out-string)"
+    r"(?=\s|$)",
     re.IGNORECASE,
 )
 
 
-def _mask_printed_arguments(line: str) -> str:
-    """Blank the quoted arguments of printing commands - when that is safe.
+def _split_segments(line: str) -> list[str]:
+    """Split a line on `; | || && &`, ignoring separators inside quotes.
 
-    Three conditions, each of them a hole an independent review found in the
-    first version: nothing is masked if any later segment executes stdin, a
-    quoted run containing a substitution is left alone, and `&` separates
-    segments like `;` does. Separators are preserved, because some patterns
-    anchor on them - `(?:^|[;&|])\\s*cp\\s+` is one.
+    A naive split cut `grep -n "reboot\\|shutdown" log` in half and left an
+    unterminated quoted run, so the guard blocked an ordinary search - the second
+    reviewer hit that on the first command of the session. Even indexes are
+    segments, odd indexes are the separators, which are preserved because some
+    patterns anchor on them.
     """
-    parts = _SEGMENT_SPLIT.split(line)
-    segments = parts[0::2]
-    if any(_EXECUTES_STDIN.match(segment) for segment in segments[1:]):
-        return line
-    for index in range(0, len(parts), 2):
+    parts: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "'\"":
+            quote = char
+            current.append(char)
+            index += 1
+            continue
+        if line.startswith("||", index) or line.startswith("&&", index):
+            parts.append("".join(current))
+            parts.append(line[index:index + 2])
+            current = []
+            index += 2
+            continue
+        if char in ";|&":
+            parts.append("".join(current))
+            parts.append(char)
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    parts.append("".join(current))
+    return parts
+
+
+def _mask_printed_arguments(line: str) -> str:
+    """Blank the quoted arguments of printing commands - only when provably safe.
+
+    Masking happens when every one of these holds:
+      * nothing downstream of a pipe can execute what it receives (allowlist);
+      * the line does not trail off into a pipe whose target is elsewhere;
+      * the quoted run holds no substitution - `echo "$(rm -rf x)"` runs the
+        delete before echo exists.
+    """
+    parts = _split_segments(line)
+    if len(parts) == 1:
+        segments_safe = [True]
+    else:
+        # Only what follows a PIPE consumes this segment's output. `&&`, `;` and
+        # `&` start a new command, and treating them as consumers made
+        # `cd /tmp && echo 'x' | cat` unmaskable - the `echo` segment was read as
+        # the consumer of `cd`.
+        segments_safe = []
+        for index in range(0, len(parts), 2):
+            safe = True
+            cursor = index + 1
+            while cursor < len(parts) and parts[cursor] == "|":
+                consumer = parts[cursor + 1] if cursor + 1 < len(parts) else ""
+                if not consumer.strip() or not _INERT_CONSUMER.match(consumer):
+                    safe = False        # unknown or absent consumer: it may execute this
+                    break
+                cursor += 2
+            segments_safe.append(safe)
+    for position, index in enumerate(range(0, len(parts), 2)):
+        if not segments_safe[position]:
+            continue
         if not _PRINTS_OR_SEARCHES.match(parts[index]):
             continue
         parts[index] = _QUOTED_ARG.sub(
@@ -296,7 +358,18 @@ def executable_text(command: str) -> str:
     """
     if not command:
         return ""
-    lines = command.splitlines()
+    # Join logical lines first: a line ending in `\` or `|` continues, and the
+    # consumer that decides everything sits on the NEXT line. Measured: both
+    # `echo 'rm -rf x' |\n  bash` and the backslash form ran while the guard saw
+    # a line with no downstream at all.
+    spliced: list[str] = []
+    for raw in command.splitlines():
+        stripped = raw.rstrip()
+        if spliced and (spliced[-1].rstrip().endswith(("\\", "|"))):
+            spliced[-1] = spliced[-1].rstrip().rstrip("\\") + " " + raw.strip()
+            continue
+        spliced.append(stripped)
+    lines = spliced
     kept: list[str] = []
     index = 0
     while index < len(lines):
@@ -308,9 +381,11 @@ def executable_text(command: str) -> str:
         opening = _HEREDOC_START.search(line)
         if not opening:
             continue
-        # Only a reader that provably cannot execute its input lets the body go.
-        reader = line[:opening.start()].split("|")[-1]
-        if not _INERT_READER.match(reader):
+        # The WHOLE line must be inert, not merely the reader left of `<<`:
+        # `cat <<EOF | bash` is cat feeding a shell, and it executes the body.
+        segments = [s for s in _split_segments(line)[0::2] if s.strip()]
+        if any(not _INERT_READER.match(segment) and not _INERT_CONSUMER.match(segment)
+               for segment in segments):
             continue
         tag = opening.group("tag")
         body: list[str] = []
