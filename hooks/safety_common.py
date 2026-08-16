@@ -190,10 +190,100 @@ def file_path(tool_input: dict) -> str:
     return str(tool_input.get("file_path", ""))
 
 
-def any_match(text: str, patterns: list[str]) -> str | None:
-    """Return the first matching regex (string form) or None. Case-insensitive."""
+# Text that names a dangerous command without running one. Measured 2026-08-16:
+# a read-only inventory was blocked twice because the word `reboot` sat in the
+# agent's own `# Reason:` comment and `shutdown` sat inside an `echo` label. The
+# guards were reading words; they have to read what executes.
+#
+# Deliberately narrow. Comments cannot run, and the quoted argument of a printing
+# or searching command is data. Everything else stays in scope - in particular a
+# here-doc piped into `bash -s` over ssh, whose body really does execute.
+_COMMENT_LINE = re.compile(r"^\s*#")
+_PRINTS_OR_SEARCHES = re.compile(
+    r"^\s*(?:sudo\s+|timeout\s+\S+\s+)*"
+    r"(?:echo|printf|grep|egrep|fgrep|rg|ag|findstr|awk|sed|"
+    r"write-output|write-host|select-string)\b",
+    re.IGNORECASE,
+)
+_QUOTED_ARG = re.compile(r"""'[^']*'|"[^"]*\"""")
+_HEREDOC_START = re.compile(r"<<-?\s*(['\"]?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)\1")
+_SHELL_ON_LINE = re.compile(r"\b(?:bash|sh|zsh|ssh|dash|ksh)\b", re.IGNORECASE)
+# A here-doc read by python, cat or jq is DATA. Unless that data shells out -
+# then whatever it names is really run, and the guard must still see it.
+_RUNS_A_PROCESS = re.compile(
+    r"\b(?:subprocess|os\.system|popen|check_call|check_output|"
+    r"shutil\.(?:copy|copy2|copytree|move|rmtree))\b",
+    re.IGNORECASE,
+)
+
+
+_SEGMENT_SPLIT = re.compile(r"(\|\||&&|[;|])")
+
+
+def _mask_printed_arguments(line: str) -> str:
+    """Blank the quoted arguments of printing and searching commands.
+
+    Per pipeline segment, not per line: `cd /tmp && echo 'rm -rf /home' | python x`
+    was blocked because the masking only looked at what the LINE started with,
+    and the line started with `cd`. Separators are preserved, because some
+    patterns anchor on them - `(?:^|[;&|])\\s*cp\\s+` is one.
+    """
+    parts = _SEGMENT_SPLIT.split(line)
+    for index in range(0, len(parts), 2):
+        if _PRINTS_OR_SEARCHES.match(parts[index]):
+            parts[index] = _QUOTED_ARG.sub(" ", parts[index])
+    return "".join(parts)
+
+
+def executable_text(command: str) -> str:
+    """Drop the parts of a command that cannot execute anything.
+
+    Removed: comment lines, the quoted arguments of printing and searching
+    commands, and here-doc bodies fed to a non-shell reader. Kept: everything
+    else - in particular a here-doc piped into `bash -s` over ssh, whose body
+    really does execute on the far end.
+
+    Kept in ONE place on purpose: the same blind spot living in two guards is
+    the duplicated-invariant bug this codebase has already paid for once.
+    """
+    if not command:
+        return ""
+    lines = command.splitlines()
+    kept: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if _COMMENT_LINE.match(line):
+            continue
+        kept.append(_mask_printed_arguments(line))
+        opening = _HEREDOC_START.search(line)
+        if not opening or _SHELL_ON_LINE.search(line):
+            continue
+        tag = opening.group("tag")
+        body: list[str] = []
+        cursor = index
+        while cursor < len(lines) and lines[cursor].strip() != tag:
+            body.append(lines[cursor])
+            cursor += 1
+        if _RUNS_A_PROCESS.search("\n".join(body)):
+            continue                      # the data itself runs something: keep it
+        index = cursor                    # skip the body, keep the closing tag
+    return "\n".join(kept)
+
+
+def any_match(text: str, patterns: list[str], *, command: bool = False) -> str | None:
+    """Return the first matching regex (string form) or None. Case-insensitive.
+
+    `command=True` means the text is a shell command, and only the part that can
+    actually run is matched (see `executable_text`). It is opt-in rather than the
+    default on purpose: callers that scan prose - the deferral guard reads the
+    text of a question, where a line may legitimately start with `#` - must keep
+    seeing every character.
+    """
+    haystack = executable_text(text) if command else text
     for pat in patterns:
-        if re.search(pat, text, re.IGNORECASE):
+        if re.search(pat, haystack, re.IGNORECASE):
             return pat
     return None
 

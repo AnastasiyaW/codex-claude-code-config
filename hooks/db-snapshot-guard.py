@@ -320,7 +320,7 @@ def main() -> None:
     if not cmd:
         allow()
 
-    hit = any_match(cmd, SQL_DESTRUCTIVE_PATTERNS)
+    hit = any_match(cmd, SQL_DESTRUCTIVE_PATTERNS, command=True)
     if not hit:
         allow()
 

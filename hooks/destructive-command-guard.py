@@ -6,6 +6,7 @@ mkfs/dd on block devices. Bypass: CLAUDE_ALLOW_DESTRUCTIVE=1.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -74,12 +75,23 @@ def main() -> None:
     if not cmd:
         allow()
 
-    hit = any_match(cmd, PATTERNS)
+    hit = any_match(cmd, PATTERNS, command=True)
     if not hit:
         allow()
 
     if bypass("destructive", cmd):
         log("WARN", "block_destructive", "bypass", hit, cmd)
+        # Say it out loud. Measured 2026-08-16: CLAUDE_ALLOW_DESTRUCTIVE=1 was
+        # live in the inherited environment, so this guard was passing every
+        # catastrophic command in the session while looking armed - the log line
+        # above is the only trace, and nobody reads a log they do not know to
+        # open. A bypass that leaves no visible mark is indistinguishable from a
+        # guard that is not there.
+        source = ("environment CLAUDE_ALLOW_DESTRUCTIVE"
+                  if os.environ.get("CLAUDE_ALLOW_DESTRUCTIVE", "").strip().lower()
+                  in {"1", "true", "yes", "on"} else "an in-command bypass marker")
+        print(f"[destructive-command-guard] BYPASSED via {source}: /{hit}/ matched "
+              f"and was allowed through. Unset it to restore the gate.", file=sys.stderr)
         allow()
 
     log("BLOCK", "block_destructive", "deny", hit, cmd)

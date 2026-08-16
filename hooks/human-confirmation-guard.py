@@ -313,7 +313,7 @@ def main() -> None:
         allow()
 
     # Step 1: any destructive intent?
-    hit = any_match(cmd, DESTRUCTIVE_INTENT)
+    hit = any_match(cmd, DESTRUCTIVE_INTENT, command=True)
     if not hit:
         allow()
 

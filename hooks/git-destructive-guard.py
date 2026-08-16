@@ -49,7 +49,7 @@ def main() -> None:
     if not cmd:
         allow()
 
-    hit = any_match(cmd, PATTERNS)
+    hit = any_match(cmd, PATTERNS, command=True)
     if not hit:
         allow()
 
