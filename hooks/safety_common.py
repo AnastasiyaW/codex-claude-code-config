@@ -323,6 +323,12 @@ def _all_pipe_consumers(command: str) -> list[str]:
     A segment inside a group does not own its stdout, and the group's pipe can
     be on a later line - so the question "is my consumer inert" has to be asked
     of the whole command, not of one line.
+
+    Deliberately conservative: a grouped segment inherits every consumer in the
+    command, including one belonging to a second, unrelated pipeline on the same
+    line. `{ echo 'x'; } | cat ; { echo 'y'; } | bash` refuses to mask either.
+    That is a false positive by design - the alternative is matching groups to
+    their own pipes, which is the reasoning that let four earlier evasions run.
     """
     consumers: list[str] = []
     for line in command.splitlines():
@@ -444,7 +450,12 @@ def _mask_printed_arguments(line: str, start_depth: int = 0,
         return line, _scan_segments(line, start_depth)[2]
 
     parts, depths, end_depth = _scan_segments(line, start_depth)
-    if len(parts) == 1 and start_depth == 0:
+    # `depths[0] == 0` is load-bearing: a line that OPENS a group and holds the
+    # payload with nothing after it - `{ echo '<payload>'` then `} | bash` on the
+    # next line - is a single segment entering at depth 0, and took this branch
+    # while sitting at depth 1. The depth was computed correctly and then not
+    # consulted. Proven to execute; the sixth review's only finding.
+    if len(parts) == 1 and start_depth == 0 and depths[0] == 0:
         segments_safe = [not carries_output_away(parts[0])]
     else:
         # Only what follows a PIPE consumes this segment's output. `&&`, `;` and
@@ -535,20 +546,26 @@ def executable_text(command: str) -> str:
         # The WHOLE line must be inert, not merely the reader left of `<<`:
         # `cat <<EOF | bash` is cat feeding a shell, and it executes the body.
         segments = [s for s in _split_segments(line)[0::2] if s.strip()]
-        if any(not _INERT_READER.match(segment) and not _INERT_CONSUMER.match(segment)
-               for segment in segments):
-            continue
+        reader_is_inert = not any(
+            not _INERT_READER.match(segment) and not _INERT_CONSUMER.match(segment)
+            for segment in segments)
         tag = opening.group("tag")
         body: list[str] = []
         cursor = index
         while cursor < len(lines) and lines[cursor].strip() != tag:
             body.append(lines[cursor])
             cursor += 1
-        if cursor >= len(lines):
-            continue                      # the tag never closes: keep everything
-        if _RUNS_A_PROCESS.search("\n".join(body)):
-            continue                      # the data itself runs something: keep it
-        index = cursor                    # skip the body, keep the closing tag
+        closes = cursor < len(lines)
+        # Drop the body only when the reader cannot execute it, the tag actually
+        # closes, and the data does not itself run something.
+        if not (reader_is_inert and closes
+                and not _RUNS_A_PROCESS.search("\n".join(body))):
+            kept.extend(body)             # data, kept verbatim - never masked
+        # Either way the body is skipped by the loop, so it can no longer thread
+        # depth: a `}` inside a here-doc body is a byte of data to the real shell,
+        # but it was decrementing the guard's brace depth and could make a later
+        # payload read as depth 0.
+        index = cursor
     return "\n".join(kept)
 
 
