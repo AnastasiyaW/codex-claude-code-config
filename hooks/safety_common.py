@@ -329,6 +329,23 @@ def _all_pipe_consumers(command: str) -> list[str]:
     line. `{ echo 'x'; } | cat ; { echo 'y'; } | bash` refuses to mask either.
     That is a false positive by design - the alternative is matching groups to
     their own pipes, which is the reasoning that let four earlier evasions run.
+
+    Two more measured false positives share that trade, both needing a MULTI-LINE
+    group that closes and then continues on the same line:
+
+        {
+          cd /tmp
+        } ; grep -n "reboot" /var/log/syslog        -> refuses to mask
+
+    The `grep` sits at depth 0 but inherits the line's entry depth as a floor,
+    finds no pipe consumer at all, and `bool(wider_consumers)` is False. Treating
+    an empty consumer list as vacuously safe would fix all of them - and would
+    also mask `{ echo '<payload>' } > /tmp/x.sh && bash /tmp/x.sh`, which has zero
+    pipe consumers and is round three's redirect bridge, proven to execute. The
+    empty check is load-bearing. The principled fix is to ask whether the GROUP
+    carries its output away, which means reading the closing lines; that is real
+    machinery for a rare shape and should be paid for by evidence, not by
+    anticipation. Single-line `{ cd /tmp; ls; } ; grep -n "reboot" log` is fine.
     """
     consumers: list[str] = []
     for line in command.splitlines():
