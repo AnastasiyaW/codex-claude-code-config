@@ -259,10 +259,12 @@ _SEGMENT_SPLIT = re.compile(r"(\|\||&&|[;|&])")
 # inertness.
 _INERT_CONSUMER = re.compile(
     r"^\s*(?:sudo\s+|timeout\s+\S+\s+|env\s+|nohup\s+|command\s+)*"
-    # `sort` and `uniq` are gone too, and not for a redirect: `sort -o file`
-    # writes through a flag and `uniq in out` through a positional argument.
-    # Anything that can name an output path is a bridge to a later executor.
-    r"(?:cat|jq|wc|head|tail|less|column|base64|md5sum|sha256sum|"
+    # `sort` and `uniq` are back, gated: they were dropped because `sort -o file`
+    # writes through a flag and `uniq in out` through a positional argument, and
+    # dropping them blocked five of eight ordinary pipelines - `… | sort | uniq -c`
+    # is about as common as shell gets, and that false positive is the whole
+    # reason this scoping exists. `_NAMES_AN_OUTPUT` gates them instead.
+    r"(?:cat|jq|wc|head|tail|less|column|base64|md5sum|sha256sum|sort|uniq|"
     r"grep|egrep|fgrep|rg|ag|findstr|select-string|out-string)"
     r"(?=\s|$)",
     re.IGNORECASE,
@@ -271,8 +273,20 @@ _INERT_CONSUMER = re.compile(
 # proven one-line bypass, and `>> ~/.bashrc` is the same trick deferred to the
 # next shell. Discarding output and merging stderr are the only redirections
 # that cannot carry a payload anywhere, so they are the only ones allowed.
-_HARMLESS_REDIRECT = re.compile(r"(?:\d?>&\d|\d?>\s*/dev/null|\d?>\s*\$null)", re.IGNORECASE)
+#
+# `>&N` is harmless only for the two descriptors whose destination is known.
+# `exec 3>/tmp/x.sh; echo '<payload>' >&3; bash /tmp/x.sh` writes the payload to
+# a file through a descriptor the guard cannot follow, so a line that rebinds a
+# descriptor is never masked at all.
+_HARMLESS_REDIRECT = re.compile(r"(?:\d?>&[12](?!\d)|\d?>\s*/dev/null|\d?>\s*\$null)", re.IGNORECASE)
 _ANY_REDIRECT = re.compile(r"(?:\d?>>?|<\(|>\()")
+_REBINDS_A_DESCRIPTOR = re.compile(r"\bexec\b[^\n]*[<>]")
+# A consumer that can be told where to put its output is a bridge, not a dead
+# end - but only when it is actually told. `sort -u` is inert; `sort -o file`
+# and `uniq in out` are not.
+_CAN_NAME_AN_OUTPUT = re.compile(r"^\s*(?:sudo\s+|timeout\s+\S+\s+|env\s+|nohup\s+|command\s+)*"
+                                 r"(?:sort|uniq)(?=\s|$)", re.IGNORECASE)
+_OUTPUT_FLAG = re.compile(r"(?:^|\s)(?:-o|--output)(?:[=\s]|$)", re.IGNORECASE)
 
 
 def _split_segments(line: str) -> list[str]:
@@ -284,9 +298,24 @@ def _split_segments(line: str) -> list[str]:
     segments, odd indexes are the separators, which are preserved because some
     patterns anchor on them.
     """
+    return _scan_segments(line)[0]
+
+
+def _scan_segments(line: str) -> tuple[list[str], list[int]]:
+    """As `_split_segments`, plus the brace/paren depth each segment sits at.
+
+    Depth is what tells a segment whether it owns its own output. Inside
+    `{ cd /tmp; echo '<payload>'; } | bash` the GROUP owns stdout, so the pipe
+    that matters is past the closing brace - and the consumer walk, which stops
+    at the first separator that is not a pipe, never reached it. Proven to
+    execute; four guards passed it.
+    """
     parts: list[str] = []
+    depths: list[int] = []
     current: list[str] = []
     quote: str | None = None
+    depth = 0
+    segment_depth = 0
     index = 0
     while index < len(line):
         char = line[index]
@@ -301,8 +330,20 @@ def _split_segments(line: str) -> list[str]:
             current.append(char)
             index += 1
             continue
+        if char in "{(":
+            depth += 1
+            current.append(char)
+            index += 1
+            continue
+        if char in "})":
+            depth = max(0, depth - 1)
+            current.append(char)
+            index += 1
+            continue
         if line.startswith("||", index) or line.startswith("&&", index):
             parts.append("".join(current))
+            depths.append(segment_depth)
+            segment_depth = depth
             parts.append(line[index:index + 2])
             current = []
             index += 2
@@ -320,6 +361,8 @@ def _split_segments(line: str) -> list[str]:
                 continue
         if char in ";|&":
             parts.append("".join(current))
+            depths.append(segment_depth)
+            segment_depth = depth
             parts.append(char)
             current = []
             index += 1
@@ -327,7 +370,8 @@ def _split_segments(line: str) -> list[str]:
         current.append(char)
         index += 1
     parts.append("".join(current))
-    return parts
+    depths.append(segment_depth)
+    return parts, depths
 
 
 def _mask_printed_arguments(line: str) -> str:
@@ -344,7 +388,26 @@ def _mask_printed_arguments(line: str) -> str:
         remainder = _HARMLESS_REDIRECT.sub(" ", segment)
         return bool(_ANY_REDIRECT.search(remainder))
 
-    parts = _split_segments(line)
+    def consumer_is_inert(segment: str) -> bool:
+        """Inert means it neither executes what it reads nor writes it anywhere."""
+        if not segment.strip() or not _INERT_CONSUMER.match(segment):
+            return False
+        if carries_output_away(segment):
+            return False
+        if _CAN_NAME_AN_OUTPUT.match(segment):
+            if _OUTPUT_FLAG.search(segment):
+                return False                       # sort -o file
+            named = [word for word in segment.split() if not word.startswith("-")]
+            if len(named) > 1:
+                return False                       # uniq in out
+        return True
+
+    # Once a line rebinds a descriptor, no `>&N` on it can be read: the payload
+    # may be going to a file. `exec 3>/tmp/x.sh; echo '…' >&3; bash /tmp/x.sh`.
+    if _REBINDS_A_DESCRIPTOR.search(line):
+        return line
+
+    parts, depths = _scan_segments(line)
     if len(parts) == 1:
         segments_safe = [not carries_output_away(parts[0])]
     else:
@@ -352,22 +415,26 @@ def _mask_printed_arguments(line: str) -> str:
         # `&` start a new command, and treating them as consumers made
         # `cd /tmp && echo 'x' | cat` unmaskable - the `echo` segment was read as
         # the consumer of `cd`.
+        pipe_consumers = [parts[position + 1] for position in range(1, len(parts), 2)
+                          if parts[position] == "|" and position + 1 < len(parts)]
         segments_safe = []
-        for index in range(0, len(parts), 2):
+        for slot, index in enumerate(range(0, len(parts), 2)):
             # A segment that redirects sends its output somewhere this rule
             # cannot follow - a process substitution, a file, a shell profile.
             safe = not carries_output_away(parts[index])
-            cursor = index + 1
-            while safe and cursor < len(parts) and parts[cursor] == "|":
-                consumer = parts[cursor + 1] if cursor + 1 < len(parts) else ""
-                # The WHOLE consumer must be inert, not just its first word:
-                # `tee >(bash)` matches on `tee` and executes on the argument.
-                if (not consumer.strip()
-                        or not _INERT_CONSUMER.match(consumer)
-                        or carries_output_away(consumer)):
-                    safe = False
-                    break
-                cursor += 2
+            if safe and depths[slot] > 0:
+                # Inside `{ cd /tmp; echo '…'; } | bash` the GROUP owns stdout,
+                # so the pipe that matters is past the closing brace and the
+                # ordinary walk stops at the `;` before it ever gets there.
+                safe = all(consumer_is_inert(consumer) for consumer in pipe_consumers)
+            elif safe:
+                cursor = index + 1
+                while cursor < len(parts) and parts[cursor] == "|":
+                    consumer = parts[cursor + 1] if cursor + 1 < len(parts) else ""
+                    if not consumer_is_inert(consumer):
+                        safe = False
+                        break
+                    cursor += 2
             segments_safe.append(safe)
     for position, index in enumerate(range(0, len(parts), 2)):
         if not segments_safe[position]:
