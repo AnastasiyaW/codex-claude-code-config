@@ -57,6 +57,20 @@ def evaluate(cwd: Path) -> str | None:
         return None
 
     inside_code, inside = git(cwd, "rev-parse", "--is-inside-work-tree")
+    # `git()` returns None when git could not be RUN at all - absent from this
+    # process's PATH, or it timed out. That is not evidence about the directory,
+    # and treating it as "no repository here" produces the worst possible advice:
+    # it wedges Stop and tells the operator to `git init` inside a checkout that
+    # already is one, which would nest a repository inside a repository.
+    #
+    # Measured 2026-08-17: with git removed from PATH this gate emitted its
+    # "not inside a Git repository" block verbatim while standing in a hub
+    # directory that IS a checkout and whose feature_list.json is tracked in it.
+    # A check that cannot tell "I could not measure" from "the thing is wrong"
+    # must not choose the alarming reading - that is the same defect class this
+    # repo keeps finding in monitors, and here it costs a stuck session.
+    if inside_code is None:
+        return None
     if inside_code != 0 or inside.lower() != "true":
         return (
             "This is a long-run project (feature_list.json) but it is not inside a Git repository. "
@@ -65,6 +79,9 @@ def evaluate(cwd: Path) -> str | None:
         )
 
     origin_code, origin = git(cwd, "remote", "get-url", "origin")
+    # Same reasoning: an unrunnable git says nothing about the remote.
+    if origin_code is None:
+        return None
     if origin_code != 0 or not origin:
         return (
             "This long-run Git project has no `origin` remote. Create a private remote by default, push the "
