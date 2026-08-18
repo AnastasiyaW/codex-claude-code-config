@@ -57,6 +57,25 @@ SESSION_ROOT = Path(
 # silence means the owner is not going to close this record on its own.
 FOREIGN_LIVE_SECONDS = int(os.environ.get("CLAUDE_TRANSFER_OWNER_TTL", "1800"))
 
+# Ownership helpers now live in safety_common so both Stop gates share one
+# definition; a second copy would drift and only one would get the next fix.
+try:
+    from safety_common import (  # noqa: E402
+        same_session as _same_session,
+        session_alive as _session_alive,
+        transcripts_for as _transcripts_for,
+    )
+except ImportError:  # fail CLOSED: unknown liveness must never downgrade a block
+    def _transcripts_for(session_id: str) -> list:
+        return []
+
+    def _same_session(a: str, b: str) -> bool:
+        return True
+
+    def _session_alive(session_id: str, now: float | None = None) -> bool:
+        return False
+
+
 
 TRANSFER_MARKER = re.compile(
     r"(?:^|[\s;&])#\s*transfer-contract\s*:\s*(?P<path>[^\r\n]+)",
@@ -97,51 +116,7 @@ def _event_session(event: dict[str, Any]) -> str:
     return _text(os.environ.get("CLAUDE_CODE_SESSION_ID"))
 
 
-def _transcripts_for(session_id: str) -> list[Path]:
-    """Transcript files belonging to this session id.
 
-    A record written by hand may carry a SHORTENED id (`c6b59e27`) while the
-    transcript file is the full uuid (`c6b59e27-b8fb-...jsonl`). An exact glob
-    then finds nothing and a live owner reads as dead, which blocks every other
-    session on a transfer that is legitimately in flight — measured 2026-08-10.
-    So: exact match first, prefix only as a fallback, and only when the prefix
-    is long enough to identify one session rather than act as a wildcard.
-    """
-    exact = list(SESSION_ROOT.glob(f"*/{session_id}.jsonl"))
-    if exact or len(session_id) < 8:
-        return exact
-    return list(SESSION_ROOT.glob(f"*/{session_id}*.jsonl"))
-
-
-def _same_session(a: str, b: str) -> bool:
-    """Same session, tolerating one side being a shortened id."""
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    short, long_ = sorted((a, b), key=len)
-    return len(short) >= 8 and long_.startswith(short)
-
-
-def _session_alive(session_id: str, now: float | None = None) -> bool:
-    """True while the owning session's transcript is still being written.
-
-    The transcript is `<project-slug>/<session-id>.jsonl` and a worktree session
-    lives under its own slug, so the lookup globs every project.
-    """
-    if not session_id or "/" in session_id or "\\" in session_id:
-        return False
-    moment = time.time() if now is None else now
-    try:
-        for transcript in _transcripts_for(session_id):
-            try:
-                if moment - transcript.stat().st_mtime <= FOREIGN_LIVE_SECONDS:
-                    return True
-            except OSError:
-                continue
-    except OSError:
-        return False
-    return False
 
 
 def _foreign_and_live(contract: dict[str, Any], current_session: str) -> str:
@@ -536,6 +511,9 @@ def _self_test() -> int:
         sessions = tmp / "projects"
         (sessions / "slug").mkdir(parents=True)
         SESSION_ROOT = sessions
+        # the shared helper resolves the root per call from the env,
+        # so the seam this test relies on has to be set there too
+        os.environ["CLAUDE_SESSION_ROOT"] = str(sessions)
         live, stale, mine = "live-owner", "stale-owner", "my-session"
         (sessions / "slug" / f"{live}.jsonl").write_text("{}", encoding="utf-8")
         old = sessions / "slug" / f"{stale}.jsonl"

@@ -14,6 +14,7 @@ import datetime as _dt
 import json
 import os
 import re
+import time
 import sys
 from pathlib import Path
 
@@ -719,3 +720,80 @@ def age_from_filename(path) -> float | None:
     except ValueError:
         return None
     return (datetime.now() - stamp).total_seconds() / 60
+
+
+# --- session ownership, shared by every Stop gate over a shared directory -----
+#
+# A record lives in one directory but a Stop gate belongs to one session.
+# Without an owner, session A is blocked by session B's in-flight record --
+# collateral, and the usual answer to collateral is to switch the gate off. So
+# a live owner's open record only warns the others, while an ownerless or a
+# stale one still blocks everyone: this cannot become a silent escape.
+#
+# Extracted from transfer-contract-guard 2026-08-18 rather than copied into the
+# second caller. A duplicated guarded section is its own bug class -- the copies
+# drift and only one of them gets the fix.
+SESSION_ROOT = Path(
+    os.environ.get("CLAUDE_SESSION_ROOT") or (Path.home() / ".claude" / "projects")
+)
+# A live session's transcript is appended to continuously. Half an hour of
+# silence means the owner is not going to close this record on its own.
+FOREIGN_LIVE_SECONDS = int(os.environ.get("CLAUDE_TRANSFER_OWNER_TTL", "1800"))
+
+
+def _session_root() -> Path:
+    """Resolved per call, not frozen at import.
+
+    An import-time constant cannot be overridden by anything -- not a test, not
+    a caller with its own layout. Extracting these helpers broke transfer-
+    contract-guard's self-test for exactly that reason on 2026-08-18: the test
+    rebound the guard's own SESSION_ROOT, while the shared helper kept reading
+    the one captured when safety_common was imported.
+    """
+    return Path(
+        os.environ.get("CLAUDE_SESSION_ROOT") or (Path.home() / ".claude" / "projects")
+    )
+
+
+def transcripts_for(session_id: str) -> list:
+    """Transcript files belonging to this session id.
+
+    A record written by hand may carry a SHORTENED id (`c6b59e27`) while the
+    transcript file is the full uuid. An exact glob then finds nothing, a live
+    owner reads as dead, and every other session is blocked on a record that is
+    legitimately in flight -- measured 2026-08-10. Exact match first, prefix only
+    as a fallback, and only when the prefix is long enough to name one session
+    rather than act as a wildcard.
+    """
+    root = _session_root()
+    exact = list(root.glob(f"*/{session_id}.jsonl"))
+    if exact or len(session_id) < 8:
+        return exact
+    return list(root.glob(f"*/{session_id}*.jsonl"))
+
+
+def same_session(a: str, b: str) -> bool:
+    """Same session, tolerating one side being a shortened id."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long_ = sorted((a, b), key=len)
+    return len(short) >= 8 and long_.startswith(short)
+
+
+def session_alive(session_id: str, now: float | None = None) -> bool:
+    """True while the owning session's transcript is still being written."""
+    if not session_id or "/" in session_id or "\\" in session_id:
+        return False
+    moment = time.time() if now is None else now
+    try:
+        for transcript in transcripts_for(session_id):
+            try:
+                if moment - transcript.stat().st_mtime <= FOREIGN_LIVE_SECONDS:
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        return False
+    return False

@@ -43,11 +43,22 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from safety_common import (  # noqa: E402
+        same_session as _same_session,
+        session_alive as _session_alive,
         stop_budget_consume,
         stop_budget_exhausted,
     )
 except ImportError:  # fail-open: keep the original one-shot behaviour
     stop_budget_consume = stop_budget_exhausted = None  # type: ignore[assignment]
+    # Fail CLOSED on ownership: if the shared helper is unavailable we cannot
+    # tell a live foreign owner from a dead one, and guessing "foreign" would
+    # silently stop blocking on real cases. Treat every case as ours instead --
+    # noisier, never permissive.
+    def _same_session(a: str, b: str) -> bool:  # type: ignore[misc]
+        return True
+
+    def _session_alive(session_id: str) -> bool:  # type: ignore[misc]
+        return False
 
 # Gate name for the shared Stop-hook rejection budget (safety_common).
 #
@@ -297,16 +308,57 @@ def cases_for_intent(root: Path, intent_id: str) -> list[tuple[dict[str, Any], P
     return sorted(found, key=lambda item: float(item[0].get("updated_at", 0)), reverse=True)
 
 
-def unfinished_cases(root: Path) -> list[tuple[dict[str, Any], Path]]:
-    found: list[tuple[dict[str, Any], Path]] = []
+def case_owner(case: dict[str, Any]) -> str:
+    """Session that opened this case, however the writer spelled it."""
+    for key in ("session_id", "builder", "sessionId", "owner"):
+        value = case.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def foreign_and_live(case: dict[str, Any], current_session: str) -> str:
+    """Owner id when this case belongs to a DIFFERENT, still-live session.
+
+    Cases live in one shared directory but a Stop gate belongs to one session.
+    Without this, session A cannot end its turn until session B closes a case A
+    has never touched -- measured 2026-08-18, when two live sessions' in-flight
+    cases (PLAN_FROZEN and IMPLEMENTING, both written within the hour) held this
+    session's Stop indefinitely. The only ways out were to falsify another
+    session's record or to switch the gate off, and both are worse than the gap.
+
+    Deliberately narrow: an ownerless case still blocks everyone, and so does a
+    case whose owner has gone quiet past the TTL. A live owner's open case only
+    warns. Same contract as transfer-contract-guard, from the same helper rather
+    than a second copy -- duplicated guarded logic drifts and only one copy gets
+    the fix.
+    """
+    owner = case_owner(case)
+    if not owner or _same_session(owner, current_session):
+        return ""
+    return owner if _session_alive(owner) else ""
+
+
+def unfinished_cases(
+    root: Path, current_session: str = "",
+) -> tuple[list[tuple[dict[str, Any], Path]], list[tuple[dict[str, Any], Path]]]:
+    """(cases that block this session, cases owned by another live session)."""
+    blocking: list[tuple[dict[str, Any], Path]] = []
+    foreign: list[tuple[dict[str, Any], Path]] = []
     base = root / CASE_ROOT
     if not base.is_dir():
-        return found
+        return blocking, foreign
     for path in base.glob("*/case.json"):
         case = _read_json(path)
-        if case and case.get("status") not in COMPLETE_FOR_STOP:
-            found.append((case, path))
-    return sorted(found, key=lambda item: float(item[0].get("updated_at", 0)), reverse=True)
+        if not case or case.get("status") in COMPLETE_FOR_STOP:
+            continue
+        if foreign_and_live(case, current_session):
+            foreign.append((case, path))
+        else:
+            blocking.append((case, path))
+    key = lambda item: float(item[0].get("updated_at", 0))
+    return (sorted(blocking, key=key, reverse=True),
+            sorted(foreign, key=key, reverse=True))
 
 
 def unresolved_intents(root: Path) -> list[dict[str, Any]]:
@@ -719,7 +771,10 @@ def stop(event: dict[str, Any]) -> None:
     root = repo_root()
     if root is None:
         return
-    open_cases = unfinished_cases(root)
+    open_cases, foreign_cases = unfinished_cases(root, session_id_from_event(event))
+    for case, path in foreign_cases[:3]:
+        print(f"[root-cause-delivery] not blocking on {path.relative_to(root)}: "
+              f"owned by live session {case_owner(case)[:8]}", file=sys.stderr)
     if open_cases:
         details: list[str] = []
         for case, path in open_cases[:3]:
