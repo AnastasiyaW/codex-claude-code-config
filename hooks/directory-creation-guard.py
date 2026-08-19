@@ -230,7 +230,27 @@ def _has_lifecycle_label(cmd: str, accepted: set[str]) -> bool:
     return bool(labels & accepted)
 
 
+def _already_exists(path: str, cwd: str) -> bool:
+    """`mkdir -p` on an existing directory creates nothing, so there is nothing to place well.
+
+    The guard exists to stop folder PROLIFERATION. A directory that is already there cannot be
+    proliferated by a no-op, and the moment to argue about its placement was when it was first
+    created. Blocking the idempotent re-run instead punishes the safest way to write a script -
+    which is how this fired on a harness-provided scratch directory that the harness itself had
+    created. Passing here cannot weaken the guard: every genuinely NEW directory still goes
+    through every check below.
+    """
+    try:
+        candidate = path if os.path.isabs(path) else os.path.join(cwd, path)
+        return os.path.isdir(candidate)
+    except (OSError, ValueError):
+        return False
+
+
 def _verdict_for_target(path: str, cmd: str, cwd: str) -> str | None:
+    if _already_exists(path, cwd):
+        return None
+
     legacy_delete_marker = bool(DELETE_MARKER_RE.search(cmd))
     folder_meta = _has_folder_meta(cmd)
 
@@ -316,5 +336,54 @@ def main() -> None:
     allow()
 
 
+def _self_test() -> int:
+    """Prove both halves: the no-op passes, and a genuinely new scratch folder still does not."""
+    import shutil
+    import tempfile
+
+    # The sandbox may NOT live in the OS temp directory: the guard classifies anything under it
+    # as a loose folder at any depth, which would make the marked-directory case fail for a
+    # reason that has nothing to do with what is being tested. Build it beside this hook.
+    failures = []
+    sandbox = tempfile.mkdtemp(dir=os.path.dirname(os.path.abspath(__file__)),
+                               prefix=".selftest-")
+    try:
+        root = sandbox
+        existing = os.path.join(root, "scratch-tmp")
+        os.makedirs(existing)
+
+        proj = os.path.join(root, "proj", "scripts")
+        os.makedirs(proj)
+        marked = os.path.join(proj, "tmp-run2")
+        cases = [
+            # (label, path, cmd, cwd, expect_blocked)
+            # the half this change adds: a no-op is not a creation
+            ("existing dir, absolute", existing,
+             "mkdir -p %s" % existing, root, False),
+            ("existing dir, relative", "scratch-tmp",
+             "mkdir -p scratch-tmp", root, False),
+            # the half that must not weaken: a genuinely new folder is still judged
+            ("NEW scratch dir, no marker", os.path.join(root, "tmp-run"),
+             "mkdir -p %s/tmp-run" % root, root, True),
+            ("NEW scratch dir, marked, inside a tree", marked,
+             "mkdir -p %s && echo TEMP_REPRODUCIBLE > %s/.folder-meta.json" % (marked, marked),
+             root, False),
+        ]
+        for label, path, cmd, cwd, expect_blocked in cases:
+            got = _verdict_for_target(path, cmd, cwd) is not None
+            mark = "ok " if got == expect_blocked else "FAIL"
+            if got != expect_blocked:
+                failures.append(label)
+            print("  %s %-34s blocked=%-5s expected=%s" % (mark, label, got, expect_blocked))
+
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+    print("  %d/%d passed" % (len(cases) - len(failures), len(cases)))
+    return 1 if failures else 0
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        sys.exit(_self_test())
     main()
