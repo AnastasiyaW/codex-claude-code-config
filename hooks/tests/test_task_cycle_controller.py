@@ -153,7 +153,7 @@ class TaskCycleControllerTests(unittest.TestCase):
         )
         self.assertEqual(code, 2)
         self.assertIn("evidence file does not exist", stderr)
-        finding["next_action"] = "A different causal boundary must use a new id."
+        finding["boundary"] = "A different causal boundary must use a new id."
         self.write_findings([finding])
         code, _result, stderr = self.invoke("reconcile")
         self.assertEqual(code, 2)
@@ -173,6 +173,11 @@ class TaskCycleControllerTests(unittest.TestCase):
             "--next-action", "Repair the process tracing boundary before re-running it.",
             "--causal-boundary", "VM trace drops child-process ancestry",
         )
+        self.assertEqual(code, 0, stderr)
+        # A failed proof owns a new operational next action. Reconciling the
+        # unchanged evaluator finding must preserve that repair action instead
+        # of treating it as an illegal change to the accepted contract.
+        code, _result, stderr = self.invoke("reconcile")
         self.assertEqual(code, 0, stderr)
         code, result, stderr = self.invoke("next")
         self.assertEqual(code, 0, stderr)

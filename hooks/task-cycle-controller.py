@@ -46,7 +46,6 @@ FROZEN_KEYS = (
     "classification",
     "accepted_requirement",
     "boundary",
-    "next_action",
     "proof_requirements",
     "proof_plan",
 )
