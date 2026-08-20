@@ -65,6 +65,9 @@ class AgenticRagModelPolicyTests(unittest.TestCase):
             "higher levels only when evals show",
             "model_policy",
             "Every row must define fallback behavior",
+            "reasoning.context: all_turns",
+            "reasoning.context:\n  current_turn",
+            "encrypted reasoning items",
         ]
         for text in required:
             with self.subTest(text=text):
@@ -75,8 +78,20 @@ class AgenticRagModelPolicyTests(unittest.TestCase):
             "Programmatic Tool Calling Adoption Gate",
             "allowed_callers",
             "call_id",
+            "input/output schema",
+            "idempotent using that `call_id`",
             "Do not put write, send, delete, billing, or identity-access operations",
             "typed tools with permission gates",
+        ]
+        for text in required:
+            with self.subTest(text=text):
+                self.assertIn(text, self.reference)
+
+    def test_responses_api_features_are_not_confused_with_codex_desktop_flags(self) -> None:
+        required = [
+            "Responses Features Are Not Codex Desktop Flags",
+            "Hosted Responses multi-agent and Programmatic Tool Calling are API features",
+            "representative direct-call baseline",
         ]
         for text in required:
             with self.subTest(text=text):

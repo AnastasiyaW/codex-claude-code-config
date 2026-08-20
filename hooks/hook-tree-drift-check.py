@@ -5,8 +5,9 @@ Why this exists
 ---------------
 Two hook trees live side by side on this machine - `~/.claude/hooks` and
 `~/.claude/claude-code-config/hooks` - and 39 scripts share a basename across
-them. `settings.json` decides which copy actually runs, and nothing else on the
-machine says so. A whole review round was spent hardening the WRONG copy of
+them. Claude's `settings.json` and Codex's `~/.codex/hooks.json` decide which
+copy actually runs, and nothing else on the machine says so. A whole review
+round was spent hardening the WRONG copy of
 `transfer-contract-guard.py`: twelve checks went green describing a file that is
 never executed, and the shared module beside it lacked the function the fix
 depended on, so the import raised and was swallowed.
@@ -17,6 +18,8 @@ that fact is written down is the manifest. So this check reads the manifest.
 
 What it reports (advisory, never blocks)
 ----------------------------------------
+  * SPLIT   - two manifests actively run different same-named copies. Neither
+              is a shadow: both execute, so their divergence is live risk.
   * SHADOW  - a registered hook has a same-named copy elsewhere whose bytes
               DIFFER. Editing the shadow is silent no-op work. This is the one
               that has already cost real time.
@@ -66,8 +69,8 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _registered(settings: dict) -> dict[str, str]:
-    """basename -> the path `settings.json` actually runs, forward-slashed."""
+def _registered(manifest: dict) -> set[str]:
+    """All Python paths a Claude or Codex hook manifest runs, forward-slashed."""
     commands: list[str] = []
 
     def walk(node: object) -> None:
@@ -81,12 +84,12 @@ def _registered(settings: dict) -> dict[str, str]:
             for value in node:
                 walk(value)
 
-    walk(settings.get("hooks", {}))
-    found: dict[str, str] = {}
+    walk(manifest.get("hooks", {}))
+    found: set[str] = set()
     for command in commands:
         for match in SCRIPT_IN_COMMAND.finditer(command):
             path = match.group(0).replace("\\", "/")
-            found[path.rsplit("/", 1)[-1]] = path
+            found.add(path)
     return found
 
 
@@ -95,12 +98,23 @@ def _resolve(path: str, home: Path) -> Path:
     return Path(text)
 
 
-def survey(home: Path) -> list[tuple[str, str]]:
+def survey(home: Path, codex_hooks_path: Path | None = None) -> list[tuple[str, str]]:
     """Return (kind, message) findings. Pure, so the self-test can drive it."""
     settings_path = home / "settings.json"
-    if not settings_path.exists():
+    if codex_hooks_path is None:
+        codex_hooks_path = Path.home() / ".codex" / "hooks.json"
+    manifests: list[tuple[str, Path]] = []
+    if settings_path.exists():
+        manifests.append(("Claude settings.json", settings_path))
+    if codex_hooks_path.exists():
+        manifests.append(("Codex hooks.json", codex_hooks_path))
+    if not manifests:
         return []
-    registered = _registered(json.loads(settings_path.read_text(encoding="utf-8")))
+    declared_by_name: dict[str, set[str]] = {}
+    for _label, manifest_path in manifests:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for declared in _registered(manifest):
+            declared_by_name.setdefault(Path(declared).name, set()).add(declared)
     present: dict[str, list[Path]] = {}
     for tree in TREES:
         directory = home / tree
@@ -117,30 +131,57 @@ def survey(home: Path) -> list[tuple[str, str]]:
     # directly.  One representative manifest command per live parent is enough
     # to identify which copy owns that dependency.
     active_parents: dict[Path, str] = {}
-    for name, declared in sorted(registered.items()):
-        target = _resolve(declared, home)
-        if not target.exists():
-            findings.append(("DEAD", f"{name}: registered as {declared}, which does not exist"))
+    active_by_name: dict[str, dict[Path, set[str]]] = {}
+    for name, declared_paths in sorted(declared_by_name.items()):
+        for declared in sorted(declared_paths):
+            target = _resolve(declared, home)
+            if not target.exists():
+                findings.append(("DEAD", f"{name}: registered as {declared}, which does not exist"))
+                continue
+            resolved = target.resolve()
+            active_by_name.setdefault(name, {}).setdefault(resolved, set()).add(declared)
+            active_parents.setdefault(resolved.parent, declared)
+
+    for name, targets in sorted(active_by_name.items()):
+        if len(targets) < 2:
             continue
-        active_parents.setdefault(target.parent.resolve(), declared)
+        resolved_targets = sorted(targets, key=str)
         try:
-            live = _digest(target)
+            digests = {_digest(target) for target in resolved_targets}
         except OSError:
             continue
-        for other in present.get(name, []):
+        paths = ", ".join(str(target).replace("\\", "/") for target in resolved_targets)
+        kind = "TWIN" if len(digests) == 1 else "SPLIT"
+        message = (
+            f"{name}: {kind.lower()} active registrations at {paths}"
+            if kind == "TWIN"
+            else f"{name}: DIFFERENT active registrations at {paths}"
+        )
+        findings.append((kind, message))
+
+    for name, targets in sorted(active_by_name.items()):
+        active_targets = set(targets)
+        for target, declarations in sorted(targets.items(), key=lambda item: str(item[0])):
             try:
-                if other.resolve() == target.resolve():
-                    continue
-                same = _digest(other) == live
+                live = _digest(target)
             except OSError:
                 continue
-            where = str(other).replace("\\", "/")
-            findings.append((
-                "TWIN" if same else "SHADOW",
-                f"{name}: runs from {declared}"
-                + (f", identical copy at {where}" if same
-                   else f", but a DIFFERENT copy sits at {where}"),
-            ))
+            declared = sorted(declarations)[0]
+            for other in present.get(name, []):
+                try:
+                    resolved_other = other.resolve()
+                    if resolved_other == target or resolved_other in active_targets:
+                        continue
+                    same = _digest(other) == live
+                except OSError:
+                    continue
+                where = str(other).replace("\\", "/")
+                findings.append((
+                    "TWIN" if same else "SHADOW",
+                    f"{name}: runs from {declared}"
+                    + (f", identical copy at {where}" if same
+                       else f", but a DIFFERENT copy sits at {where}"),
+                ))
     comparable_dependency_dirs = {(home / tree).resolve() for tree in SHARED_DEPENDENCY_TREES}
     for live_parent, declared in sorted(active_parents.items(), key=lambda item: str(item[0])):
         if live_parent not in comparable_dependency_dirs:
@@ -170,7 +211,7 @@ def survey(home: Path) -> list[tuple[str, str]]:
             ))
     hook_dirs = {(home / tree).resolve() for tree in HOOK_TREES}
     for name, copies in sorted(present.items()):
-        if name in registered or name.startswith("_") or name == "safety_common.py":
+        if name in declared_by_name or name.startswith("_") or name == "safety_common.py":
             continue
         if any(part in ("tests", "__pycache__") for copy in copies for part in copy.parts):
             continue
@@ -181,11 +222,15 @@ def survey(home: Path) -> list[tuple[str, str]]:
 
 
 def _report(findings: list[tuple[str, str]]) -> str:
+    splits = [m for kind, m in findings if kind == "SPLIT"]
     shadows = [m for kind, m in findings if kind == "SHADOW"]
     dead = [m for kind, m in findings if kind == "DEAD"]
     twins = [m for kind, m in findings if kind == "TWIN"]
     orphans = [m for kind, m in findings if kind == "ORPHAN"]
     lines = ["[hook-tree] the manifest and the files on disk disagree:"]
+    if splits:
+        lines.append(f"  {len(splits)} SPLIT active registration(s) - different copies both execute:")
+        lines.extend(f"    {m}" for m in splits[:4])
     if shadows:
         lines.append(f"  {len(shadows)} SHADOW - editing this copy is a silent no-op:")
         lines.extend(f"    {m}" for m in shadows[:6])
@@ -198,7 +243,7 @@ def _report(findings: list[tuple[str, str]]) -> str:
         lines.append(f"  {len(twins)} identical twin(s) - harmless until someone edits one side")
     if orphans:
         lines.append(f"  {len(orphans)} script(s) registered by no event")
-    lines.append("  Fix the SHADOW ones by editing the path settings.json names, not the basename.")
+    lines.append("  Fix SPLIT/SHADOW by editing the manifest-targeted path, not the basename.")
     return "\n".join(lines)
 
 
@@ -250,17 +295,33 @@ def _self_test() -> int:
         ]}]}}
         (home / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
-        kinds = {kind for kind, _ in survey(home)}
+        codex_hooks = home / ".codex" / "hooks.json"
+        kinds = {kind for kind, _ in survey(home, codex_hooks)}
         for expected in ("SHADOW", "TWIN", "DEAD", "ORPHAN"):
             if expected not in kinds:
                 fails.append(f"{expected} not reported")
-        shadow = [m for kind, m in survey(home) if kind == "SHADOW"]
+        shadow = [m for kind, m in survey(home, codex_hooks) if kind == "SHADOW"]
         if not any("guard.py" in m for m in shadow):
             fails.append("the differing copy was not the one named as SHADOW")
         if any("same.py" in m for m in shadow):
             fails.append("an identical copy was reported as a SHADOW")
         if not any("safety_common.py" in m for m in shadow):
             fails.append("a shadowed shared dependency was not reported")
+
+        # Codex has its own manifest. A different active same-named copy is not
+        # a SHADOW: both copies execute, so it must be reported as a SPLIT.
+        codex_hooks.parent.mkdir()
+        codex_manifest = {
+            "hooks": {
+                "PreToolUse": [{
+                    "hooks": [{"type": "command", "command": f"python {old / 'guard.py'}"}],
+                }],
+            },
+        }
+        codex_hooks.write_text(json.dumps(codex_manifest), encoding="utf-8")
+        split = [m for kind, m in survey(home, codex_hooks) if kind == "SPLIT"]
+        if not any("guard.py" in m for m in split):
+            fails.append("a differing Codex active registration was not reported as SPLIT")
 
         # A tree with no duplicates and no dead registration must be silent.
         (old / "guard.py").unlink()
@@ -269,8 +330,10 @@ def _self_test() -> int:
         (old / "nobody-calls-me.py").unlink()
         (live / "safety_common.py").unlink()
         (live / "vanished.py").write_text("print('now it exists')\n", encoding="utf-8")
-        if survey(home):
-            fails.append(f"a clean tree was not silent: {survey(home)}")
+        codex_hooks.unlink()
+        clean = survey(home, codex_hooks)
+        if clean:
+            fails.append(f"a clean tree was not silent: {clean}")
 
     if fails:
         print("hook-tree-drift-check self-test FAILED:")

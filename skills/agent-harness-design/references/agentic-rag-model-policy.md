@@ -115,6 +115,13 @@ not by habit:
 - use `reasoning.effort` deliberately: `low` for latency-sensitive work,
   `medium` as the balanced starting point, higher levels only when evals show
   measured gains;
+- preserve `reasoning.context: all_turns` only while the objective and external
+  world are still the same; after a phase boundary, changed requirement, or
+  stale tool result, start the next request with `reasoning.context:
+  current_turn` rather than carrying obsolete hidden reasoning forward;
+- if a Responses workflow uses `store=false`, retain the complete prior model
+  output (including encrypted reasoning items), not only rendered assistant
+  text, before manually continuing the turn;
 - reserve `max` and pro mode for quality-first workloads with proof that the
   added cost/latency improves the acceptance criteria;
 - track prompt caching with `cached_tokens` and `cache_write_tokens` before
@@ -148,11 +155,22 @@ Use Programmatic Tool Calling only for workflows where all are true:
 - tools are read/search/compute-heavy, not broad side-effect tools;
 - `allowed_callers` limits which program can call which tool;
 - the harness preserves `call_id` and caller linkage;
+- the application validates each tool's input/output schema and makes any
+  side effect idempotent using that `call_id`;
 - benchmark compares task success, completeness, evidence, tokens, latency, and
   cost against the non-PTC baseline.
 
 Do not put write, send, delete, billing, or identity-access operations behind a
 generic programmatic executor. Keep them as typed tools with permission gates.
+
+## Responses Features Are Not Codex Desktop Flags
+
+Hosted Responses multi-agent and Programmatic Tool Calling are API features.
+They are not enabled by setting Codex Desktop's local `multi_agent` feature or
+by moving every local subagent to Sol. Keep one explicit controller model for
+the hard decision, retain a cheaper bounded worker tier, and adopt a hosted
+beta only in a real Responses client with its request header, schemas, and a
+representative direct-call baseline.
 
 ## Acceptance Checklist
 

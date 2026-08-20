@@ -40,3 +40,15 @@ returned proof instruction and records its fresh artifact. For
 `RECHECK_EXTERNAL`, it performs and records the named external check. For
 `WAIT_EXTERNAL`, it leaves the task untouched until the controller's timestamp.
 No heartbeat may substitute a static prose todo list for this result.
+
+For a scheduled root containing several explicit task directories, use the
+dispatcher rather than reimplementing that loop in an agent prompt:
+
+```text
+python scripts/task_cycle_heartbeat.py --tasks-root .agent/tasks --json
+```
+
+It considers only immediate subdirectories with `findings.json`, persists
+`.agent/tasks/task-cycle-heartbeat.json`, and returns at most one actionable
+next item (`WORK` or `RECHECK_EXTERNAL`). It never creates findings from chat,
+executes a proof, or records a pass: those require the named work and evidence.
