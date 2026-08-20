@@ -186,12 +186,19 @@ class TaskCycleControllerTests(unittest.TestCase):
         code, _result, stderr = self.invoke("reconcile")
         self.assertEqual(code, 0, stderr)
         # Existing cycles from the previous implementation have the failed
-        # action in next_action. Reconcile migrates only that receipt-bound
-        # legacy shape; unrelated evaluator edits remain a frozen violation.
+        # action in next_action. Reconcile must fail loud rather than guessing
+        # whether the incoming evaluator action is the original contract.
         cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
         cycle["work_orders"][0]["next_action"] = "Repair the process tracing boundary before re-running it."
         cycle_path.write_text(json.dumps(cycle), encoding="utf-8")
         code, _result, stderr = self.invoke("reconcile")
+        self.assertEqual(code, 2)
+        self.assertIn("new finding_id", stderr)
+        code, _result, stderr = self.invoke(
+            "migrate-legacy-action", "--finding", "F-001",
+            "--original-action", "Write the red release-admission reproducer and repair it.",
+            "--evidence", self.evidence("legacy-action-migration.txt"),
+        )
         self.assertEqual(code, 0, stderr)
         cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
         self.assertEqual(
