@@ -52,3 +52,10 @@ It considers only immediate subdirectories with `findings.json`, persists
 `.agent/tasks/task-cycle-heartbeat.json`, and returns at most one actionable
 next item (`WORK` or `RECHECK_EXTERNAL`). It never creates findings from chat,
 executes a proof, or records a pass: those require the named work and evidence.
+
+### Legacy action migration
+
+Only a pre-controller cycle where a failed proof overwrote its frozen
+`next_action` needs `migrate-legacy-action`. It requires a receipt and an
+explicit action that exactly matches `findings.json`; the heartbeat never calls
+it. A mismatched evaluator action still fails loud and needs a new finding ID.

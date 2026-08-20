@@ -272,17 +272,6 @@ def reconcile(task_dir: Path) -> dict[str, Any]:
             cycle["work_orders"].append(order)
             created.append(finding["finding_id"])
             continue
-        # Versions before the repair-action split overwrote the evaluator's
-        # frozen next_action after a failed proof.  Migrate only that exact
-        # recorded shape: the failure receipt proves who owns the replacement.
-        # Any other incoming contract mutation still fails loudly below.
-        failure = old.get("last_failure")
-        if (
-            isinstance(failure, dict)
-            and old.get("next_action") == failure.get("next_action")
-            and old.get("next_action") != finding.get("next_action")
-        ):
-            old["next_action"] = finding["next_action"]
         if finding_contract(old) != finding_contract(finding):
             raise CycleError(
                 f"{finding['finding_id']}: accepted contract changed; create a new finding_id for a new causal boundary"
@@ -322,6 +311,11 @@ def validate_evidence_files(task_dir: Path, cycle: dict[str, Any]) -> None:
         for proof, record in order["proofs"].items():
             if isinstance(record, dict) and record.get("result") == "PASS":
                 evidence_path(task_dir, record.get("evidence"))
+        migration = order.get("legacy_action_migration")
+        if migration is not None:
+            if not isinstance(migration, dict):
+                raise CycleError(f"{order['finding_id']}.legacy_action_migration must be an object")
+            evidence_path(task_dir, migration.get("evidence"))
 
 
 def find_order(cycle: dict[str, Any], finding_id: str) -> dict[str, Any]:
@@ -331,6 +325,46 @@ def find_order(cycle: dict[str, Any], finding_id: str) -> dict[str, Any]:
             cycle["work_orders"][index] = order
             return order
     raise CycleError(f"unknown finding_id {finding_id!r}")
+
+
+def migrate_legacy_action(
+    task_dir: Path, finding_id: str, original_action: str, evidence: str,
+) -> dict[str, Any]:
+    """Receipt-bind a one-time repair of the pre-v1 overwritten-action shape.
+
+    This is deliberately not part of ``reconcile`` or the heartbeat: without
+    a stored original action, an automatic migration cannot distinguish it
+    from an evaluator changing the contract.  The caller must name the action
+    currently in findings.json and supply a durable migration receipt.
+    """
+    input_data = load_json(findings_path(task_dir), "findings.json")
+    if input_data.get("schema") != FINDINGS_SCHEMA or not isinstance(input_data.get("findings"), list):
+        raise CycleError("findings.json is not a valid task finding document")
+    incoming = [validate_finding(row) for row in input_data["findings"]]
+    finding = next((row for row in incoming if row["finding_id"] == finding_id), None)
+    if finding is None:
+        raise CycleError(f"{finding_id}: not present in findings.json")
+    action = nonempty_string(original_action, "--original-action")
+    if action != finding["next_action"]:
+        raise CycleError("--original-action must equal the current findings.json next_action")
+
+    cycle = load_cycle(task_dir)
+    validate_evidence_files(task_dir, cycle)
+    order = find_order(cycle, finding_id)
+    failure = order.get("last_failure")
+    if not isinstance(failure, dict) or order.get("next_action") != failure.get("next_action"):
+        raise CycleError(f"{finding_id}: no receipt-bound legacy overwritten-action state to migrate")
+    receipt = evidence_path(task_dir, evidence)
+    order["next_action"] = action
+    order["legacy_action_migration"] = {
+        "evidence": receipt,
+        "original_action": action,
+        "migrated_at": now_utc(),
+    }
+    cycle["updated_at"] = now_utc()
+    validate_evidence_files(task_dir, cycle)
+    write_json_atomic(cycle_path(task_dir), cycle)
+    return select_next(cycle)
 
 
 def pending_proofs(order: dict[str, Any]) -> list[str]:
@@ -536,6 +570,12 @@ def main(argv: list[str] | None = None) -> int:
     external.add_argument("--next-check-at", required=True)
     external.add_argument("--blocker")
     external.add_argument("--json", action="store_true")
+    legacy = sub.add_parser("migrate-legacy-action")
+    legacy.add_argument("--task-dir", type=Path, required=True)
+    legacy.add_argument("--finding", required=True)
+    legacy.add_argument("--original-action", required=True)
+    legacy.add_argument("--evidence", required=True)
+    legacy.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
         task_dir = args.task_dir.resolve()
@@ -556,6 +596,8 @@ def main(argv: list[str] | None = None) -> int:
                 task_dir, args.finding, args.proof, args.result, args.evidence,
                 args.reviewer, args.fresh_context, args.next_action, args.causal_boundary,
             )
+        elif args.command == "migrate-legacy-action":
+            result = migrate_legacy_action(task_dir, args.finding, args.original_action, args.evidence)
         else:
             result = record_external_check(
                 task_dir, args.finding, args.evidence, args.next_check_at, args.blocker,
