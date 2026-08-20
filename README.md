@@ -379,6 +379,7 @@ These work well alongside the principles:
 - **[hookify](https://github.com/AstroMined/hookify)** - git hooks generator for Claude Code
 - **[Semgrep](https://semgrep.dev/)** - static analysis, pairs with deep-review
 - **[task-orchestrator](https://github.com/jpicklyk/task-orchestrator)** - MCP task orchestration with dependency ordering
+- **[awesome-claude-code-hooks](https://github.com/loqimean/awesome-claude-code-hooks)** - curated list of Claude Code hooks and hook resources
 
 ---
 
