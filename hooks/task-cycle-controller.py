@@ -46,6 +46,7 @@ FROZEN_KEYS = (
     "classification",
     "accepted_requirement",
     "boundary",
+    "next_action",
     "proof_requirements",
     "proof_plan",
 )
@@ -249,12 +250,13 @@ def reconcile(task_dir: Path) -> dict[str, Any]:
 
     cycle = load_cycle(task_dir, required=False)
     existing: dict[str, dict[str, Any]] = {}
-    for raw in cycle["work_orders"]:
+    for index, raw in enumerate(cycle["work_orders"]):
         order = validate_order(raw)
         fid = order["finding_id"]
         if fid in existing:
             raise CycleError(f"cycle.json has duplicate finding_id {fid!r}")
         existing[fid] = order
+        cycle["work_orders"][index] = order
 
     created: list[str] = []
     for finding in normalized:
@@ -270,6 +272,17 @@ def reconcile(task_dir: Path) -> dict[str, Any]:
             cycle["work_orders"].append(order)
             created.append(finding["finding_id"])
             continue
+        # Versions before the repair-action split overwrote the evaluator's
+        # frozen next_action after a failed proof.  Migrate only that exact
+        # recorded shape: the failure receipt proves who owns the replacement.
+        # Any other incoming contract mutation still fails loudly below.
+        failure = old.get("last_failure")
+        if (
+            isinstance(failure, dict)
+            and old.get("next_action") == failure.get("next_action")
+            and old.get("next_action") != finding.get("next_action")
+        ):
+            old["next_action"] = finding["next_action"]
         if finding_contract(old) != finding_contract(finding):
             raise CycleError(
                 f"{finding['finding_id']}: accepted contract changed; create a new finding_id for a new causal boundary"
@@ -390,7 +403,6 @@ def record_proof(
             "next_action": failure_action,
             "recorded_at": now_utc(),
         }
-        order["next_action"] = failure_action
         order["status"] = "ESCALATED" if order["attempts"] >= MAX_FAILED_PROOFS else "READY"
     else:
         order["proofs"][proof] = proof_record
@@ -457,7 +469,7 @@ def select_next(cycle: dict[str, Any], now: dt.datetime | None = None) -> dict[s
             "finding_id": order["finding_id"],
             "status": order["status"],
             "boundary": failure.get("causal_boundary", order["boundary"]),
-            "next_action": order["next_action"],
+            "next_action": failure.get("next_action", order["next_action"]),
             "next_proof": proof,
             "proof_instruction": order["proof_plan"].get(proof) if proof else None,
         }
