@@ -174,11 +174,35 @@ class TaskCycleControllerTests(unittest.TestCase):
             "--causal-boundary", "VM trace drops child-process ancestry",
         )
         self.assertEqual(code, 0, stderr)
+        cycle_path = self.task / "cycle.json"
+        cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            cycle["work_orders"][0]["next_action"],
+            "Write the red release-admission reproducer and repair it.",
+        )
+        # A failed proof owns a repair action in its receipt. Reconciling the
+        # unchanged evaluator finding keeps its frozen action while `next`
+        # still returns the repair action.
+        code, _result, stderr = self.invoke("reconcile")
+        self.assertEqual(code, 0, stderr)
+        # Existing cycles from the previous implementation have the failed
+        # action in next_action. Reconcile migrates only that receipt-bound
+        # legacy shape; unrelated evaluator edits remain a frozen violation.
+        cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
+        cycle["work_orders"][0]["next_action"] = "Repair the process tracing boundary before re-running it."
+        cycle_path.write_text(json.dumps(cycle), encoding="utf-8")
+        code, _result, stderr = self.invoke("reconcile")
+        self.assertEqual(code, 0, stderr)
+        cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            cycle["work_orders"][0]["next_action"],
+            "Write the red release-admission reproducer and repair it.",
+        )
         code, result, stderr = self.invoke("next")
         self.assertEqual(code, 0, stderr)
         self.assertEqual(result and result["boundary"], "VM trace drops child-process ancestry")
         self.assertEqual(result and result["next_proof"], "focused_test")
-        cycle = json.loads((self.task / "cycle.json").read_text(encoding="utf-8"))
+        cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
         self.assertEqual(cycle["work_orders"][0]["proofs"], {})
 
     def test_hand_edited_acceptance_without_evidence_is_rejected(self) -> None:
