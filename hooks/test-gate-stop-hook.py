@@ -100,6 +100,8 @@ except ImportError:  # fail-open: keep the original one-shot behaviour
     stop_budget_consume = stop_budget_exhausted = untrusted_block = None  # type: ignore[assignment]
 
 TEST_TIMEOUT_SEC = 180
+TEST_TIMEOUT_MIN_SEC = 30
+TEST_TIMEOUT_MAX_SEC = 1800
 MAX_OUTPUT_BYTES = 4000
 MIN_SESSION_MINUTES = 2
 # Gate name for the shared Stop-hook rejection budget (safety_common).
@@ -310,6 +312,50 @@ def portable_argv(cmd: list[str], cwd: Path) -> list[str]:
     return [bash, exe.replace("\\", "/"), *cmd[1:]]
 
 
+def resolve_timeout(cwd: Path) -> int:
+    """How long the suite may run before we call it hung.
+
+    The module docstring has advertised `TEST_TIMEOUT_SEC` as a knob while the code held a
+    constant, so the documented control did not exist. It does now, and a project can also state
+    its own budget in `.claude/test-command` as a `# timeout: <seconds>` comment line - the honest
+    place for it, next to the command whose runtime it describes.
+
+    A suite that finishes green in 139 seconds must not be reported as a timeout at 180: that reads
+    exactly like a red suite while nothing was wrong, the failure mode these hooks exist to prevent.
+    Precedence: project directive, then environment, then the default. Malformed values are
+    announced on stderr rather than silently ignored.
+    """
+    def clamp(value: int) -> int:
+        return max(TEST_TIMEOUT_MIN_SEC, min(TEST_TIMEOUT_MAX_SEC, value))
+
+    override = cwd / ".claude" / "test-command"
+    if override.exists() and override.is_file():
+        try:
+            for raw_line in override.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line.startswith("#"):
+                    if line:
+                        break  # the command line; directives live above it
+                    continue
+                body = line.lstrip("#").strip()
+                if body.lower().startswith("timeout:"):
+                    text = body.split(":", 1)[1].strip()
+                    if text.isdigit():
+                        return clamp(int(text))
+                    print("[test-gate] ignoring malformed '# timeout: " + text
+                          + "' in .claude/test-command", file=sys.stderr)
+        except OSError as exc:
+            print("[test-gate] cannot read .claude/test-command for its timeout: "
+                  + str(exc), file=sys.stderr)
+
+    env = os.environ.get("TEST_TIMEOUT_SEC", "").strip()
+    if env:
+        if env.isdigit():
+            return clamp(int(env))
+        print("[test-gate] ignoring malformed TEST_TIMEOUT_SEC=" + repr(env), file=sys.stderr)
+    return TEST_TIMEOUT_SEC
+
+
 def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
     """Detect what test command to run. Returns (cmd_list, label) or None."""
 
@@ -464,7 +510,7 @@ def main() -> int:
                 cmd,
                 cwd=cwd,
                 capture_output=True,
-                timeout=TEST_TIMEOUT_SEC,
+                timeout=resolve_timeout(cwd),
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -472,7 +518,7 @@ def main() -> int:
             )
         except subprocess.TimeoutExpired:
             failures.append(
-                f"{label}: timeout after {TEST_TIMEOUT_SEC}s; no green evidence was produced"
+                f"{label}: timeout after {resolve_timeout(cwd)}s; no green evidence was produced"
             )
             continue
         except (FileNotFoundError, OSError) as e:
