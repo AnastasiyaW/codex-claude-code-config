@@ -340,8 +340,11 @@ def resolve_timeout(cwd: Path) -> int:
                 body = line.lstrip("#").strip()
                 if body.lower().startswith("timeout:"):
                     text = body.split(":", 1)[1].strip()
-                    if text.isdigit():
-                        return clamp(int(text))
+                    if text.isdecimal():
+                        try:
+                            return clamp(int(text))
+                        except ValueError:
+                            pass
                     print("[test-gate] ignoring malformed '# timeout: " + text
                           + "' in .claude/test-command", file=sys.stderr)
         except OSError as exc:
@@ -350,8 +353,11 @@ def resolve_timeout(cwd: Path) -> int:
 
     env = os.environ.get("TEST_TIMEOUT_SEC", "").strip()
     if env:
-        if env.isdigit():
-            return clamp(int(env))
+        if env.isdecimal():
+            try:
+                return clamp(int(env))
+            except ValueError:
+                pass
         print("[test-gate] ignoring malformed TEST_TIMEOUT_SEC=" + repr(env), file=sys.stderr)
     return TEST_TIMEOUT_SEC
 
@@ -501,6 +507,9 @@ def main() -> int:
     )
 
     failures: list[str] = []
+    # Resolved ONCE: the number enforced and the number reported must be the same number, even if
+    # a suite rewrites its own .claude/test-command while running.
+    timeout_sec = resolve_timeout(cwd)
     for cmd, label in commands:
         cmd = portable_argv(cmd, cwd)
         try:
@@ -510,7 +519,7 @@ def main() -> int:
                 cmd,
                 cwd=cwd,
                 capture_output=True,
-                timeout=resolve_timeout(cwd),
+                timeout=timeout_sec,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -518,7 +527,7 @@ def main() -> int:
             )
         except subprocess.TimeoutExpired:
             failures.append(
-                f"{label}: timeout after {resolve_timeout(cwd)}s; no green evidence was produced"
+                f"{label}: timeout after {timeout_sec}s; no green evidence was produced"
             )
             continue
         except (FileNotFoundError, OSError) as e:
@@ -602,7 +611,79 @@ def _record_cli(argv: list[str]) -> int:
     return 0
 
 
+def _self_test() -> int:
+    """`--self-test` - prove the timeout resolution, because nothing else does.
+
+    An independent review found that `isdigit()` accepts characters `int()` refuses ("2" superscript
+    is one), so a repository writing `# timeout: <that>` raised a ValueError past the OSError handler,
+    killed this hook, and the Stop gate was skipped without a word. A gate that repository text can
+    silently switch off is worse than no gate, so the predicate now has a test that fails if anyone
+    loosens it again.
+    """
+    import tempfile
+
+    failures = 0
+
+    def check(label: str, got: object, want: object) -> None:
+        nonlocal failures
+        if got != want:
+            failures += 1
+            print(f"  FAIL {label}: got {got!r}, wanted {want!r}")
+        else:
+            print(f"  ok   {label}: {got!r}")
+
+    saved = os.environ.pop("TEST_TIMEOUT_SEC", None)
+    try:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / ".claude").mkdir()
+            cmd = root / ".claude" / "test-command"
+
+            cmd.write_text("# no directive\npytest -q\n", encoding="utf-8")
+            check("no directive, no env", resolve_timeout(root), TEST_TIMEOUT_SEC)
+
+            os.environ["TEST_TIMEOUT_SEC"] = "420"
+            check("env only", resolve_timeout(root), 420)
+
+            cmd.write_text("# timeout: 90\npytest -q\n", encoding="utf-8")
+            check("directive beats env", resolve_timeout(root), 90)
+
+            cmd.write_text("# timeout: 99999\npytest -q\n", encoding="utf-8")
+            check("clamped to the ceiling", resolve_timeout(root), TEST_TIMEOUT_MAX_SEC)
+
+            cmd.write_text("# timeout: 5\npytest -q\n", encoding="utf-8")
+            check("clamped to the floor", resolve_timeout(root), TEST_TIMEOUT_MIN_SEC)
+
+            # the regression that mattered: a value isdigit() accepts and int() refuses must NOT
+            # crash the hook, because a crash here skips the whole gate
+            cmd.write_text("# timeout: \u00b2\npytest -q\n", encoding="utf-8")
+            check("superscript does not kill the gate", resolve_timeout(root), 420)
+
+            cmd.write_text("# timeout: soon\npytest -q\n", encoding="utf-8")
+            check("non-numeric falls through to env", resolve_timeout(root), 420)
+
+            os.environ["TEST_TIMEOUT_SEC"] = "\u00b2"
+            cmd.write_text("# no directive\npytest -q\n", encoding="utf-8")
+            check("superscript in the env is refused too", resolve_timeout(root), TEST_TIMEOUT_SEC)
+            os.environ["TEST_TIMEOUT_SEC"] = "420"
+
+            cmd.write_text("pytest -q\n# timeout: 90\n", encoding="utf-8")
+            check("a directive below the command is not a directive", resolve_timeout(root), 420)
+
+            os.environ.pop("TEST_TIMEOUT_SEC", None)
+            check("no file at all", resolve_timeout(root / "absent"), TEST_TIMEOUT_SEC)
+    finally:
+        os.environ.pop("TEST_TIMEOUT_SEC", None)
+        if saved is not None:
+            os.environ["TEST_TIMEOUT_SEC"] = saved
+
+    print(f"SCANNED: cases=10 failures={failures}")
+    return 1 if failures else 0
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        sys.exit(_self_test())
     if "--record" in sys.argv:
         sys.exit(_record_cli(sys.argv))
     sys.exit(main())
