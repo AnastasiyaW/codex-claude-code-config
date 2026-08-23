@@ -1,12 +1,12 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-14T10:47:32+00:00",
-  "skill_count": 50,
-  "aggregate_hash": "sha256:414a1d5fde76b023fc97d13b92b1f576596af8446a12e4227519b952cdeadb8c",
+  "generated_at": "2026-08-23T14:24:31+00:00",
+  "skill_count": 51,
+  "aggregate_hash": "sha256:246b45c4e2e593f7bdc5a3d9cc003feabddf02b5dbc76ea851f2499e1e826c08",
   "skills": {
     "agent-harness-design": {
-      "content_hash": "sha256:9737ec747c5409c33f0e1eed31092010260cb857a39fcfdb0f64bff40c45f659",
-      "size_bytes": 95375,
+      "content_hash": "sha256:698f850dd8e71ec4dcde9bdaa670c067852e47a67f97dcdcbe72db385e29621a",
+      "size_bytes": 96468,
       "file_count": 12,
       "files": [
         "SKILL.md",
@@ -461,6 +461,14 @@
         "scripts/sessions_inventory.py",
         "scripts/sessions_registry.py",
         "scripts/sessions_restore.py"
+      ]
+    },
+    "operational/epistemic-challenge": {
+      "content_hash": "sha256:c051e376efad86cbaec59449576aac971dba7553cd426359289a27f27213fada",
+      "size_bytes": 4686,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
       ]
     },
     "operational/gemini-delegate": {

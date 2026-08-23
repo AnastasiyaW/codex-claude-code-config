@@ -10,7 +10,9 @@ import sys
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
-HOOK = Path.home() / ".claude" / "claude-code-config" / "hooks" / "keyword-skill-router.py"
+# Test the checkout that owns this test.  Pointing through Path.home() silently
+# tests an older live source while a branch is under review.
+HOOK = Path(__file__).resolve().parent.parent / "hooks" / "keyword-skill-router.py"
 
 CASES = [
     # starting / laying out
@@ -45,6 +47,9 @@ CASES = [
     ("how should we evaluate the coding agent trajectory", "testing-strategy"),
     ("the VM-harness is overloaded and blocks staging smoke", "harness-feedback"),
     ("слишком жесткий gate блокирует staging smoke", "harness-feedback"),
+    ("не соглашайся со мной без доказательств, проверь гипотезу", "epistemic-challenge"),
+    ("challenge my assumption with evidence, not a devil's-advocate performance", "epistemic-challenge"),
+    ("Translate this literal string to Russian: 'Challenge my assumption with evidence.'", None),
     ("привет, как дела", None),
 ]
 

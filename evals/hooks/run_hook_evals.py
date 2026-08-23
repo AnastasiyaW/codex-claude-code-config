@@ -25,8 +25,8 @@ USERPROFILE/HOME pointed at it, so hooks that consult ~/.claude
 deterministic world and leave no traces in the real one.
 
 Usage:
-  python run_hook_evals.py            # HOOKS_DIR defaults to the ACTIVE
-                                      # dir ~/.claude/claude-code-config/hooks
+  python run_hook_evals.py            # HOOKS_DIR defaults to this checkout's
+                                      # hooks/ directory
   HOOKS_DIR=<path> python run_hook_evals.py   # e.g. the repo copy
 Exit code: 0 = all pass, 1 = failures.
 """
@@ -40,7 +40,9 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).parent
-DEFAULT_HOOKS = Path.home() / ".claude" / "claude-code-config" / "hooks"
+# The default must follow the checkout that owns these fixtures.  Pointing via
+# Path.home() can make an uninstalled branch silently test the older live tree.
+DEFAULT_HOOKS = HERE.parents[1] / "hooks"
 HOOKS_DIR = Path(os.environ.get("HOOKS_DIR", str(DEFAULT_HOOKS)))
 
 

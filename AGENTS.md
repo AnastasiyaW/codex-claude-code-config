@@ -107,6 +107,18 @@ After installing into a local Codex/Claude environment, also run
 `python scripts/test_task_completion_hooks.py` and consult
 [`docs/runtime-wiring.md`](docs/runtime-wiring.md).
 
+## Delegating agents
+
+Before dispatching any subagent, render the task-bound contract with
+`python hooks/agent-skill-contract.py --task "<child task>"` and append it to
+the exact child prompt. It selects the minimum curated skill set (or an explicit
+no-route result), requires source-backed decisions, and records `INCONCLUSIVE`
+when no current source is available. Claude Code checks the contract at its
+native `Task` boundary. Codex adds the same universal discipline automatically
+through `SubagentStart` and requires one decision-source receipt at
+`SubagentStop`, but neither event can inspect or block a task-specific route;
+use the renderer as well when the coordinator can pass the exact prompt.
+
 ## Context engineering notes
 
 This file is designed for KV-cache efficiency and the 150-line AGENTS.md standard:

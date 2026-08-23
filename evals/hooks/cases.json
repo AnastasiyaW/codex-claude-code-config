@@ -142,6 +142,30 @@
    "stdout_contains": ["./missing/definitely-not-here.md"],
    "stdout_not_contains": ["probe", "GPU/port/container", "code.claude.com"]},
 
+  {"id": "Codex subagent gets source and minimal-skill context",
+   "hook": "subagent-skill-context.py",
+   "stdin": {"hook_event_name": "SubagentStart", "agent_id": "child-1"},
+   "expect": "output",
+   "stdout_contains": ["SubagentStart", "smallest available skill set", "INCONCLUSIVE"],
+   "stdout_not_contains": []},
+
+  {"id": "Codex subagent without evidence receipt gets one repair pass",
+   "hook": "subagent-evidence-receipt.py",
+   "stdin": {"hook_event_name": "SubagentStop", "last_assistant_message": "Verdict: SUPPORTED", "stop_hook_active": false},
+   "expect": "block",
+   "reason_contains": "Decision basis"},
+
+  {"id": "Codex subagent accepts observed evidence receipt",
+   "hook": "subagent-evidence-receipt.py",
+   "stdin": {"hook_event_name": "SubagentStop", "last_assistant_message": "Decision basis: OBSERVED\nEvidence: python scripts/test_agent_skill_contract.py", "stop_hook_active": false},
+   "expect": "allow"},
+
+  {"id": "Codex subagent rejects prose posing as a primary source",
+   "hook": "subagent-evidence-receipt.py",
+   "stdin": {"hook_event_name": "SubagentStop", "last_assistant_message": "Decision basis: PRIMARY_DOC\nEvidence: definitely checked the documentation", "stop_hook_active": false},
+   "expect": "block",
+   "reason_contains": "primary-document URL"},
+
   {"id": "latest handoff per project, both projects visible",
    "hook": "session-handoff-check.py",
    "stdin": {},

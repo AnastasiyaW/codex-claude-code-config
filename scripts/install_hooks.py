@@ -3,8 +3,10 @@
 
 Copies hook scripts from this repo's `hooks/` directory into the target
 hooks directory (global or project-local) and merges a recommended hook
-set into `settings.json`. Idempotent - re-running updates paths and
-skips already-installed hooks.
+set into `settings.json`. When this repository itself is the canonical global
+source at `~/.claude/claude-code-config`, it registers that source directly so
+the installer does not revive a second active `~/.claude/hooks` tree.
+Idempotent - re-running updates paths and skips already-installed hooks.
 
 Safety-critical hooks installed by default (--safe-defaults):
 
@@ -27,6 +29,9 @@ Opt-in extras (use --extras):
   - session-handoff-reminder     Stop          reminds to write handoff
   - session-handoff-check        SessionStart  surfaces recent handoffs
   - keyword-skill-router         UserPromptSubmit  suggests matching skills
+  - agent-skill-contract         Claude PreToolUse(Task): validates a rendered skill/evidence contract
+  - subagent-skill-context       Codex SubagentStart: injects skill/evidence context into every child
+  - subagent-evidence-receipt    Codex SubagentStop: requires a decision-source receipt
   - task-inbox-show              SessionStart  surfaces .claude/task-inbox/ pending tasks
   - claude-attribution-guard     PreToolUse    blocks Co-Authored-By: Claude footers
   - human-confirmation-guard     PreToolUse    requires explicit user OK for deletions
@@ -59,7 +64,7 @@ Usage
     # Same but under the current project's .claude/
     python scripts/install_hooks.py --local
 
-    # Install the same shared scripts into Codex desktop's user hook config
+    # Install supported shared scripts into Codex desktop's user hook config
     python scripts/install_hooks.py --codex --extras
 
     # Install everything (safe defaults + extras)
@@ -112,6 +117,9 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("session-handoff-reminder.py",  "Stop", None),
     ("session-handoff-check.py",     "SessionStart", None),
     ("keyword-skill-router.py",      "UserPromptSubmit", None),
+    ("agent-skill-contract.py",      "PreToolUse", "Task"),
+    ("subagent-skill-context.py",    "SubagentStart", None),
+    ("subagent-evidence-receipt.py", "SubagentStop", None),
     ("task-inbox-show.py",           "SessionStart", None),
     ("claude-attribution-guard.py",  "PreToolUse", "Bash"),
     ("human-confirmation-guard.py",  "PreToolUse", "Bash|PowerShell"),
@@ -132,6 +140,13 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("shared-branch-guard.py", "PreToolUse", "Bash|PowerShell"),
 ]
 
+# Claude Code exposes a Task hook event; Codex desktop's native delegation API
+# does not. Registering that matcher in Codex would create a silent dead
+# control. Codex instead has SubagentStart, which can inject context but cannot
+# inspect the parent task or cancel the launch.
+CLAUDE_ONLY_EXTRAS = {"agent-skill-contract.py"}
+CODEX_ONLY_EXTRAS = {"subagent-skill-context.py", "subagent-evidence-receipt.py"}
+
 # Shared utility (not a hook itself - but needed by hooks)
 SHARED = ["safety_common.py"]
 
@@ -139,19 +154,40 @@ SHARED = ["safety_common.py"]
 def _resolve_targets(args: argparse.Namespace) -> tuple[Path, Path]:
     """Return (hooks_dir, settings_path)."""
     if args.codex:
-        # Codex and Claude share the copied hook scripts. The configuration is
-        # client-specific, while the Python handlers remain one tested artifact.
-        return Path.home() / ".claude" / "hooks", Path.home() / ".codex" / "hooks.json"
+        # The configuration is client-specific; global handlers are sourced
+        # directly from the canonical tracked checkout.
+        return _global_hooks_dir(REPO_ROOT, Path.home()), Path.home() / ".codex" / "hooks.json"
     if args.local:
         base = Path.cwd() / ".claude"
-    else:
-        # default: global
-        base = Path.home() / ".claude"
-    return base / "hooks", base / "settings.json"
+        return base / "hooks", base / "settings.json"
+    # default: global
+    return _global_hooks_dir(REPO_ROOT, Path.home()), Path.home() / ".claude" / "settings.json"
+
+
+def _global_hooks_dir(repo_root: Path, home: Path) -> Path:
+    """Return the one global hook tree without recreating a legacy copy."""
+    canonical = home / ".claude" / "claude-code-config"
+    if not canonical.exists():
+        return repo_root / "hooks"
+    try:
+        is_canonical = repo_root.resolve() == canonical.resolve()
+    except OSError:
+        is_canonical = repo_root.absolute() == canonical.absolute()
+    if not is_canonical:
+        raise RuntimeError(
+            "refusing global install from a non-canonical checkout; merge or "
+            f"fast-forward it into {canonical} first"
+        )
+    return canonical / "hooks"
 
 
 def _copy_script(src: Path, dst_dir: Path, dry_run: bool) -> Path:
     dst = dst_dir / src.name
+    try:
+        if src.resolve() == dst.resolve():
+            return dst
+    except OSError:
+        pass
     if dry_run:
         print(f"  [dry-run] would copy {src.name} -> {dst}")
         return dst
@@ -161,6 +197,15 @@ def _copy_script(src: Path, dst_dir: Path, dry_run: bool) -> Path:
     if os.name != "nt":
         dst.chmod(dst.stat().st_mode | 0o755)
     return dst
+
+
+def _selection(args: argparse.Namespace) -> list[tuple[str, str, str | None]]:
+    """Select hooks supported by the requested client without dead matchers."""
+    selection = list(SAFE_DEFAULTS)
+    if args.extras:
+        selection += EXTRAS
+    excluded = CLAUDE_ONLY_EXTRAS if args.codex else CODEX_ONLY_EXTRAS
+    return [entry for entry in selection if entry[0] not in excluded]
 
 
 def _load_settings(path: Path) -> dict:
@@ -230,7 +275,7 @@ def main() -> int:
     target.add_argument("--local", action="store_true",
                         help="Install to ./.claude/ (this project only)")
     target.add_argument("--codex", action="store_true",
-                        help="Install to ~/.codex/hooks.json using shared ~/.claude/hooks scripts")
+                        help="Install to ~/.codex/hooks.json using canonical tracked hook scripts")
     p.add_argument("--extras", action="store_true",
                    help="Also install opt-in hooks (session-handoff, skill-router, ...)")
     p.add_argument("--skip-copy", action="store_true",
@@ -240,15 +285,16 @@ def main() -> int:
                    help="Preview changes, write nothing")
     args = p.parse_args()
 
-    hooks_dir, settings_path = _resolve_targets(args)
+    try:
+        hooks_dir, settings_path = _resolve_targets(args)
+    except RuntimeError as exc:
+        sys.exit(f"ERROR: {exc}")
     src_hooks_dir = REPO_ROOT / "hooks"
 
     if not src_hooks_dir.is_dir():
         sys.exit(f"ERROR: hooks source not found at {src_hooks_dir}")
 
-    selection = list(SAFE_DEFAULTS)
-    if args.extras:
-        selection += EXTRAS
+    selection = _selection(args)
 
     print(f"Target hooks dir:   {hooks_dir}")
     print(f"Target settings:    {settings_path}")

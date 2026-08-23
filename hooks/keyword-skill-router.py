@@ -237,6 +237,24 @@ ROUTES = [
         "skill": "observability-monitoring",
         "description": "Evidence-backed monitoring, alerting, SLI/SLO, telemetry, and incident workflows",
     },
+    # Explicitly asking for challenge, not automatic contrarianism.  The skill
+    # turns a claim into a falsifiable question and asks for discriminating
+    # evidence; it does not manufacture a counterargument for ordinary tasks.
+    {
+        "patterns": [
+            r"\b(не соглаш\w*|не поддакив\w*|критичн\w*.*ответ|оспор\w*|контраргумент\w*|проверь.*гипотез\w*)\b",
+            r"\b(sycophan\w*|challenge (my|the) (claim|assumption|idea)|devil.?s advocate|critical response|counter[- ]?argument|disagree.*evidence)\b",
+        ],
+        # Literal transformation can quote the exact trigger phrase without
+        # asking for the procedure itself. Keep this narrow: a substantive
+        # research/decision task that merely mentions translation still routes.
+        "exclude_patterns": [
+            r"\b(translate|translation|перевед\w*|перевод)\b.{0,120}\b(literal|string|phrase|фраз\w*|строк\w*|текст\w*)\b",
+        ],
+        "skill": "epistemic-challenge",
+        "description": "REQUIRED when the user asks for critical independence: separate evidence, counterevidence, uncertainty, and a falsifier before agreeing",
+        "required": True,
+    },
     # Harness/configuration audit
     {
         "patterns": [
@@ -395,6 +413,8 @@ def detect_keywords(user_message: str) -> list[dict]:
     matches = []
     by_skill = {}
     for route in ROUTES:
+        if any(re.search(pattern, user_message, re.IGNORECASE) for pattern in route.get("exclude_patterns", [])):
+            continue
         for pattern in route["patterns"]:
             if re.search(pattern, user_message, re.IGNORECASE):
                 if "suggest" in route:

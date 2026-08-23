@@ -43,6 +43,7 @@ pass.
 | Git source-of-truth setup | `Stop` for long-run projects | `Stop` for long-run projects | `test_lifecycle_hook_contracts.py` |
 | File transfer continuity | `PreToolUse` + `PostToolUse` + `Stop` | `PreToolUse` + `PostToolUse` + `Stop` | `scripts/test_transfer_contract.py` |
 | Skills availability | active skill directory | `~/.claude/skills` | `sync_skills_to_codex.py --check --also-claude` and `skills-lock.json` |
+| Routed subagent skill assignment | `SubagentStart` injects universal selection discipline; `SubagentStop` requires one source-shaped decision receipt | coordinator renders a task-bound contract before delegation; `PreToolUse(Task)` denies a child brief without one complete contract | `scripts/test_subagent_skill_context.py`, `scripts/test_subagent_evidence_receipt.py`, `scripts/test_agent_skill_contract.py`; live client events for activation |
 | Skills survive a machine/account move | active skill directory | `~/.claude/skills` | `recover_skill_trees.py --report` |
 | Optional RTK output compression | instruction-level (`AGENTS.md`) | native `PreToolUse` hook | `scripts/test_rtk_integration.py` plus pinned binary verification |
 
@@ -125,6 +126,25 @@ There are two deliberately separate routing layers:
    advisory. It catches only high-confidence phrases and prints a suggestion;
    it does not inject a skill and must not become a second copy of the whole
    semantic catalog.
+3. `hooks/agent-skill-contract.py` closes the Claude delegation seam. Before dispatch,
+   a coordinator runs its `--task` renderer, which reuses the curated router to
+   select one primary skill or the explicitly required set. The result is bound
+   to the exact child prompt, carries the evidence-required decision rule, and
+   declares an explicit no-route result when appropriate. Claude Code enforces
+   that a complete contract crosses its native `Task` boundary. Codex's
+   collaboration API is not a Claude `Task` event: the renderer is available
+   for coordinator integration, but no automatic Codex enforcement is claimed
+   until that integration exists. For Codex, the supported `SubagentStart` event
+   has no parent-task prompt and cannot stop a launch; instead
+   `hooks/subagent-skill-context.py` injects the minimum-skill and
+   source-required decision discipline into every child, while
+   `hooks/subagent-evidence-receipt.py` asks the child to repair a missing
+   structured basis/evidence receipt once before accepting its result. This
+   validates a source-shaped receipt (current command/path/URL, or an exact
+   `user request:` constraint), not the truth or freshness of a cited URL or
+   command; a parent or task-specific validator still owns that proof. This is
+   automatic context and receipt enforcement, not a false claim that Codex can
+   validate a task-specific route at launch.
 
 A skill the loader cannot read is absent no matter how correct the routing is.
 After a machine or account move, verify the catalog itself before trusting either
@@ -135,6 +155,11 @@ hide a skill without producing an error. See
 ```bash
 python scripts/recover_skill_trees.py --report
 ```
+
+When `scripts/install_hooks.py` runs from the canonical global source, it
+registers that source directly. It must not create a new active
+`~/.claude/hooks` copy: the drift checker correctly treats a second registered
+tree as a split-brain risk.
 
 Run the live boundary audit after changing either side:
 
@@ -159,6 +184,9 @@ python scripts/generate_skills_catalog.py --check
 python evals/hooks/run_hook_evals.py
 python scripts/test_lifecycle_hook_contracts.py
 python scripts/test_task_completion_hooks.py
+python scripts/test_agent_skill_contract.py
+python scripts/test_subagent_skill_context.py
+python scripts/test_subagent_evidence_receipt.py
 python scripts/sync_skills_to_codex.py --check
 ```
 
