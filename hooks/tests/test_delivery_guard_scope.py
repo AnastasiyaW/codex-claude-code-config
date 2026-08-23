@@ -83,11 +83,47 @@ out_edit = ran(g.pretool, edit_event)
 results.append(("my source edit, with only another session's intent open",
                 False, blocked(out_edit)))
 
+patch_event = {
+    "session_id": "session-mine",
+    "cwd": str(REPO),
+    "tool_name": "apply_patch",
+    "tool_input": {"command": "*** Begin Patch\n*** Update File: thing.py\n@@\n-print('old')\n+print('new')\n*** End Patch"},
+}
+out_patch_other = ran(g.pretool, patch_event)
+results.append(("my Codex apply_patch source edit, with only another session's intent open",
+                False, blocked(out_patch_other)))
+
+unparseable_patch_event = {
+    "session_id": "session-mine",
+    "cwd": str(REPO),
+    "tool_name": "apply_patch",
+    "tool_input": {"command": "this is not an apply patch document"},
+}
+out_unparseable_other = ran(g.pretool, unparseable_patch_event)
+results.append(("my unparseable Codex apply_patch, with only another session's intent open",
+                False, blocked(out_unparseable_other)))
+
 # 2. The protocol itself must survive: MY intent, no case of mine.
 record("session-mine")
 out_mine = ran(g.pretool, edit_event)
 results.append(("my source edit while I own an unresolved intent and no case",
                 True, blocked(out_mine)))
+
+out_patch_mine = ran(g.pretool, patch_event)
+results.append(("my Codex apply_patch source edit while I own an unresolved intent and no case",
+                True, blocked(out_patch_mine)))
+
+out_unparseable_mine = ran(g.pretool, unparseable_patch_event)
+results.append(("my unparseable Codex apply_patch while I own an unresolved intent and no case",
+                True, blocked(out_unparseable_mine)))
+
+docs_patch_event = {
+    **patch_event,
+    "tool_input": {"command": "*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** End Patch"},
+}
+out_docs_patch = ran(g.pretool, docs_patch_event)
+results.append(("my Codex apply_patch documentation edit while I own an unresolved intent",
+                False, blocked(out_docs_patch)))
 
 failures = [r for r in results if r[1] != r[2]]
 for label, expected, got in results:

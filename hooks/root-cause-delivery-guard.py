@@ -244,9 +244,37 @@ def event_prompt(event: dict[str, Any]) -> str:
     return ""
 
 
-def event_paths(event: dict[str, Any]) -> list[str]:
+PATCH_FILE_RE = re.compile(r"(?m)^\*\*\* (?:Add|Update|Delete) File: (?P<path>.+?)\s*$")
+
+
+def apply_patch_paths(event: dict[str, Any], tool_input: dict[str, Any]) -> list[str] | None:
+    """Extract declared files from Codex's canonical ``apply_patch`` command.
+
+    Codex delivers an ``apply_patch`` hook event with a textual ``command``
+    rather than Claude-style ``file_path`` arguments.  Section headers are the
+    only authoritative path declaration here; do not scrape arbitrary patch
+    content, which may itself contain text resembling a path.
+    """
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return None
+    cwd = event.get("cwd")
+    base = Path(cwd) if isinstance(cwd, str) and cwd.strip() else None
+    paths: list[str] = []
+    for match in PATCH_FILE_RE.finditer(command):
+        raw = match.group("path").strip()
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if not path.is_absolute() and base is not None:
+            path = base / path
+        paths.append(str(path))
+    return list(dict.fromkeys(paths)) or None
+
+
+def event_paths(event: dict[str, Any]) -> list[str] | None:
     tool = str(event.get("tool_name") or "")
-    if tool not in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
+    if tool not in {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}:
         return []
     tool_input = event.get("tool_input") or {}
     if isinstance(tool_input, str):
@@ -256,6 +284,8 @@ def event_paths(event: dict[str, Any]) -> list[str]:
             return []
     if not isinstance(tool_input, dict):
         return []
+    if tool == "apply_patch":
+        return apply_patch_paths(event, tool_input)
     paths: list[str] = []
     for key in ("file_path", "path", "notebook_path"):
         value = tool_input.get(key)
@@ -701,8 +731,42 @@ def emit_block(reason: str) -> None:
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
 
 
+def pending_intent_needing_case(root: Path, session_id: str) -> dict[str, Any] | None:
+    """Return only this session's delivery intent when no valid edit case exists."""
+    pending = unresolved_intents(root)
+    intent = next((item for item in pending if item.get("session_id") == session_id), None)
+    if intent is None:
+        return None
+    matches = cases_for_intent(root, str(intent["intent_id"]))
+    ready = [case for case, _ in matches if case.get("status") in ACTIVE_FOR_EDITS and not validation_errors(case, root=root)]
+    return None if ready else intent
+
+
+def block_missing_case(intent: dict[str, Any], detail: str = "") -> None:
+    kind = str(intent.get("kind") or "change")
+    emit_block(
+        "Source edit blocked: this repository has an active " + kind + " delivery intent, "
+        "but no valid PLAN_FROZEN delivery case. " + detail
+        + "Create .agent/delivery-cases/<id>/case.json with the affected layer and bounded plan, then freeze it. Use: "
+        "python ~/.claude/hooks/root-cause-delivery-guard.py init <case-id> "
+        f"--kind {kind} --summary \"...\". Case documents themselves remain writable."
+    )
+
+
 def pretool(event: dict[str, Any]) -> None:
     paths = event_paths(event)
+    session_id = session_id_from_event(event)
+    if paths is None:
+        # Codex sends patch text rather than file_path fields. If section
+        # declarations cannot be parsed, it is not proven to be docs-only.
+        # Fail closed for the owning intent, never for a foreign session.
+        cwd = event.get("cwd")
+        root = repo_root(Path(cwd)) if isinstance(cwd, str) and cwd.strip() else None
+        if root is not None:
+            intent = pending_intent_needing_case(root, session_id)
+            if intent is not None:
+                block_missing_case(intent, "Codex apply_patch paths could not be identified. ")
+        return
     if not paths:
         return
     roots: set[Path] = set()
@@ -713,12 +777,8 @@ def pretool(event: dict[str, Any]) -> None:
         rel_path = relative(root, raw_path)
         if rel_path and is_source_path(rel_path) and not is_case_path(rel_path):
             roots.add(root)
-    session_id = session_id_from_event(event)
     for root in roots:
-        pending = unresolved_intents(root)
-        if not pending:
-            continue
-        intent = next((item for item in pending if item.get("session_id") == session_id), None)
+        intent = pending_intent_needing_case(root, session_id)
         if intent is None:
             # Somebody else's unfinished delivery is not this session's to answer
             # for. Measured 2026-08-16: two other sessions held open intents in
@@ -728,18 +788,7 @@ def pretool(event: dict[str, Any]) -> None:
             # and the gate is worth keeping. The session that OWNS a delivery is
             # still held to the protocol, immediately below.
             continue
-        matches = cases_for_intent(root, str(intent["intent_id"]))
-        ready = [case for case, _ in matches if case.get("status") in ACTIVE_FOR_EDITS and not validation_errors(case, root=root)]
-        if ready:
-            continue
-        kind = str(intent.get("kind") or "change")
-        emit_block(
-            "Source edit blocked: this repository has an active " + kind + " delivery intent, "
-            "but no valid PLAN_FROZEN delivery case. Create .agent/delivery-cases/<id>/case.json "
-            "with the affected layer and bounded plan, then freeze it. Use: "
-            "python ~/.claude/hooks/root-cause-delivery-guard.py init <case-id> "
-            f"--kind {kind} --summary \"...\". Case documents themselves remain writable."
-        )
+        block_missing_case(intent)
         return
 
 
