@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-23T14:24:31+00:00",
-  "skill_count": 51,
-  "aggregate_hash": "sha256:246b45c4e2e593f7bdc5a3d9cc003feabddf02b5dbc76ea851f2499e1e826c08",
+  "generated_at": "2026-08-24T21:17:25+00:00",
+  "skill_count": 52,
+  "aggregate_hash": "sha256:d129a6f061aeb5625e3545035ed09806abf11c4088343244ccb24ecea7572b0a",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:698f850dd8e71ec4dcde9bdaa670c067852e47a67f97dcdcbe72db385e29621a",
@@ -560,6 +560,14 @@
     "writing/article-structure-review": {
       "content_hash": "sha256:ffa43478e8eba809395eaee12b080e75417a6a5844ee51257685c3ce6300db3b",
       "size_bytes": 12695,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    "writing/caveman": {
+      "content_hash": "sha256:b4361f891a46329da5ab024a4f9bc710fb39abca36aabcfa6da84e746a7b67c5",
+      "size_bytes": 12083,
       "file_count": 1,
       "files": [
         "SKILL.md"
