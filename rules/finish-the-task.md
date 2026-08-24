@@ -86,6 +86,24 @@
 артефактом, retry частично мутировавшей операции или переносом дефекта в документацию. Для
 необратимого удаления по-прежнему действует отдельное подтверждение пользователя.
 
+### Visible execution: action, not user homework
+
+For work that is still in progress, every substantive update must make forward motion inspectable:
+
+- `State:` one fresh observed fact, not a recollection or a plan;
+- `Doing now:` the one exact reversible action that the agent owns and is performing now, not a menu or instruction for the user;
+- `Proof:` the concrete receipt, test, trace, or runtime observation that will decide PASS or FAIL.
+
+The agent executes its next safe action itself. It must not turn an agent-owned operation into
+user homework, a request for permission, a choice of next task, or an offer to continue later.
+At a genuine external or irreversible boundary, replace a false "next step" with `Blocker:` the
+observed boundary, `Needed authority:` the exact decision/credential, and `Recheck:` the named
+receipt or event that will unblock it. At a terminal result, report `Result:` and `Evidence:`.
+A duration may be stated only when anchored to a comparable measured run.
+
+This is the visible ownership contract; it does not replace the delivery case, causal proof loop,
+or task-cycle controller that own state and evidence.
+
 ## 5. Будущее или недоступное не блокирует текущий milestone (P6)
 
 Требование может войти в критический путь **только если** выполняется хотя бы одно условие:
