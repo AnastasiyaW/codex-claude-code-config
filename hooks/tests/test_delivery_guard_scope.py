@@ -125,6 +125,22 @@ out_docs_patch = ran(g.pretool, docs_patch_event)
 results.append(("my Codex apply_patch documentation edit while I own an unresolved intent",
                 False, blocked(out_docs_patch)))
 
+# 3. Owning an intent is not the same as having changed anything under it.
+# Measured 2026-08-24: a session that only read a task and posted a comment was
+# held at Stop because the hub tree carried .sh/.ps1/.json files last written
+# three days earlier by other sessions. Attribution is by write time: dirt that
+# predates the intent cannot be its product.
+old = time.time() - 2 * 86400
+os.utime(REPO / "thing.py", (old, old))
+out_stop_pre_existing = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, dirt written before it",
+                False, blocked(out_stop_pre_existing)))
+
+os.utime(REPO / "thing.py", None)
+out_stop_mine = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, source written after it and no case",
+                True, blocked(out_stop_mine)))
+
 failures = [r for r in results if r[1] != r[2]]
 for label, expected, got in results:
     print(f"  {'ok  ' if expected == got else 'FAIL'} expected={'block' if expected else 'pass':<5} "

@@ -816,6 +816,29 @@ def git_source_changes(root: Path) -> list[str]:
     return changed
 
 
+def changes_after(root: Path, changed: list[str], since: float) -> list[str]:
+    """Keep only changed files last written at or after ``since``.
+
+    A file whose last write predates the intent cannot be that intent's product.
+    On a shared repository the tree permanently carries other sessions' work in
+    progress, so pairing "this session owns an intent" with "the tree is dirty"
+    holds a session for deliveries it never opened — the same collateral the
+    foreign-case branch above already refuses to inflict.
+
+    Doubt stays fail-closed: an unreadable mtime counts as attributable.
+    """
+    attributable: list[str] = []
+    for rel in changed:
+        try:
+            mtime = (root / rel).stat().st_mtime
+        except OSError:
+            attributable.append(rel)
+            continue
+        if mtime >= since:
+            attributable.append(rel)
+    return attributable
+
+
 def stop(event: dict[str, Any]) -> None:
     root = repo_root()
     if root is None:
@@ -839,7 +862,8 @@ def stop(event: dict[str, Any]) -> None:
               "and either verify the candidate or record a measured external blocker."
         )
         return
-    if not git_source_changes(root):
+    changed = git_source_changes(root)
+    if not changed:
         return
     pending = unresolved_intents(root)
     if not pending:
@@ -852,6 +876,12 @@ def stop(event: dict[str, Any]) -> None:
         # session's Stop for a delivery it never opened is collateral, and the
         # usual answer to collateral is that the gate gets disabled. A session
         # that owns an unresolved intent is still held, immediately below.
+        return
+    attributable = changes_after(root, changed, float(intent.get("recorded_at", 0) or 0))
+    if not attributable:
+        # Owning an intent is not the same as having changed anything under it.
+        print(f"[root-cause-delivery] not blocking: none of {len(changed)} changed source "
+              "file(s) was written after this intent was recorded", file=sys.stderr)
         return
     matches = cases_for_intent(root, str(intent["intent_id"]))
     if not matches:
