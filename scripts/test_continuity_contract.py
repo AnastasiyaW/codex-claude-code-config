@@ -66,6 +66,24 @@ class ContinuityContractTests(unittest.TestCase):
         self.assertEqual(decision, "block")
         self.assertIn("outside the declared scope", reason)
 
+    def test_contract_itself_stays_editable_under_an_enforcing_contract(self):
+        """Контракт обязан оставаться правимым, иначе он запрещает себя дополнять.
+
+        Объём проверяется по СТАРОЙ редакции: если собственного пути в ней нет, добавить
+        его туда уже нельзя, и единственным выходом остаётся обойти хук. Поймано 25.08.2026
+        на попытке расширить объём после согласованной передачи файлов между агентами.
+        """
+        contract_file = self.root / ".claude" / "continuity" / "CONTINUITY.json"
+        decision, reason = guard.decision_for_event(
+            self.event(file_path=str(contract_file),
+                       old_string='"files": []', new_string='"files": ["src/new.cpp"]'),
+            self.root,
+            contract(),
+            existing_status=set(),
+            tracked_paths=set(),
+        )
+        self.assertNotEqual(decision, "block", f"контракт заблокирован: {reason}")
+
     def test_write_over_existing_tracked_file_is_blocked(self):
         decision, reason = guard.decision_for_event(
             self.event(tool="Write", file_path=str(self.root / "src" / "main.cpp"), content="int main() { return 1; }\n"),
