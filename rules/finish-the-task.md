@@ -104,15 +104,19 @@ A duration may be stated only when anchored to a comparable measured run.
 This is the visible ownership contract; it does not replace the delivery case, causal proof loop,
 or task-cycle controller that own state and evidence.
 
-### Explicit batches: enumerate the whole set before the first item
+### User work orders: requests are durable work, not chat residue
 
-When the user asks to process a complete set (for example, all checkpoints), one completed item is
-not progress sufficient for closure. Inventory the real set in a durable manifest first; each item
-remains `PENDING`/`RUNNING` until it has a local `PASS` receipt. Do not use a chat turn as the queue:
-for a homogeneous long-running set, launch or resume one manifest-backed runner. A batch may stop
-only after every actionable item is receipted, or after every remaining item is a measured
-`BLOCKED_EXTERNAL` with its blocker and named recheck. The manifest is the continuation state, not
-a prose promise.
+Every actionable user request is recorded in the current repository as
+`.agent/user-tasks/<REQ-id>/request.json` plus `state.json`. Until that state is terminal, the
+agent owns the task: `COMPLETE` requires a stated result and an existing local evidence file;
+`BLOCKED_EXTERNAL` requires an existing receipt, the measured blocker, and a named recheck. A
+reminder, a green test unrelated to the request, or a prose claim is not a terminal state.
+
+A request that explicitly names a complete collection is a mode of that same work order. First
+inventory its actual items in `state.json.items`; each remains `PENDING`/`RUNNING` until it has a
+local `PASS` receipt, or is honestly `BLOCKED_EXTERNAL` with its own evidence, blocker, and recheck.
+For a homogeneous long-running collection, launch or resume one manifest-backed runner rather than
+using chat turns as the queue. The task file is continuation state, not a prose promise.
 
 ## 5. Будущее или недоступное не блокирует текущий milestone (P6)
 

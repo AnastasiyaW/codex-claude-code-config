@@ -27,7 +27,7 @@ OUTWARD_CLAIM_GUARD = SOURCE_HOOKS / "outward-claim-evidence-guard.py"
 PLUGIN_CACHE = Path.home() / ".codex" / "plugins" / "cache"
 
 REQUIRED_STOP_HOOKS = (
-    "batch-completion-guard.py",
+    "user-task-completion-guard.py",
     "stop-phrase-guard.py",
     "outward-claim-evidence-guard.py",
     "test-gate-stop-hook.py",
@@ -41,7 +41,7 @@ REQUIRED_STOP_HOOKS = (
 )
 
 REQUIRED_USER_PROMPT_HOOKS = (
-    "batch-completion-guard.py",
+    "user-task-completion-guard.py",
 )
 
 REQUIRED_PRECOMPACT_HOOKS = (
@@ -53,6 +53,7 @@ REQUIRED_SESSIONSTART_HOOKS = (
     "review_handoff_memory_loop.py",
     "docs-staleness-guard.py",
     "continuity-session-check.py",
+    "user-task-completion-guard.py",
 )
 
 REQUIRED_PRETOOLUSE_HOOKS = (
@@ -132,11 +133,20 @@ class TaskCompletionHookTests(unittest.TestCase):
         for required in REQUIRED_STOP_HOOKS:
             self.assertIn(required, commands)
 
-    def test_user_prompt_hooks_create_whole_set_work_orders(self) -> None:
+    def test_user_prompt_hooks_create_durable_user_work_orders(self) -> None:
         for config_path in (HOOKS_JSON, CLAUDE_SETTINGS):
             commands = "\n".join(hook_commands_from(config_path, "UserPromptSubmit"))
             for required in REQUIRED_USER_PROMPT_HOOKS:
                 self.assertIn(required, commands, f"{config_path}: {required}")
+
+    def test_user_task_session_start_uses_its_explicit_mode(self) -> None:
+        for config_path in (HOOKS_JSON, CLAUDE_SETTINGS):
+            commands = [
+                command for command in hook_commands_from(config_path, "SessionStart")
+                if "user-task-completion-guard.py" in command
+            ]
+            self.assertEqual(len(commands), 1, f"{config_path}: expected one user-task session-start hook")
+            self.assertIn("--session-start", commands[0], f"{config_path}: must not run Stop mode at SessionStart")
 
     def test_precompact_hooks_include_handoff_guard(self) -> None:
         commands = "\n".join(hook_commands("PreCompact"))

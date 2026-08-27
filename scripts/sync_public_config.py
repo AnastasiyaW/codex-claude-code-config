@@ -17,7 +17,7 @@ Solution: manifest-driven one-way sync (active -> repo clone) with three safegua
 Usage:
   python scripts/sync_public_config.py              # dry-run report (default)
   python scripts/sync_public_config.py --apply      # actually copy
-  python scripts/sync_public_config.py --scan-repo  # only scan the whole repo for markers
+  python scripts/sync_public_config.py --scan-repo  # scan the Git index (the publishable repo) for markers
   python scripts/sync_public_config.py --strict     # non-zero exit on any marker hit
 
 Comparison is EOL-normalized (CRLF==LF) so a git-clone on Windows does not produce
@@ -107,6 +107,34 @@ def iter_files(root: Path):
         yield p
 
 
+def iter_indexed_files(root: Path):
+    """Yield the current Git index, not unrelated local runtime output.
+
+    ``--scan-repo`` is a publication gate.  Scanning arbitrary untracked files
+    turns a private report or cache into a false public-data failure although
+    Git cannot publish it.  A newly promoted source file enters this set when
+    staged, exactly when it becomes publishable.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "-z"],
+            capture_output=True, check=False, timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"cannot enumerate Git index: {exc}") from exc
+    if result.returncode != 0:
+        raise RuntimeError("cannot enumerate Git index")
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        relative = Path(raw.decode("utf-8", errors="surrogateescape"))
+        if relative.suffix in SKIP_SUFFIXES or any(part in SKIP_DIRS for part in relative.parts):
+            continue
+        candidate = root / relative
+        if candidate.is_file():
+            yield candidate
+
+
 def marker_hits(text: str, markers: list[str]) -> list[str]:
     hits = []
     for m in markers:
@@ -139,17 +167,22 @@ def main() -> int:
     any_marker_hit = False
 
     if args.scan_repo:
-        print(f"== privacy scan of repo tree: {REPO_ROOT}")
-        for f in iter_files(REPO_ROOT):
-            if f == MANIFEST or f.resolve() == Path(__file__).resolve():
-                continue  # manifest/scanner legitimately contain the marker strings
-            text = norm_text(f)
-            if text is None:
-                continue
-            hits = marker_hits(text, markers)
-            if hits:
-                any_marker_hit = True
-                print(f"  MARKER {f.relative_to(REPO_ROOT)} :: {', '.join(hits)}")
+        print(f"== privacy scan of Git index: {REPO_ROOT}")
+        try:
+            files = iter_indexed_files(REPO_ROOT)
+            for f in files:
+                if f == MANIFEST or f.resolve() == Path(__file__).resolve():
+                    continue  # manifest/scanner legitimately contain the marker strings
+                text = norm_text(f)
+                if text is None:
+                    continue
+                hits = marker_hits(text, markers)
+                if hits:
+                    any_marker_hit = True
+                    print(f"  MARKER {f.relative_to(REPO_ROOT)} :: {', '.join(hits)}")
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
         if not any_marker_hit:
             print("  clean - no privacy markers found")
         return 1 if (any_marker_hit and args.strict) else 0

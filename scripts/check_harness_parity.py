@@ -26,6 +26,14 @@ INTENTIONAL = {
         "queues Claude sessions for /distill-feedback; Codex sessions are archived instead",
     ("codex", "Stop", "*", "conversation-history-github-sync.py"):
         "Codex keeps its own conversation-history archive; Claude transcripts go elsewhere",
+    ("claude", "PreToolUse", "Task", "agent-skill-contract.py"):
+        "Claude exposes Task before launch, so it can bind the exact child prompt to curated skill routing",
+    ("claude", "SessionStart", "startup|resume|clear|compact", "benjamin-plus-inject.py"):
+        "Claude loses injected session context on these lifecycle events; Codex receives the same policy through its native AGENTS context",
+    ("codex", "SubagentStart", "*", "subagent-skill-context.py"):
+        "Codex exposes only native subagent lifecycle events, so it injects universal source and skill discipline after launch",
+    ("codex", "SubagentStop", "*", "subagent-evidence-receipt.py"):
+        "Codex exposes the child final message at SubagentStop; Claude enforces the complementary prompt-bound contract before Task launch",
 }
 
 _GATE = re.compile(

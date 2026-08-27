@@ -24,6 +24,7 @@ Safety-critical hooks installed by default (--safe-defaults):
 Opt-in extras (use --extras):
   - api-key-leak-detector        PostToolUse   scans tool output for leaked keys
   - test-muting-guard            PreToolUse    blocks adding @skip to existing tests
+  - telegram-mass-send-guard     PreToolUse    blocks unrecallable Telegram bulk sends on either harness
   - stop-phrase-guard            Stop          catches regression phrases
   - backup-retention-cleanup     Stop          trims old claude-backup branches
   - session-handoff-reminder     Stop          reminds to write handoff
@@ -50,7 +51,7 @@ Opt-in extras (use --extras):
   - outward-claim-evidence-guard Stop          blocks unmeasured hash/version/deploy claims in final reports
   - problems-md-validator        Stop          blocks closing with unresolved OPEN problems
   - plan-gate                    UserPromptSubmit  plan-artifact discipline for risky asks
-  - batch-completion-guard       UserPrompt/Stop   prevents one completed item closing an explicit whole-set request
+  - user-task-completion-guard   Prompt/Start/Stop records every actionable user task and requires evidence-bound closure
   - conversation-history-capture Stop          archives and indexes local Codex session JSONL histories
   - shared-branch-guard          PreToolUse    protects marked checkouts shared by several workers
 
@@ -113,6 +114,7 @@ SAFE_DEFAULTS: list[tuple[str, str, str | None]] = [
 EXTRAS: list[tuple[str, str, str | None]] = [
     ("api-key-leak-detector.py",     "PostToolUse", None),
     ("test-muting-guard.py",         "PreToolUse", "Edit|Write"),
+    ("telegram-mass-send-guard.py",  "PreToolUse", "Bash|PowerShell"),
     ("stop-phrase-guard.py",         "Stop", None),
     ("backup-retention-cleanup.py",  "Stop", None),
     ("session-handoff-reminder.py",  "Stop", None),
@@ -137,8 +139,9 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("outward-claim-evidence-guard.py", "Stop", None),
     ("problems-md-validator.py",     "Stop", None),
     ("plan-gate.py",                 "UserPromptSubmit", None),
-    ("batch-completion-guard.py",    "UserPromptSubmit", None),
-    ("batch-completion-guard.py",    "Stop", None),
+    ("user-task-completion-guard.py", "UserPromptSubmit", None),
+    ("user-task-completion-guard.py", "SessionStart", None),
+    ("user-task-completion-guard.py", "Stop", None),
     ("conversation-history-capture.py", "Stop", None),
     ("shared-branch-guard.py", "PreToolUse", "Bash|PowerShell"),
 ]
@@ -152,6 +155,12 @@ CODEX_ONLY_EXTRAS = {"subagent-skill-context.py", "subagent-evidence-receipt.py"
 
 # Shared utility (not a hook itself - but needed by hooks)
 SHARED = ["safety_common.py"]
+
+# One local, unpushed implementation used a narrow batch-only name.  Retire its
+# registrations when the generic task guard is installed, while settings.json
+# is already backed up by _save_settings.  The source rename remains in Git.
+REPLACED_HOOKS = {"batch-completion-guard.py": "user-task-completion-guard.py"}
+COMMAND_SUFFIXES = {("user-task-completion-guard.py", "SessionStart"): " --session-start"}
 
 
 def _resolve_targets(args: argparse.Namespace) -> tuple[Path, Path]:
@@ -248,7 +257,7 @@ def _merge_hook(settings: dict, event: str, script_path: Path,
     settings.setdefault("hooks", {})
     settings["hooks"].setdefault(event, [])
 
-    command = f"python {script_path}"
+    command = f"python {script_path}{COMMAND_SUFFIXES.get((script_path.name, event), '')}"
     script_name = script_path.name.lower()
 
     # Existing installs may point at a linked config repo instead of ~/.claude/hooks.
@@ -268,6 +277,41 @@ def _merge_hook(settings: dict, event: str, script_path: Path,
         new_entry["matcher"] = matcher
     settings["hooks"][event].append(new_entry)
     return True
+
+
+def _remove_replaced_hooks(settings: dict) -> int:
+    """Remove registrations superseded by a selected generic hook.
+
+    Only command entries naming the old basename are removed.  Empty matcher
+    groups disappear too, so the resulting config has no inert hook groups.
+    """
+    removed = 0
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return removed
+    obsolete = {name.lower() for name in REPLACED_HOOKS}
+    for event, groups in list(hooks.items()):
+        if not isinstance(groups, list):
+            continue
+        retained_groups = []
+        for group in groups:
+            if not isinstance(group, dict):
+                retained_groups.append(group)
+                continue
+            raw_hooks = group.get("hooks")
+            if not isinstance(raw_hooks, list):
+                retained_groups.append(group)
+                continue
+            retained_hooks = [
+                hook for hook in raw_hooks
+                if not (isinstance(hook, dict)
+                        and _script_name_from_command(str(hook.get("command", ""))) in obsolete)
+            ]
+            removed += len(raw_hooks) - len(retained_hooks)
+            if retained_hooks:
+                retained_groups.append({**group, "hooks": retained_hooks})
+        hooks[event] = retained_groups
+    return removed
 
 
 def main() -> int:
@@ -321,6 +365,7 @@ def main() -> int:
 
     # 2. Update settings.json
     settings = _load_settings(settings_path)
+    removed = _remove_replaced_hooks(settings) if args.extras else 0
     added = 0
     for name, event, matcher in selection:
         script_path = hooks_dir / name
@@ -330,14 +375,14 @@ def main() -> int:
         else:
             print(f"  already present: {event:18} {name}")
 
-    if added or args.dry_run:
+    if added or removed or args.dry_run:
         _save_settings(settings_path, settings, args.dry_run)
 
     print()
     if args.dry_run:
         print("Dry-run complete. Re-run without --dry-run to apply.")
     else:
-        print(f"Done. {added} hook(s) added to {settings_path}")
+        print(f"Done. {added} hook(s) added; {removed} obsolete registration(s) removed from {settings_path}")
         if settings_path.with_suffix(".json.bak").exists():
             print(f"Previous settings backed up to {settings_path.with_suffix('.json.bak')}")
 

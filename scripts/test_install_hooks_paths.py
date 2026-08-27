@@ -41,6 +41,10 @@ def main() -> int:
         assert any(entry[0] == "subagent-skill-context.py" for entry in codex_selection)
         assert any(entry[0] == "subagent-evidence-receipt.py" for entry in codex_selection)
         assert all(entry[0] != "agent-skill-contract.py" for entry in codex_selection)
+        settings = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "python old/batch-completion-guard.py"}]}]}}
+        assert MODULE._remove_replaced_hooks(settings) == 1
+        assert settings["hooks"]["Stop"] == []
+        assert MODULE.COMMAND_SUFFIXES[("user-task-completion-guard.py", "SessionStart")] == " --session-start"
     print("test_install_hooks_paths: OK")
     return 0
 
