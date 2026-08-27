@@ -50,6 +50,7 @@ Opt-in extras (use --extras):
   - outward-claim-evidence-guard Stop          blocks unmeasured hash/version/deploy claims in final reports
   - problems-md-validator        Stop          blocks closing with unresolved OPEN problems
   - plan-gate                    UserPromptSubmit  plan-artifact discipline for risky asks
+  - batch-completion-guard       UserPrompt/Stop   prevents one completed item closing an explicit whole-set request
   - conversation-history-capture Stop          archives and indexes local Codex session JSONL histories
   - shared-branch-guard          PreToolUse    protects marked checkouts shared by several workers
 
@@ -136,6 +137,8 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("outward-claim-evidence-guard.py", "Stop", None),
     ("problems-md-validator.py",     "Stop", None),
     ("plan-gate.py",                 "UserPromptSubmit", None),
+    ("batch-completion-guard.py",    "UserPromptSubmit", None),
+    ("batch-completion-guard.py",    "Stop", None),
     ("conversation-history-capture.py", "Stop", None),
     ("shared-branch-guard.py", "PreToolUse", "Bash|PowerShell"),
 ]

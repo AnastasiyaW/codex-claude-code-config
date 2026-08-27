@@ -104,6 +104,16 @@ A duration may be stated only when anchored to a comparable measured run.
 This is the visible ownership contract; it does not replace the delivery case, causal proof loop,
 or task-cycle controller that own state and evidence.
 
+### Explicit batches: enumerate the whole set before the first item
+
+When the user asks to process a complete set (for example, all checkpoints), one completed item is
+not progress sufficient for closure. Inventory the real set in a durable manifest first; each item
+remains `PENDING`/`RUNNING` until it has a local `PASS` receipt. Do not use a chat turn as the queue:
+for a homogeneous long-running set, launch or resume one manifest-backed runner. A batch may stop
+only after every actionable item is receipted, or after every remaining item is a measured
+`BLOCKED_EXTERNAL` with its blocker and named recheck. The manifest is the continuation state, not
+a prose promise.
+
 ## 5. Будущее или недоступное не блокирует текущий milestone (P6)
 
 Требование может войти в критический путь **только если** выполняется хотя бы одно условие:

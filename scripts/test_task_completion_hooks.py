@@ -27,6 +27,7 @@ OUTWARD_CLAIM_GUARD = SOURCE_HOOKS / "outward-claim-evidence-guard.py"
 PLUGIN_CACHE = Path.home() / ".codex" / "plugins" / "cache"
 
 REQUIRED_STOP_HOOKS = (
+    "batch-completion-guard.py",
     "stop-phrase-guard.py",
     "outward-claim-evidence-guard.py",
     "test-gate-stop-hook.py",
@@ -37,6 +38,10 @@ REQUIRED_STOP_HOOKS = (
     "kb-validate-gate.py",
     "git-source-gate.py",
     "transfer-contract-guard.py",
+)
+
+REQUIRED_USER_PROMPT_HOOKS = (
+    "batch-completion-guard.py",
 )
 
 REQUIRED_PRECOMPACT_HOOKS = (
@@ -127,6 +132,12 @@ class TaskCompletionHookTests(unittest.TestCase):
         for required in REQUIRED_STOP_HOOKS:
             self.assertIn(required, commands)
 
+    def test_user_prompt_hooks_create_whole_set_work_orders(self) -> None:
+        for config_path in (HOOKS_JSON, CLAUDE_SETTINGS):
+            commands = "\n".join(hook_commands_from(config_path, "UserPromptSubmit"))
+            for required in REQUIRED_USER_PROMPT_HOOKS:
+                self.assertIn(required, commands, f"{config_path}: {required}")
+
     def test_precompact_hooks_include_handoff_guard(self) -> None:
         commands = "\n".join(hook_commands("PreCompact"))
         for required in REQUIRED_PRECOMPACT_HOOKS:
@@ -167,6 +178,7 @@ class TaskCompletionHookTests(unittest.TestCase):
         self.assertTrue(CLAUDE_SETTINGS.exists(), f"missing live Claude settings: {CLAUDE_SETTINGS}")
         required_by_event = {
             "Stop": REQUIRED_STOP_HOOKS,
+            "UserPromptSubmit": REQUIRED_USER_PROMPT_HOOKS,
             "PreCompact": REQUIRED_PRECOMPACT_HOOKS,
             "SessionStart": REQUIRED_SESSIONSTART_HOOKS,
             "PreToolUse": REQUIRED_PRETOOLUSE_HOOKS,
