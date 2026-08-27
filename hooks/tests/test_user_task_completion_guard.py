@@ -127,6 +127,26 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         ])
         self.assertIsNone(self.invoke_stop())
 
+    def test_collection_cannot_close_complete_without_a_result(self) -> None:
+        """Every item receipted still says nothing about the outcome.
+
+        The collection branch returned before state.result was read, so this shape
+        closed green while answering none of the request.
+        """
+        event = {"prompt": "check all checkpoints", "session_id": "session-a"}
+        self.invoke_prompt(event)
+        first = self.receipt("evidence/250.txt")
+        self.write_state(status="COMPLETE", result="   ", items=[
+            {"item_id": "250", "status": "PASS", "evidence": [first]},
+        ])
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("state.result", blocked["reason"])
+
+        self.write_state(status="COMPLETE", result="every checkpoint measured; two passed",
+                         items=[{"item_id": "250", "status": "PASS", "evidence": [first]}])
+        self.assertIsNone(self.invoke_stop())
+
     def test_other_session_is_not_wedged_and_session_start_surfaces_open_work(self) -> None:
         self.invoke_prompt()
         self.assertIsNone(self.invoke_stop("session-b"))

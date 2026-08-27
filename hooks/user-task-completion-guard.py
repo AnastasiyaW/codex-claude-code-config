@@ -296,6 +296,15 @@ def assess_task(root: Path, request: dict[str, Any]) -> tuple[str, str]:
                 return outcome, detail
             if outcome != status:
                 raise ValueError(f"state status {status} disagrees with collection outcome {outcome}")
+            # The per-item receipts carry the evidence, but nothing carried the OUTCOME.
+            # This branch used to return here, before state.result was ever looked at, so a
+            # collection could close COMPLETE with every item receipted and no result at
+            # all - the Stop message asks for "the result and its local receipt" and only
+            # the receipt half was enforced. Found by a negative control on this assessor,
+            # 2026-08-27: five mutations of a real state.json, and this was the one that
+            # came back green.
+            if status == "COMPLETE":
+                nonempty(state.get("result"), "state.result")
             return outcome, detail
         evidence_files(path.parent, state.get("evidence"), "state.evidence")
         if status == "COMPLETE":
