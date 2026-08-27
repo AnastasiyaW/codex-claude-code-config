@@ -350,7 +350,12 @@ def agent_b_claude(diff: str) -> dict | None:
     # Pipe prompt via stdin instead of argv: Windows command-line limit is
     # ~32K characters, so large diffs (200+ lines) overflow when passed as
     # `claude -p <prompt>`. Stdin avoids the limit entirely.
-    r = run([claude, "-p", "--output-format", "text"], input=prompt, timeout=120)
+    # This is an inner machine review, not a direct user request.  Its prompt
+    # contains imperative security-review instructions, so explicitly prevent
+    # the user-task hook from turning it into a durable work order.
+    environment = os.environ.copy()
+    environment["CLAUDE_USER_TASK_CAPTURE"] = "0"
+    r = run([claude, "-p", "--output-format", "text"], input=prompt, timeout=120, env=environment)
     if r.returncode != 0:
         # Distinguish "found but errored" (e.g. not logged in) from "not found",
         # so the failure is legible instead of mislabeled as missing.
@@ -563,6 +568,26 @@ def self_test() -> int:
     print("baseline patterns present:")
     for name in ("ssh_private_paths", "home_user_path", "ssh_ports_internal"):
         check(name, name in PII_PATTERNS, True)
+
+    print("agent B origin:")
+    global find_claude_cli, run
+    saved_find_claude_cli, saved_run = find_claude_cli, run
+    captured: dict[str, object] = {}
+    try:
+        find_claude_cli = lambda: "claude.exe"
+
+        def fake_run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+            captured.update(kw)
+            return subprocess.CompletedProcess(cmd, 0, '{"verdict": "SAFE", "reason": "fixture"}', "")
+
+        run = fake_run
+        check("semantic fixture is parsed", agent_b_claude("fixture") or {}, {"verdict": "SAFE", "reason": "fixture"})
+        environment = captured.get("env")
+        check("semantic review opts out of user-task capture",
+              environment.get("CLAUDE_USER_TASK_CAPTURE") if isinstance(environment, dict) else None,
+              "0")
+    finally:
+        find_claude_cli, run = saved_find_claude_cli, saved_run
 
     # --- marker_exempt_paths ---------------------------------------------------
     # The deny list names private things by design. Scanning it for them reports

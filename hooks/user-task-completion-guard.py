@@ -34,6 +34,7 @@ TERMINAL_RECEIPT_SCHEMA = "agent-user-task-terminal-receipt/v1"
 ACTIVE_STATUSES = {"OPEN", "IN_PROGRESS"}
 TERMINAL_STATUSES = {"COMPLETE", "BLOCKED_EXTERNAL"}
 ITEM_STATUSES = {"PENDING", "RUNNING", "PASS", "BLOCKED_EXTERNAL"}
+TASK_CAPTURE_ENV = "CLAUDE_USER_TASK_CAPTURE"
 
 # Derived from the live request ledger's deliberately conservative classifier.
 # Add a verb only after a measured miss; a broad "any imperative" matcher would
@@ -94,6 +95,17 @@ def event_prompt(event: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def task_capture_enabled() -> bool:
+    """Return whether this process is handling a direct user request.
+
+    Inner automation may invoke a harness CLI with an instructional prompt (for
+    example a semantic pre-push reviewer).  Such prompts are data for that
+    automation, not new user work.  The caller must opt out explicitly so this
+    guard never tries to infer provenance from the prompt's wording.
+    """
+    return os.environ.get(TASK_CAPTURE_ENV) != "0"
 
 
 def classify_prompt(prompt: str) -> tuple[str, bool]:
@@ -315,6 +327,8 @@ def record_terminal_receipt(root: Path, request: dict[str, Any], outcome: str) -
 
 
 def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
+    if not task_capture_enabled():
+        return 0
     prompt = event_prompt(event)
     _, actionable = classify_prompt(prompt)
     if not prompt or not actionable:

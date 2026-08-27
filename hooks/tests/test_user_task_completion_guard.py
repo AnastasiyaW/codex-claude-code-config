@@ -8,6 +8,7 @@ import io
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -76,6 +77,11 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.assertIsNone(self.invoke_prompt({"prompt": "почему завис компьютер?", "session_id": "session-a"}))
         self.assertFalse((self.root / ".agent" / "user-tasks").exists())
         self.assertIsNone(self.invoke_stop())
+
+    def test_explicit_machine_opt_out_does_not_record_its_instruction_prompt(self) -> None:
+        with mock.patch.dict(guard.os.environ, {guard.TASK_CAPTURE_ENV: "0"}):
+            self.assertIsNone(self.invoke_prompt())
+        self.assertFalse((self.root / ".agent" / "user-tasks").exists())
 
     def test_complete_requires_existing_evidence_and_result(self) -> None:
         self.invoke_prompt()
