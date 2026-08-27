@@ -45,6 +45,11 @@ def main() -> int:
         assert MODULE._remove_replaced_hooks(settings) == 1
         assert settings["hooks"]["Stop"] == []
         assert MODULE.COMMAND_SUFFIXES[("user-task-completion-guard.py", "SessionStart")] == " --session-start"
+        target = canonical_repo / "hooks" / "user-task-completion-guard.py"
+        stale = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"python {target} --session-start"}]}]}}
+        assert MODULE._merge_hook(stale, "SessionStart", target, None) == "repaired"
+        repaired = stale["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        assert repaired == f'python "{target.as_posix()}" --session-start'
     print("test_install_hooks_paths: OK")
     return 0
 

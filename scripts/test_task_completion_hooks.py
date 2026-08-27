@@ -147,6 +147,8 @@ class TaskCompletionHookTests(unittest.TestCase):
             ]
             self.assertEqual(len(commands), 1, f"{config_path}: expected one user-task session-start hook")
             self.assertIn("--session-start", commands[0], f"{config_path}: must not run Stop mode at SessionStart")
+            expected = f'python "{(Path.home() / ".claude" / "claude-code-config" / "hooks" / "user-task-completion-guard.py").as_posix()}"'
+            self.assertIn(expected, commands[0])
 
     def test_precompact_hooks_include_handoff_guard(self) -> None:
         commands = "\n".join(hook_commands("PreCompact"))

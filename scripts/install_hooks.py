@@ -251,13 +251,25 @@ def _script_name_from_command(command: str) -> str:
     return matches[-1].lower() if matches else ""
 
 
+def _command_for(script_path: Path, event: str) -> str:
+    """Return the cross-harness command form used by the Codex hook runner.
+
+    Codex interprets an unquoted backslash path as a workspace-relative
+    argument (dropping ``C:``). Existing healthy registrations use a quoted
+    forward-slash Windows path, which both Claude and Codex pass to Python
+    unchanged.
+    """
+    suffix = COMMAND_SUFFIXES.get((script_path.name, event), "")
+    return f'python "{script_path.as_posix()}"{suffix}'
+
+
 def _merge_hook(settings: dict, event: str, script_path: Path,
-                matcher: str | None) -> bool:
-    """Register one hook in settings. Returns True if added (False if duplicate)."""
+                matcher: str | None) -> str:
+    """Register one hook and return ``added``, ``repaired``, or ``present``."""
     settings.setdefault("hooks", {})
     settings["hooks"].setdefault(event, [])
 
-    command = f"python {script_path}{COMMAND_SUFFIXES.get((script_path.name, event), '')}"
+    command = _command_for(script_path, event)
     script_name = script_path.name.lower()
 
     # Existing installs may point at a linked config repo instead of ~/.claude/hooks.
@@ -266,8 +278,11 @@ def _merge_hook(settings: dict, event: str, script_path: Path,
     for entry in settings["hooks"][event]:
         for h in entry.get("hooks", []):
             existing = h.get("command", "").strip()
-            if existing == command or _script_name_from_command(existing) == script_name:
-                return False  # already present
+            if existing == command:
+                return "present"
+            if _script_name_from_command(existing) == script_name:
+                h["command"] = command
+                return "repaired"  # same hook, repaired command spelling
 
     hook: dict = {"type": "command", "command": command}
     if script_name == "outward-claim-evidence-guard.py":
@@ -276,7 +291,7 @@ def _merge_hook(settings: dict, event: str, script_path: Path,
     if matcher:
         new_entry["matcher"] = matcher
     settings["hooks"][event].append(new_entry)
-    return True
+    return "added"
 
 
 def _remove_replaced_hooks(settings: dict) -> int:
@@ -367,22 +382,27 @@ def main() -> int:
     settings = _load_settings(settings_path)
     removed = _remove_replaced_hooks(settings) if args.extras else 0
     added = 0
+    repaired = 0
     for name, event, matcher in selection:
         script_path = hooks_dir / name
-        if _merge_hook(settings, event, script_path, matcher):
+        result = _merge_hook(settings, event, script_path, matcher)
+        if result == "added":
             added += 1
             print(f"  registered: {event:18} {name}{f'  ({matcher})' if matcher else ''}")
+        elif result == "repaired":
+            repaired += 1
+            print(f"  repaired:   {event:18} {name}")
         else:
             print(f"  already present: {event:18} {name}")
 
-    if added or removed or args.dry_run:
+    if added or repaired or removed or args.dry_run:
         _save_settings(settings_path, settings, args.dry_run)
 
     print()
     if args.dry_run:
         print("Dry-run complete. Re-run without --dry-run to apply.")
     else:
-        print(f"Done. {added} hook(s) added; {removed} obsolete registration(s) removed from {settings_path}")
+        print(f"Done. {added} hook(s) added; {repaired} command(s) repaired; {removed} obsolete registration(s) removed from {settings_path}")
         if settings_path.with_suffix(".json.bak").exists():
             print(f"Previous settings backed up to {settings_path.with_suffix('.json.bak')}")
 
