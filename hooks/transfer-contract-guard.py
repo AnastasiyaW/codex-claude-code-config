@@ -444,18 +444,38 @@ def _stop_issues(root: Path, current_session: str) -> tuple[list[str], list[str]
     issues: list[str] = []
     deferred: list[str] = []
     for path in _transfer_files(root):
-        contract, error = _load(path)
-        if error or contract is None:
-            # A record too broken to parse has no readable owner, so it is
+        # Parse and validate separately. _load folds the two together and returns
+        # None for either, which meant a perfectly readable record naming a live
+        # peer never reached the ownership check below and blocked every other
+        # session -- the exact collateral the comment at the top of this file says
+        # ownership exists to prevent. Measured 2026-08-28: a peer's contract was
+        # mid-edit, missing one field, and wedged an unrelated session's Stop.
+        try:
+            contract = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            # Genuinely unreadable: no owner can be read out of it, so it stays
             # everyone's problem until someone repairs it.
-            issues.append(f"{path.name}: {error}")
+            issues.append(f"{path.name}: cannot read {path}: {exc}")
             continue
+        if not isinstance(contract, dict):
+            issues.append(f"{path.name}: contract must be a JSON object")
+            continue
+        schema_errors = _contract_errors(contract)
         owner = _foreign_and_live(contract, current_session)
-        status = _text(contract.get("status"))
         if owner:
-            if status in OPEN_STATUSES or _contract_errors(contract) or _verified_path_errors(contract, root):
-                deferred.append(f"{path.name} (status={status}, owner session {owner} still live)")
+            # Someone else's record, and that someone is still around to finish
+            # it. Note it, never block on it. Ownerless and stale-owner records
+            # fall through and still block, so this is not a silent escape.
+            status = _text(contract.get("status"))
+            if status in OPEN_STATUSES or schema_errors or _verified_path_errors(contract, root):
+                deferred.append(
+                    f"{path.name} (status={status or 'unset'}, owner session {owner} still live)"
+                )
             continue
+        if schema_errors:
+            issues.extend(f"{path.name}: {item}" for item in schema_errors)
+            continue
+        status = _text(contract.get("status"))
         if status in OPEN_STATUSES:
             issues.append(
                 f"{path.name}: status={status}; next_action={_text(contract.get('next_action')) or 'missing'}"
@@ -567,6 +587,33 @@ def _self_test() -> int:
         path = put("mine-broken", session_id=mine, status="verified")
         if not _stop_issues(repo, mine)[0]:
             fails.append("verified record without evidence did not block its owner")
+
+        # ...but the same broken record belonging to a LIVE PEER must only be
+        # noted. Regression guard, 2026-08-28: validation errors used to be
+        # folded into the parse failure, so a readable record naming a live owner
+        # never reached the ownership check and wedged unrelated sessions' Stop.
+        # The three controls below must stay red, or this becomes a way to make
+        # any record unblocking by breaking its schema.
+        for leftover in transfers.glob("*.json"):
+            leftover.unlink()
+        put("peer-broken", session_id=live, status="verified")
+        peer_issues, peer_deferred = _stop_issues(repo, mine)
+        if peer_issues:
+            fails.append(f"live peer's broken record blocked us: {peer_issues}")
+        if not peer_deferred:
+            fails.append("live peer's broken record was neither blocked nor noted")
+
+        for leftover in transfers.glob("*.json"):
+            leftover.unlink()
+        put("stale-broken", session_id=stale, status="verified")
+        if not _stop_issues(repo, mine)[0]:
+            fails.append("stale peer's broken record did not block")
+
+        for leftover in transfers.glob("*.json"):
+            leftover.unlink()
+        put("ownerless-broken", status="verified")
+        if not _stop_issues(repo, mine)[0]:
+            fails.append("ownerless broken record did not block")
 
         # Stamping: writes once, never overwrites an existing owner.
         for leftover in transfers.glob("*.json"):
