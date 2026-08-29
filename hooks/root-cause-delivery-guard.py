@@ -306,8 +306,19 @@ def relative(root: Path, raw_path: str) -> str | None:
         return None
 
 
+# Directories the delivery harness WRITES. Its own bookkeeping must not read as
+# the source it exists to gate: closing a user-task receipt makes the completion
+# guard write .agent/user-tasks/<id>/terminal-receipt.json, whose .json suffix
+# then satisfies is_source_path, so the act of finishing one gate manufactured
+# the condition that blocks the other. Measured 2026-08-29: fourteen files
+# written after an intent, every one of them a terminal-receipt.json.
+HARNESS_OUTPUT_ROOTS = (CASE_ROOT, Path(".agent") / "user-tasks")
+
+
 def is_case_path(rel_path: str) -> bool:
-    return _normal(rel_path).startswith(_normal(CASE_ROOT) + "/")
+    """True for a path the delivery harness itself owns and writes."""
+    normal = _normal(rel_path)
+    return any(normal.startswith(_normal(root) + "/") for root in HARNESS_OUTPUT_ROOTS)
 
 
 def is_source_path(rel_path: str) -> bool:
