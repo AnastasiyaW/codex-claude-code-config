@@ -177,6 +177,22 @@ ROUTES = [
         "skill": "control-cli",
         "description": "Drive an interactive CLI/TUI with deterministic input and transcript evidence",
     },
+    # A product interface is one delivery surface: visual decisions, frontend
+    # implementation, and proof belong to one route. `control-ui` below remains
+    # a narrower browser/CDP evidence companion, so a screenshot request can
+    # legitimately select both without turning every UI task into a test-only task.
+    {
+        "patterns": [
+            r"\b(ui|ux)\b.{0,100}\b(design|redesign|layout|responsive|accessib\w*|a11y|animation|motion|implement|build|fix|component|dashboard|form|page|landing)\b",
+            r"\b(design|redesign|layout|responsive|accessib\w*|a11y|animation|motion|implement|build|fix)\b.{0,100}\b(ui|ux|interface|frontend|dashboard|form|page|landing)\b",
+            r"\b(interface|frontend|dashboard|form|page|landing|component|website)\b.{0,100}\b(prettier|spacing|mobile|desktop|visual|design|redesign|layout|responsive|accessib\w*|a11y|animation|motion)\b",
+            r"\b(интерфейс\w*|ui|ux|дашборд\w*|лендинг\w*|страниц\w*|форм\w*|компонент\w*|верстк\w*)\b.{0,100}\b(дизайн\w*|редизайн\w*|сделай|создай|почини|исправь|сверстай|адаптив\w*|доступност\w*|анимац\w*)\b",
+            r"\b(дизайн\w*|редизайн\w*|сверстай|адаптив\w*|доступност\w*|анимац\w*)\b.{0,100}\b(интерфейс\w*|ui|ux|дашборд\w*|лендинг\w*|страниц\w*|форм\w*|компонент\w*|верстк\w*)\b",
+        ],
+        "skill": "ui-design",
+        "description": "REQUIRED for one UI-design loop: evidence-led visual decisions, native frontend implementation, and focused real-surface proof",
+        "required": True,
+    },
     {
         "patterns": [
             r"\b(control ui|browser harness|cdp harness|accessibility snapshot|visual diff|скриншот\w*|снимок экрана)\b",

@@ -265,24 +265,51 @@ def _command_for(script_path: Path, event: str) -> str:
 
 def _merge_hook(settings: dict, event: str, script_path: Path,
                 matcher: str | None) -> str:
-    """Register one hook and return ``added``, ``repaired``, or ``present``."""
+    """Register one hook and return its added/repaired/deduplicated state.
+
+    A hook identity is ``event + matcher + script``.  The same script can
+    deliberately serve Bash and PowerShell through separate matcher groups;
+    collapsing only by basename loses coverage.  Conversely, a duplicate in
+    the same event and matcher fires twice and must be collapsed while this
+    installer already owns a backed-up configuration write.
+    """
     settings.setdefault("hooks", {})
     settings["hooks"].setdefault(event, [])
 
     command = _command_for(script_path, event)
     script_name = script_path.name.lower()
+    groups = settings["hooks"][event]
+    matches: list[dict] = []
+    for entry in groups:
+        if (entry.get("matcher") or None) != matcher:
+            continue
+        for hook in entry.get("hooks", []):
+            if _script_name_from_command(str(hook.get("command", ""))) == script_name:
+                matches.append(hook)
 
-    # Existing installs may point at a linked config repo instead of ~/.claude/hooks.
-    # Treat the same script basename in the same event as installed to avoid duplicate
-    # hooks firing on every matching tool call.
-    for entry in settings["hooks"][event]:
-        for h in entry.get("hooks", []):
-            existing = h.get("command", "").strip()
-            if existing == command:
-                return "present"
-            if _script_name_from_command(existing) == script_name:
-                h["command"] = command
-                return "repaired"  # same hook, repaired command spelling
+    if matches:
+        # Keep the earliest registration and its status message; subsequent
+        # same-trigger copies are not independent behavior.
+        winner = matches[0]
+        repaired = winner.get("command", "").strip() != command
+        winner["command"] = command
+        if len(matches) == 1:
+            return "repaired" if repaired else "present"
+
+        retained_groups = []
+        for entry in groups:
+            if (entry.get("matcher") or None) != matcher:
+                retained_groups.append(entry)
+                continue
+            retained_hooks = [
+                hook for hook in entry.get("hooks", [])
+                if hook is winner
+                or _script_name_from_command(str(hook.get("command", ""))) != script_name
+            ]
+            if retained_hooks:
+                retained_groups.append({**entry, "hooks": retained_hooks})
+        settings["hooks"][event] = retained_groups
+        return "deduplicated"
 
     hook: dict = {"type": "command", "command": command}
     if script_name == "outward-claim-evidence-guard.py":
@@ -383,6 +410,7 @@ def main() -> int:
     removed = _remove_replaced_hooks(settings) if args.extras else 0
     added = 0
     repaired = 0
+    deduplicated = 0
     for name, event, matcher in selection:
         script_path = hooks_dir / name
         result = _merge_hook(settings, event, script_path, matcher)
@@ -392,17 +420,20 @@ def main() -> int:
         elif result == "repaired":
             repaired += 1
             print(f"  repaired:   {event:18} {name}")
+        elif result == "deduplicated":
+            deduplicated += 1
+            print(f"  deduplicated: {event:15} {name}")
         else:
             print(f"  already present: {event:18} {name}")
 
-    if added or repaired or removed or args.dry_run:
+    if added or repaired or deduplicated or removed or args.dry_run:
         _save_settings(settings_path, settings, args.dry_run)
 
     print()
     if args.dry_run:
         print("Dry-run complete. Re-run without --dry-run to apply.")
     else:
-        print(f"Done. {added} hook(s) added; {repaired} command(s) repaired; {removed} obsolete registration(s) removed from {settings_path}")
+        print(f"Done. {added} hook(s) added; {repaired} command(s) repaired; {deduplicated} duplicate registration(s) removed; {removed} obsolete registration(s) removed from {settings_path}")
         if settings_path.with_suffix(".json.bak").exists():
             print(f"Previous settings backed up to {settings_path.with_suffix('.json.bak')}")
 

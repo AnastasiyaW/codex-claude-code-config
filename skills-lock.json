@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-24T21:17:25+00:00",
-  "skill_count": 52,
-  "aggregate_hash": "sha256:d129a6f061aeb5625e3545035ed09806abf11c4088343244ccb24ecea7572b0a",
+  "generated_at": "2026-08-31T10:11:24+00:00",
+  "skill_count": 55,
+  "aggregate_hash": "sha256:e6bab8932606df1366cd846261a41992b7bf3b39fa6bc7e70f954f6a090417e4",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:698f850dd8e71ec4dcde9bdaa670c067852e47a67f97dcdcbe72db385e29621a",
@@ -406,6 +406,63 @@
         "references/layout-css.md",
         "references/performance-a11y.md",
         "references/visual-styles.md"
+      ]
+    },
+    "frontend/motion-framer": {
+      "content_hash": "sha256:97ab16fdae6d93e579d336680d54e1683db0c398e91e7ef8d68fa80de1aa9e21",
+      "size_bytes": 71025,
+      "file_count": 4,
+      "files": [
+        "SKILL.md",
+        "references/api_reference.md",
+        "scripts/animation_generator.py",
+        "scripts/variant_builder.py"
+      ]
+    },
+    "frontend/ui-design": {
+      "content_hash": "sha256:bd76861dc17c0d60314a9ccb1a31234ce83612d9530bc35b88bfdd3d6f71ebcb",
+      "size_bytes": 7061,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    "frontend/ui-ux-pro-max": {
+      "content_hash": "sha256:9bb52c25373ab85853646b514c752752d0a2fe46f3bcc25508d09751b58924b3",
+      "size_bytes": 476896,
+      "file_count": 31,
+      "files": [
+        "SKILL.md",
+        "references/pro-rules.md",
+        "references/quick-reference.md",
+        "scripts/core.py",
+        "scripts/design_system.py",
+        "scripts/reasoning_contract.py",
+        "scripts/search.py",
+        "scripts/tests/fixtures/catalogs/google-api.json",
+        "scripts/tests/fixtures/catalogs/google-catalog.json",
+        "scripts/tests/fixtures/catalogs/google-existing.csv",
+        "scripts/tests/fixtures/catalogs/google-metadata.json",
+        "scripts/tests/fixtures/catalogs/google-overrides.json",
+        "scripts/tests/fixtures/catalogs/icons-curated.csv",
+        "scripts/tests/fixtures/catalogs/phosphor-core.json",
+        "scripts/tests/fixtures/catalogs/phosphor-package.json",
+        "scripts/tests/fixtures/catalogs/phosphor-react-exports.json",
+        "scripts/tests/fixtures/catalogs/phosphor-react-package.json",
+        "scripts/tests/fixtures/relevance-baseline.json",
+        "scripts/tests/fixtures/relevance-cases.json",
+        "scripts/tests/fixtures/relevance-thresholds.json",
+        "scripts/tests/test_catalog_refresh.py",
+        "scripts/tests/test_core.py",
+        "scripts/tests/test_core_data_quality.py",
+        "scripts/tests/test_data_contracts.py",
+        "scripts/tests/test_design_system_mode.py",
+        "scripts/tests/test_native_desktop_stack_freshness.py",
+        "scripts/tests/test_relevance_evaluator.py",
+        "scripts/tests/test_style_taxonomy.py",
+        "scripts/tests/test_text_layout_resilience.py",
+        "scripts/tests/test_web_stack_freshness.py",
+        "scripts/validate_data.py"
       ]
     },
     "ios/ios-development": {

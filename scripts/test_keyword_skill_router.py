@@ -47,6 +47,8 @@ CASES = [
     ("how should we evaluate the coding agent trajectory", "testing-strategy"),
     ("the VM-harness is overloaded and blocks staging smoke", "harness-feedback"),
     ("слишком жесткий gate блокирует staging smoke", "harness-feedback"),
+    ("сделай дашборд заказов: поправь дизайн и адаптивную вёрстку", "ui-design"),
+    ("Redesign this React settings form with accessible focus and responsive layout", "ui-design"),
     ("не соглашайся со мной без доказательств, проверь гипотезу", "epistemic-challenge"),
     ("challenge my assumption with evidence, not a devil's-advocate performance", "epistemic-challenge"),
     ("Translate this literal string to Russian: 'Challenge my assumption with evidence.'", None),

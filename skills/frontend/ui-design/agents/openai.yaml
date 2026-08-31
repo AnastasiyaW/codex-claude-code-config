@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI Design"
+  short_description: "Unify product UI design, implementation, and proof."
+  default_prompt: "Design and implement this interface with a coherent visual system, then verify the changed flow."

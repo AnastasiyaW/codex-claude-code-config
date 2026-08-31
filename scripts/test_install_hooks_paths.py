@@ -50,6 +50,24 @@ def main() -> int:
         assert MODULE._merge_hook(stale, "SessionStart", target, None) == "repaired"
         repaired = stale["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         assert repaired == f'python "{target.as_posix()}" --session-start'
+        router = canonical_repo / "hooks" / "keyword-skill-router.py"
+        duplicate = {"hooks": {"UserPromptSubmit": [
+            {"hooks": [{"type": "command", "command": f'python "{router.as_posix()}"',
+                        "statusMessage": "Keep this"}]},
+            {"hooks": [{"type": "command", "command": f'python "{router.as_posix()}"'}]},
+        ]}}
+        assert MODULE._merge_hook(duplicate, "UserPromptSubmit", router, None) == "deduplicated"
+        router_hooks = [
+            hook for group in duplicate["hooks"]["UserPromptSubmit"]
+            for hook in group["hooks"]
+            if MODULE._script_name_from_command(hook["command"]) == "keyword-skill-router.py"
+        ]
+        assert len(router_hooks) == 1
+        assert router_hooks[0]["statusMessage"] == "Keep this"
+        matcher_split = {"hooks": {"PreToolUse": []}}
+        assert MODULE._merge_hook(matcher_split, "PreToolUse", router, "Bash") == "added"
+        assert MODULE._merge_hook(matcher_split, "PreToolUse", router, "PowerShell") == "added"
+        assert len(matcher_split["hooks"]["PreToolUse"]) == 2
     print("test_install_hooks_paths: OK")
     return 0
 
