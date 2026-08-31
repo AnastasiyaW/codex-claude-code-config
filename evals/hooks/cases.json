@@ -72,6 +72,15 @@
    "stdout_contains": [],
    "stdout_not_contains": ["remote-compute-ops"]},
 
+  {"id": "auth blocker without inventory receipt is blocked", "hook": "outward-claim-evidence-guard.py",
+   "stdin": {"transcript_path": "transcript.jsonl"},
+   "files": {"transcript.jsonl": "{\"message\": {\"role\": \"assistant\", \"content\": \"Blocker: publishing needs interactive Claude OAuth authorization.\"}}\n"},
+   "expect": "block", "reason_contains": "Access inventory"},
+  {"id": "auth blocker with inventory receipt is allowed", "hook": "outward-claim-evidence-guard.py",
+   "stdin": {"transcript_path": "transcript.jsonl"},
+   "files": {"transcript.jsonl": "{\"message\": {\"role\": \"assistant\", \"content\": \"Blocker: publishing needs interactive Claude OAuth authorization.\\nAccess inventory: python ~/.claude/scripts/access_inventory.py claude -> nothing matched ['claude'].\"}}\n"},
+   "expect": "allow"},
+
   {"id": "git status allowed", "hook": "git-destructive-guard.py",
    "stdin": {"tool_name": "Bash", "tool_input": {"command": "git status -sb"}}, "expect": "allow"},
   {"id": "force-with-lease allowed", "hook": "git-destructive-guard.py",

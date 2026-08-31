@@ -22,7 +22,7 @@ conventions as the authority; do not replace them with a generic style guide.
    and the project already uses `motion`/`framer-motion`, or the user has
    explicitly authorized adding it. Otherwise use native CSS/stack primitives;
    never add the package merely to animate a control.
-4. Read `../control-ui/SKILL.md` when a running browser/desktop surface needs
+4. Read `../../development/control-ui/SKILL.md` when a running browser/desktop surface needs
    screenshot, interaction, accessibility-tree, or visual-diff evidence.
 
 Do not load all four by default. A focused CSS fix normally needs only the
@@ -56,75 +56,41 @@ implementation guidance and a focused proof.
 - Do not broaden a UI request into unrelated product copy, backend, analytics,
   or global restyling without evidence that the requested flow requires it.
 
-[TODO: Choose the structure that best fits this skill's purpose. Common patterns:
+## Interaction-specific proof
 
-**1. Workflow-Based** (best for sequential processes)
-- Works well when there are clear step-by-step procedures
-- Example: DOCX skill with "Workflow Decision Tree" -> "Reading" -> "Creating" -> "Editing"
-- Structure: ## Overview -> ## Workflow Decision Tree -> ## Step 1 -> ## Step 2...
+Apply only the slice that the changed surface contains; this is not a demand to
+add a modal, custom validation, or extra animation to an otherwise simple UI.
 
-**2. Task-Based** (best for tool collections)
-- Works well when the skill offers different operations/capabilities
-- Example: PDF skill with "Quick Start" -> "Merge PDFs" -> "Split PDFs" -> "Extract Text"
-- Structure: ## Overview -> ## Quick Start -> ## Task Category 1 -> ## Task Category 2...
+- **Modal dialog:** verify that opening moves focus into the dialog, `Tab` and
+  `Shift+Tab` stay in its sequence, `Escape` closes it when the product supports
+  dismissal, and closing restores focus to the invoking control (or a documented
+  logical successor). Do not claim `aria-modal` unless the background is actually
+  inert. [WAI-ARIA APG modal-dialog pattern](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/)
+- **Form error:** verify a detected invalid field is identified and its error is
+  described in text. An inline message, summary, alert, or native validation can
+  be appropriate only when the real browser/assistive-technology behavior supports
+  the chosen path; color alone is not an error description. [WCAG 2.2 SC 3.3.1](https://www.w3.org/WAI/WCAG22/Understanding/error-identification.html)
+- **Dense pointer controls:** for adjacent compact controls, assess the WCAG
+  2.5.8 boundary: a 24 by 24 CSS-pixel target or its spacing/equivalent/inline
+  exception. Do not blindly enlarge an inline link or an essential dense control.
+  [WCAG 2.2 SC 2.5.8](https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html)
+- **Motion:** when motion changes, exercise the reduced-motion branch rather
+  than assuming that a static source review proves it. `prefers-reduced-motion`
+  communicates the user's request to reduce, remove, or replace non-essential
+  motion. [MDN reference](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-reduced-motion)
 
-**3. Reference/Guidelines** (best for standards or specifications)
-- Works well for brand guidelines, coding standards, or requirements
-- Example: Brand styling with "Brand Guidelines" -> "Colors" -> "Typography" -> "Features"
-- Structure: ## Overview -> ## Guidelines -> ## Specifications -> ## Usage...
+## Local UI Pro Max validation boundary
 
-**4. Capabilities-Based** (best for integrated systems)
-- Works well when the skill provides multiple interrelated features
-- Example: Product Management with "Core Capabilities" -> numbered capability list
-- Structure: ## Overview -> ## Core Capabilities -> ### 1. Feature -> ### 2. Feature...
+The vendored `ui-ux-pro-max` folder is a distributed skill, not its complete
+upstream repository. Its local acceptance checks are the data validation and a
+real, scoped retrieval query, for example:
 
-Patterns can be mixed and matched as needed. Most skills combine patterns (e.g., start with task-based, add workflow for complex operations).
+```powershell
+python skills/frontend/ui-ux-pro-max/scripts/validate_data.py
+python skills/frontend/ui-ux-pro-max/scripts/search.py "keyboard focus modal" --domain ux
+```
 
-Delete this entire "Structuring This Skill" section when done - it's just guidance.]
-
-## [TODO: Replace with the first main section based on chosen structure]
-
-[TODO: Add content here. See examples in existing skills:
-- Code samples for technical skills
-- Decision trees for complex workflows
-- Concrete examples with realistic user requests
-- References to scripts/templates/references as needed]
-
-## Resources (optional)
-
-Create only the resource directories this skill actually needs. Delete this section if no resources are required.
-
-### scripts/
-Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
-
-**Examples from other skills:**
-- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
-- DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
-
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
-
-**Note:** Scripts may be executed without loading into context, but can still be read by Codex for patching or environment adjustments.
-
-### references/
-Documentation and reference material intended to be loaded into context to inform Codex's process and thinking.
-
-**Examples from other skills:**
-- Product management: `communication.md`, `context_building.md` - detailed workflow guides
-- BigQuery: API reference documentation and query examples
-- Finance: Schema documentation, company policies
-
-**Appropriate for:** In-depth documentation, API references, database schemas, comprehensive guides, or any detailed information that Codex should reference while working.
-
-### assets/
-Files not intended to be loaded into context, but rather used within the output Codex produces.
-
-**Examples from other skills:**
-- Brand styling: PowerPoint template files (.pptx), logo files
-- Frontend builder: HTML/React boilerplate project directories
-- Typography: Font files (.ttf, .woff2)
-
-**Appropriate for:** Templates, boilerplate code, document templates, images, icons, fonts, or any files meant to be copied or used in the final output.
-
----
-
-**Not every skill requires all three types of resources.**
+Do not run or report `test_catalog_refresh.py` or `test_relevance_evaluator.py`
+as local PASS criteria: each imports an upstream-root script absent from the
+distributed skill. Preserve that boundary as `NOT_RUN_UPSTREAM_DEPENDENCY`, not
+as a failure repaired with stubs or as a passing test.

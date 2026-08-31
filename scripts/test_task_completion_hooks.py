@@ -294,6 +294,42 @@ class TaskCompletionHookTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(result.stdout.strip(), "", result.stdout + result.stderr)
 
+    def test_outward_claim_guard_requires_access_inventory_for_auth_blocker(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claim-evidence-hook-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".claude").mkdir()
+            for content, expected_block in (
+                ("Blocker: publishing needs interactive Claude OAuth authorization.", True),
+                (
+                    "Blocker: publishing needs interactive Claude OAuth authorization.\n"
+                    "Access inventory: python ~/.claude/scripts/access_inventory.py claude "
+                    "-> nothing matched ['claude'].",
+                    False,
+                ),
+            ):
+                transcript = tmp_path / "transcript.jsonl"
+                transcript.write_text(
+                    json.dumps({"message": {"role": "assistant", "content": content}}, ensure_ascii=False)
+                    + "\n",
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    [sys.executable, str(OUTWARD_CLAIM_GUARD)],
+                    input=json.dumps({"transcript_path": str(transcript)}, ensure_ascii=False),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=tmp,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                if expected_block:
+                    payload = json.loads(result.stdout)
+                    self.assertEqual(payload.get("decision"), "block")
+                    self.assertIn("Access inventory", payload.get("reason", ""))
+                else:
+                    self.assertEqual(result.stdout.strip(), "", result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
