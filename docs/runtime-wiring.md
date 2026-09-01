@@ -38,6 +38,7 @@ pass.
 | Measured outward facts | `Stop` | `Stop` | `scripts/test_task_completion_hooks.py` (hash claim red/green fixtures) |
 | Handoff completeness | `PreToolUse`, `Stop`, `PreCompact` | `PreToolUse`, `Stop`, `PreCompact` | `test_task_completion_hooks.py` |
 | Handoff to memory continuity | `SessionStart` | `SessionStart` | `test_review_handoff_memory_loop.py` |
+| Correction feedback capture | `Stop` + `SessionStart` backlog signal | `Stop` + `SessionStart` backlog signal | both hook self-tests + live manifest parity |
 | Claude/Codex continuation contract | `PreToolUse`, `SessionStart` | `PreToolUse`, `SessionStart` | `scripts/test_continuity_contract.py` |
 | Agent-doc freshness | `SessionStart` advisory + `Stop` gate | `SessionStart` advisory + `Stop` gate | hook self-tests |
 | Git source-of-truth setup | `Stop` for long-run projects | `Stop` for long-run projects | `test_lifecycle_hook_contracts.py` |
@@ -109,6 +110,12 @@ small read views such as active tasks. This avoids concurrent sessions corruptin
 a shared JSON/Markdown state file. Keep raw transcripts, credentials, and
 operational research in the private archive; the public repository documents
 only the pattern and the shareable handlers.
+
+Archiving is not learning. `conversation-history-capture.py` preserves raw Codex
+history, while `session-feedback-capture.py` places both Claude and Codex session
+pointers in the same deferred queue. `feedback-pending-show.py` makes an unprocessed
+backlog visible. Semantic promotion remains human-gated: the synchronous hook never
+turns an untrusted transcript directly into a durable rule.
 
 Other clients can use the same lifecycle stages, but must map them to their own
 native events and permission model. Do not copy Claude Code event names into a

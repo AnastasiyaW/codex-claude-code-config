@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""SessionStart hook: nudge when sessions are queued for feedback-distillation.
+"""SessionStart hook: surface queued Claude/Codex feedback-distillation work.
 
-Companion to session-feedback-capture.py. That Stop hook queues finished sessions
+Companion to session-feedback-capture.py. That Stop hook queues session pointers
 into ~/.claude/feedback/queue.jsonl; this one surfaces the pending count at session
 start so the learn-from-corrections loop actually closes instead of the queue growing
 silently. Self-clearing: the distill step marks entries processed, so the count drops.

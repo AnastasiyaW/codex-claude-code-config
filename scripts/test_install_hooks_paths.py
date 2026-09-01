@@ -41,6 +41,12 @@ def main() -> int:
         assert any(entry[0] == "subagent-skill-context.py" for entry in codex_selection)
         assert any(entry[0] == "subagent-evidence-receipt.py" for entry in codex_selection)
         assert all(entry[0] != "agent-skill-contract.py" for entry in codex_selection)
+        for name, event in (
+            ("session-feedback-capture.py", "Stop"),
+            ("feedback-pending-show.py", "SessionStart"),
+        ):
+            assert (name, event, None) in claude_selection
+            assert (name, event, None) in codex_selection
         settings = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "python old/batch-completion-guard.py"}]}]}}
         assert MODULE._remove_replaced_hooks(settings) == 1
         assert settings["hooks"]["Stop"] == []

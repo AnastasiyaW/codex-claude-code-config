@@ -46,6 +46,25 @@ REQUIRED_PROOF_ORDER = ["focused_test", "runtime_proof", "independent_review"]
 ACTIVE_STATUSES = {"OPEN", "IN_PROGRESS"}
 TERMINAL_STATUSES = {"COMPLETE", "BLOCKED_EXTERNAL"}
 ITEM_STATUSES = {"PENDING", "RUNNING", "PASS", "BLOCKED_EXTERNAL"}
+STOP_CONTINUATION_SCHEMA = "agent-stop-continuation/v1"
+STOP_CONTINUATION_DIR = Path(
+    os.environ.get(
+        "CLAUDE_STOP_CONTINUATION_DIR",
+        str(Path.home() / ".claude" / "state" / "stop-continuations"),
+    )
+)
+STOP_CONTINUATION_MAX_AGE = dt.timedelta(hours=2)
+
+# These envelopes are emitted by harness machinery, not typed by a human as a
+# new work request.  The transcript still presents some of them with role=user,
+# so role alone is not a provenance boundary (observed with <task-notification>
+# on 2026-09-01).  Keep this list to explicit runtime envelopes; a general XML
+# prompt remains valid user input.
+MACHINE_PROMPT_ENVELOPE = re.compile(
+    r"^\s*<(?:task-notification|subagent-notification|heartbeat|system-reminder|"
+    r"local-command-caveat|command-message|command-name|automation)(?:\s|>)",
+    re.IGNORECASE,
+)
 
 
 def load_task_cycle_controller() -> Any:
@@ -113,6 +132,76 @@ def session_id(event: dict[str, Any]) -> str:
             return value.strip()
     value = os.environ.get("CLAUDE_SESSION_ID", "").strip()
     return value or "unscoped"
+
+
+def _raw_session_id(event: dict[str, Any]) -> str:
+    value = event.get("session_id") or event.get("sessionId") or os.environ.get("CLAUDE_SESSION_ID")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _turn_id(event: dict[str, Any]) -> str:
+    value = event.get("turn_id") or event.get("turnId")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def stop_continuation_marker(event: dict[str, Any]) -> Path | None:
+    """One bounded marker per session; no unbounded per-turn state."""
+    session = _raw_session_id(event)
+    if not session:
+        return None
+    digest = hashlib.sha256(session.encode("utf-8", "ignore")).hexdigest()[:24]
+    return STOP_CONTINUATION_DIR / f"{digest}.json"
+
+
+def mark_stop_turn(event: dict[str, Any]) -> None:
+    """Remember the turn whose Stop hooks may synthesize a continuation prompt.
+
+    Codex documents that ``decision=block`` creates another prompt that acts as
+    user input.  Without this provenance marker, the prompt collector registers
+    a hook's own repair instruction as a new request and the queue feeds itself.
+    """
+    turn = _turn_id(event)
+    marker = stop_continuation_marker(event)
+    if not turn or marker is None:
+        return
+    write_json_atomic(marker, {
+        "schema": STOP_CONTINUATION_SCHEMA,
+        "session_id_sha256": hashlib.sha256(
+            _raw_session_id(event).encode("utf-8", "ignore")
+        ).hexdigest(),
+        "turn_id": turn,
+        "recorded_at": now_utc(),
+    })
+
+
+def is_stop_continuation(event: dict[str, Any]) -> bool:
+    turn = _turn_id(event)
+    marker = stop_continuation_marker(event)
+    if not turn or marker is None or not marker.is_file():
+        return False
+    try:
+        payload = load_json(marker)
+        recorded = utc_timestamp(payload.get("recorded_at"), "recorded_at")
+    except ValueError:
+        return False
+    age = dt.datetime.now(dt.timezone.utc) - recorded
+    return (
+        payload.get("schema") == STOP_CONTINUATION_SCHEMA
+        and payload.get("turn_id") == turn
+        and -dt.timedelta(minutes=5) <= age <= STOP_CONTINUATION_MAX_AGE
+    )
+
+
+def machine_prompt_reason(event: dict[str, Any], prompt: str) -> str | None:
+    explicit = str(event.get("prompt_source") or event.get("source") or "").strip().lower()
+    if explicit in {"hook", "automation", "system", "subagent", "machine"}:
+        return f"explicit source={explicit}"
+    match = MACHINE_PROMPT_ENVELOPE.match(prompt)
+    if match:
+        return f"runtime envelope {match.group(0).strip()}"
+    if is_stop_continuation(event):
+        return "Stop-generated continuation for the same turn"
+    return None
 
 
 def event_prompt(event: dict[str, Any]) -> str:
@@ -214,6 +303,7 @@ def record_task(root: Path, event: dict[str, Any], prompt: str) -> dict[str, Any
         "task_id": task_id,
         "request_sha256": request["prompt_sha256"],
         "status": "OPEN",
+        "next_action": prompt,
         "updated_at": now_utc(),
     }
     write_json_atomic(request_file, request)
@@ -475,7 +565,22 @@ def assess_reconciliation_observations(root: Path) -> list[str]:
             defect = str(exc)
         if defect:
             relative = observation_path.relative_to(root).as_posix()
-            unresolved.append(f"{relative}: {defect}")
+            next_detail = ""
+            cycle_path = task_dir / "cycle.json"
+            if cycle_path.is_file():
+                try:
+                    controller = load_task_cycle_controller()
+                    controller.reconcile(task_dir)
+                    decision = controller.select_next(controller.load_cycle(task_dir))
+                    if decision.get("decision") in {"WORK", "RECHECK_EXTERNAL"}:
+                        instruction = decision.get("proof_instruction") or decision.get("next_action")
+                        next_detail = (
+                            f" NEXT: {decision.get('decision')} {decision.get('finding_id')} / "
+                            f"{decision.get('next_proof') or 'recheck'}: {instruction}"
+                        )
+                except Exception as exc:
+                    next_detail = f" controller dispatch failed: {exc}"
+            unresolved.append(f"{relative}: {defect}.{next_detail}")
     return unresolved
 
 
@@ -484,29 +589,42 @@ def assess_items(task_dir: Path, state: dict[str, Any]) -> tuple[str, str]:
     if not isinstance(raw_items, list) or not raw_items:
         return "INCOMPLETE", "collection task needs a non-empty state.json.items inventory"
     seen: set[str] = set()
+    errors: list[str] = []
     active = 0
     blocked = 0
-    for raw in raw_items:
+    for index, raw in enumerate(raw_items):
         if not isinstance(raw, dict):
-            return "INCOMPLETE", "each collection item must be an object"
+            errors.append(f"items[{index}] must be an object")
+            continue
+        label = f"items[{index}]"
         try:
-            item_id = nonempty(raw.get("item_id"), "collection item_id")
-            if item_id in seen:
-                raise ValueError(f"duplicate collection item_id: {item_id}")
-            seen.add(item_id)
-            status = raw.get("status")
-            if status not in ITEM_STATUSES:
-                raise ValueError(f"{item_id}: unknown item status {status!r}")
-            if status in {"PENDING", "RUNNING"}:
-                active += 1
-                continue
-            evidence_files(task_dir, raw.get("evidence"), f"{item_id}.evidence")
-            if status == "BLOCKED_EXTERNAL":
-                blocked += 1
-                nonempty(raw.get("blocker"), f"{item_id}.blocker")
-                nonempty(raw.get("recheck"), f"{item_id}.recheck")
+            item_id = nonempty(raw.get("item_id"), f"{label}.item_id")
         except ValueError as exc:
-            return "INCOMPLETE", str(exc)
+            errors.append(str(exc))
+            item_id = label
+        if item_id in seen:
+            errors.append(f"duplicate collection item_id: {item_id}")
+        seen.add(item_id)
+        status = raw.get("status")
+        if status not in ITEM_STATUSES:
+            errors.append(f"{item_id}: unknown item status {status!r}")
+            continue
+        if status in {"PENDING", "RUNNING"}:
+            active += 1
+            continue
+        try:
+            evidence_files(task_dir, raw.get("evidence"), f"{item_id}.evidence")
+        except ValueError as exc:
+            errors.append(str(exc))
+        if status == "BLOCKED_EXTERNAL":
+            blocked += 1
+            for field in ("blocker", "recheck"):
+                try:
+                    nonempty(raw.get(field), f"{item_id}.{field}")
+                except ValueError as exc:
+                    errors.append(str(exc))
+    if errors:
+        return "INCOMPLETE", "; ".join(errors)
     total = len(raw_items)
     if active:
         return "INCOMPLETE", f"{total - active}/{total} collection items terminal; {active} remain PENDING or RUNNING"
@@ -582,6 +700,8 @@ def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
     if not task_capture_enabled():
         return 0
     prompt = event_prompt(event)
+    if prompt and machine_prompt_reason(event, prompt):
+        return 0
     _, actionable = classify_prompt(prompt)
     if not prompt or not actionable:
         return 0
@@ -606,6 +726,10 @@ def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
 
 
 def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
+    # This marker is written on every Stop, not only when this particular guard
+    # blocks. Matching Stop hooks run concurrently, and any one of them may be
+    # the source of the next synthetic prompt.
+    mark_stop_turn(event)
     root = repo_root(cwd or Path.cwd())
     if root is None:
         return 0
@@ -613,7 +737,13 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
     for request in task_requests(root, session_id(event)):
         outcome, detail = assess_task(root, request)
         if outcome == "INCOMPLETE":
-            unresolved.append(f"{request['task_id']}: {detail}")
+            prompt = " ".join(str(request.get("prompt") or "").split())
+            if len(prompt) > 500:
+                prompt = prompt[:499] + "…"
+            unresolved.append(
+                f"{request['task_id']}: {detail}. NEXT OWNED ACTION: execute the request in "
+                f".agent/user-tasks/{request['task_id']}/request.json now: {prompt}"
+            )
         else:
             record_terminal_receipt(root, request, outcome)
     if not unresolved:

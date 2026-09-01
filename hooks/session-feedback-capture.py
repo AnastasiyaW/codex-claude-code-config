@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop hook: queue a finished session for feedback-distillation (learn-from-corrections).
+"""Stop hook: queue a Claude or Codex session for feedback distillation.
 
 Implements the *capture* half of the learn-from-corrections loop (rules/learn-from-corrections.md):
 the agent should learn a lesson every time the user corrects its solution, but capture decays
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 import datetime as _dt
@@ -42,6 +43,12 @@ from pathlib import Path
 # >= 2 genuine human turns => a back-and-forth where a correction could have occurred.
 # This is a high-recall *session-level* gate (cheap, deterministic); the LLM step does precision.
 MIN_USER_TURNS = 2
+
+MACHINE_PROMPT_ENVELOPE = re.compile(
+    r"^\s*<(?:task-notification|subagent-notification|heartbeat|system-reminder|"
+    r"local-command-caveat|command-message|command-name|automation)(?:\s|>)",
+    re.IGNORECASE,
+)
 
 FEEDBACK_DIR = Path.home() / ".claude" / "feedback"
 QUEUE_PATH = FEEDBACK_DIR / "queue.jsonl"
@@ -55,6 +62,41 @@ def _disabled() -> bool:
     return SKIP_MARKER.exists()
 
 
+def _user_text(obj: dict) -> str:
+    """Return one genuine human message from Claude or Codex JSONL.
+
+    Claude stores ``message`` at the top level. Codex wraps the same semantic
+    message below ``response_item.payload`` and names its text block
+    ``input_text``. Raw transcript formats are not stable APIs, so unknown
+    shapes fail closed to an empty string instead of being counted as humans.
+    """
+    candidate: object = obj
+    if obj.get("type") == "response_item" and isinstance(obj.get("payload"), dict):
+        candidate = obj["payload"]
+    if isinstance(candidate, dict) and isinstance(candidate.get("message"), dict):
+        candidate = candidate["message"]
+    if not isinstance(candidate, dict) or candidate.get("role") != "user":
+        return ""
+    if candidate.get("type") == "summary":
+        return ""
+    content = candidate.get("content")
+    if isinstance(content, str):
+        text = content.strip()
+    elif isinstance(content, list):
+        if any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content):
+            return ""
+        text = " ".join(
+            str(block.get("text") or "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") in {"text", "input_text"}
+        ).strip()
+    else:
+        return ""
+    # Runtime machinery can be serialized with role=user.  It is input to the
+    # harness, not a human reaction worth distilling as feedback.
+    return "" if MACHINE_PROMPT_ENVELOPE.match(text) else text
+
+
 def count_user_turns(transcript_path: str | None) -> int:
     """Count genuine human turns in a JSONL transcript.
 
@@ -66,39 +108,31 @@ def count_user_turns(transcript_path: str | None) -> int:
     p = Path(transcript_path)
     if not p.exists():
         return 0
+    n = 0
     try:
-        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        with p.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and _user_text(obj):
+                    n += 1
     except OSError:
         return 0
-    n = 0
-    for line in lines:
-        line = line.strip()
-        if not line or not line.startswith("{"):
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if (obj.get("type") or obj.get("message", {}).get("type")) == "summary":
-            continue
-        role = obj.get("role") or obj.get("message", {}).get("role")
-        if role != "user":
-            continue
-        content = obj.get("content")
-        if content is None:
-            content = obj.get("message", {}).get("content")
-        # Skip tool_result-only user messages (not a human turn).
-        if isinstance(content, list):
-            if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
-                continue
-            text = " ".join(
-                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
-            )
-        else:
-            text = content if isinstance(content, str) else ""
-        if text.strip():
-            n += 1
     return n
+
+
+def harness_for_transcript(transcript_path: str | None) -> str:
+    normalized = str(transcript_path or "").replace("\\", "/").lower()
+    if "/.codex/" in normalized:
+        return "codex"
+    if "/.claude/" in normalized:
+        return "claude"
+    return "unknown"
 
 
 def already_queued(session_id: str) -> bool:
@@ -156,6 +190,7 @@ def main() -> int:
             "session_id": session_id,
             "cwd": cwd,
             "transcript_path": str(transcript_path) if transcript_path else "",
+            "harness": harness_for_transcript(transcript_path),
             "n_user_turns": n_user_turns,
             "status": "pending",
         }
@@ -177,12 +212,39 @@ def _self_test() -> int:
                 json.dumps({"type": "user", "message": {"role": "user", "content": "сделай датасет"}}),
                 json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}),
                 json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "out"}]}}),
+                json.dumps({"type": "user", "message": {"role": "user", "content": "<heartbeat><instructions>check</instructions></heartbeat>"}}),
                 json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "нет, всегда оригиналы"}]}}),
             ]
         ),
         encoding="utf-8",
     )
     assert count_user_turns(str(tx)) == 2, "should count 2 human turns (not tool_result/summary)"
+    codex_tx = tmp / "codex.jsonl"
+    codex_tx.write_text(
+        "\n".join([
+            json.dumps({"type": "response_item", "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "сделай"}],
+            }}),
+            json.dumps({"type": "response_item", "payload": {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "делаю"}],
+            }}),
+            json.dumps({"type": "response_item", "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "<task-notification>done</task-notification>"}],
+            }}),
+            json.dumps({"type": "response_item", "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "нет, доделай"}],
+            }}),
+            json.dumps({"type": "response_item", "payload": {
+                "type": "function_call_output", "output": "not a human",
+            }}),
+        ]),
+        encoding="utf-8",
+    )
+    assert count_user_turns(str(codex_tx)) == 2, "Codex input_text messages must be counted"
     assert count_user_turns(str(tmp / "missing.jsonl")) == 0, "missing transcript => 0 (fail-open)"
 
     # 2) enqueue + dedup against a temp queue.

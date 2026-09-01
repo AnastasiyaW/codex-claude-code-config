@@ -54,6 +54,8 @@ Opt-in extras (use --extras):
   - plan-gate                    UserPromptSubmit  plan-artifact discipline for risky asks
   - user-task-completion-guard   Prompt/Start/Stop records every actionable user task and requires evidence-bound closure
   - conversation-history-capture Stop          archives and indexes local Codex session JSONL histories
+  - session-feedback-capture    Stop          queues Claude/Codex sessions for human-gated correction distillation
+  - feedback-pending-show       SessionStart  surfaces the bounded distillation backlog
   - shared-branch-guard          PreToolUse    protects marked checkouts shared by several workers
 
 Usage
@@ -147,6 +149,8 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("user-task-completion-guard.py", "SessionStart", None),
     ("user-task-completion-guard.py", "Stop", None),
     ("conversation-history-capture.py", "Stop", None),
+    ("session-feedback-capture.py", "Stop", None),
+    ("feedback-pending-show.py", "SessionStart", None),
     ("shared-branch-guard.py", "PreToolUse", "Bash|PowerShell"),
 ]
 

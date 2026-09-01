@@ -20,10 +20,6 @@ CODEX_CFG = HOME / ".codex" / "hooks.json"
 # Asymmetries that are meant. The reason is the point: an allowlist without one is
 # where a real gap hides, and this file exists because a gap hid in a weaker check.
 INTENTIONAL = {
-    ("claude", "SessionStart", "*", "feedback-pending-show.py"):
-        "the feedback queue is a Claude-side loop; Codex has no equivalent",
-    ("claude", "Stop", "*", "session-feedback-capture.py"):
-        "queues Claude sessions for /distill-feedback; Codex sessions are archived instead",
     ("codex", "Stop", "*", "conversation-history-github-sync.py"):
         "Codex keeps its own conversation-history archive; Claude transcripts go elsewhere",
     ("claude", "PreToolUse", "Task", "agent-skill-contract.py"):

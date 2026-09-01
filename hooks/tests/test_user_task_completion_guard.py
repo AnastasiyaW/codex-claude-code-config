@@ -27,8 +27,11 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / "repo"
         (self.root / ".git").mkdir(parents=True)
         self.event = {"prompt": "проверь и исправь обвязку", "session_id": "session-a"}
+        self.old_continuation_dir = guard.STOP_CONTINUATION_DIR
+        guard.STOP_CONTINUATION_DIR = Path(self.tmp.name) / "stop-continuations"
 
     def tearDown(self) -> None:
+        guard.STOP_CONTINUATION_DIR = self.old_continuation_dir
         self.tmp.cleanup()
 
     def invoke_prompt(self, event: dict | None = None) -> dict | None:
@@ -37,10 +40,13 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
             self.assertEqual(guard.user_prompt(event or self.event, self.root), 0)
         return json.loads(output.getvalue()) if output.getvalue().strip() else None
 
-    def invoke_stop(self, session: str = "session-a") -> dict | None:
+    def invoke_stop(self, session: str = "session-a", turn: str | None = None) -> dict | None:
         output = io.StringIO()
+        event = {"session_id": session}
+        if turn:
+            event["turn_id"] = turn
         with contextlib.redirect_stdout(output):
-            self.assertEqual(guard.stop({"session_id": session}, self.root), 0)
+            self.assertEqual(guard.stop(event, self.root), 0)
         return json.loads(output.getvalue()) if output.getvalue().strip() else None
 
     def request(self) -> dict:
@@ -167,6 +173,44 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
             self.assertIsNone(self.invoke_prompt())
         self.assertFalse((self.root / ".agent" / "user-tasks").exists())
 
+    def test_runtime_envelopes_are_not_registered_as_user_tasks(self) -> None:
+        for prompt in (
+            "<task-notification>subagent finished; continue the rollout</task-notification>",
+            "<heartbeat><automation_id>x</automation_id><instructions>check and run</instructions></heartbeat>",
+            "<system-reminder>fix the failing test</system-reminder>",
+        ):
+            self.assertIsNone(self.invoke_prompt({
+                "prompt": prompt,
+                "session_id": "session-a",
+            }))
+        self.assertFalse((self.root / ".agent" / "user-tasks").exists())
+
+    def test_stop_continuation_is_not_recaptured_as_a_new_user_request(self) -> None:
+        self.invoke_prompt({
+            "prompt": "исправь реальную ошибку",
+            "session_id": "session-a",
+            "turn_id": "turn-1",
+        })
+        blocked = self.invoke_stop(turn="turn-1")
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        continuation = blocked["reason"]
+        self.assertIsNone(self.invoke_prompt({
+            "prompt": continuation,
+            "session_id": "session-a",
+            "turn_id": "turn-1",
+        }))
+        requests = list((self.root / ".agent" / "user-tasks").glob("*/request.json"))
+        self.assertEqual(len(requests), 1)
+
+    def test_same_text_on_a_new_turn_remains_real_user_input(self) -> None:
+        self.invoke_stop(turn="turn-1")
+        payload = self.invoke_prompt({
+            "prompt": "продолжи работу",
+            "session_id": "session-a",
+            "turn_id": "turn-2",
+        })
+        self.assertIsNotNone(payload)
+
     def test_complete_requires_existing_evidence_and_result(self) -> None:
         self.invoke_prompt()
         self.write_state(status="COMPLETE", result="обвязка проверена", evidence=["evidence/missing.txt"])
@@ -199,6 +243,19 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         blocked = self.invoke_stop()
         self.assertEqual(blocked and blocked.get("decision"), "block")
         self.assertIn("1/2 collection items terminal", blocked["reason"])
+
+    def test_collection_reports_all_schema_defects_in_one_stop(self) -> None:
+        self.invoke_prompt({"prompt": "проверь все элементы", "session_id": "session-a"})
+        self.write_state(status="COMPLETE", items=[{
+            "status": "BLOCKED_EXTERNAL",
+            "evidence": ["evidence/missing.txt"],
+        }])
+        blocked = self.invoke_stop()
+        reason = blocked["reason"]
+        self.assertIn("items[0].item_id", reason)
+        self.assertIn("does not exist", reason)
+        self.assertIn("items[0].blocker", reason)
+        self.assertIn("items[0].recheck", reason)
 
     def test_collection_closes_with_every_receipt_or_measured_blocker(self) -> None:
         event = {"prompt": "check all checkpoints", "session_id": "session-a"}
@@ -266,6 +323,20 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         blocked = self.invoke_stop()
         self.assertEqual(blocked and blocked.get("decision"), "block")
         self.assertIn("work order is stale", blocked["reason"])
+
+    def test_registered_cycle_stop_dispatches_the_exact_next_proof(self) -> None:
+        self.invoke_prompt()
+        self.complete_active_request()
+        task, observation_path, observation = self.reconciliation_observation()
+        self.register_observation(task, observation_path, observation)
+        controller = guard.load_task_cycle_controller()
+        controller.reconcile(task)
+
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("NEXT: WORK", blocked["reason"])
+        self.assertIn("focused_test", blocked["reason"])
+        self.assertIn("run the focused signing test", blocked["reason"])
 
     def test_accepted_internal_reconciliation_allows_stop(self) -> None:
         self.invoke_prompt()
