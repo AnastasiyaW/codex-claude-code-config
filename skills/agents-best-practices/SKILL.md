@@ -232,6 +232,7 @@ Use this template when the user wants a harness design. If the user asks to make
 - **The agent reports a gap and stops.** Record the observed item, classify it with the completion/reconciliation contract, and dispatch the next owned proof or bounded retry; do not close on the report.
 - **A retry loop looks active but makes no progress.** Require an idempotency key, attempt counter, limit, and new observation; otherwise stop retrying and classify the boundary.
 - **A completion watchdog reports a dead process and pauses.** Treat the heartbeat as a wake signal, reconcile the partial and ambiguous side effects, then run the bounded idempotent resume/repair unless the user explicitly requested observation-only monitoring or a measured external boundary forbids recovery.
+- **A completion watchdog sees a `.failed` marker and pauses.** The marker proves the attempt failed, not that the boundary is external. Classify its cause; a reproducible local input or software defect is `INTERNAL_FIXABLE` and requires preserved evidence, a focused Git-backed causal repair, a successor contract, and a verified resume.
 - **A final answer claims completion without receipts.** Run held-out finish-versus-report eval cases and reject the terminal state until every required item has a receipt or an explicit external recheck.
 
 ## Source links for further reading

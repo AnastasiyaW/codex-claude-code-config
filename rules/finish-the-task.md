@@ -168,6 +168,12 @@ verify new progress. A repeated identical failure changes the action from blind 
 diagnosis and minimal repair; it still does not justify a report-only stop. Only a measured external
 or irreversible boundary may pause the loop with a named recheck.
 
+A `.failed` marker or failed receipt proves the failed attempt, not an external cause. The
+supervisor must classify the measured cause behind that evidence. A reproducible local input or
+software defect remains `INTERNAL_FIXABLE`: preserve the marker/log/output hashes, make the minimal
+Git-backed causal repair with a focused proof, freeze a successor contract, and resume from the last
+valid checkpoint. The marker alone can never authorize `BLOCKED_EXTERNAL`.
+
 Passive report-only/never-restart behavior is valid only when the user explicitly requested an
 observation-only monitor, or when the recovery action lacks current authority. An agent-generated
 "do not restart" sentence is not user authority and must not override a completion request.

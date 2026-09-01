@@ -43,7 +43,11 @@ When the user's acceptance condition is a finished job, dataset, migration, roll
 terminal outcome, a schedule/watchdog is a **completion supervisor**, not a passive status monitor.
 An early process exit without a terminal receipt is `INTERNAL_FIXABLE` or `RETRYABLE`: reconcile
 the possible side effect, then perform the next safe idempotent resume/repair within a durable
-attempt budget. A generated prompt may use report-only/never-restart behavior only when the user
+attempt budget. A `.failed` marker or failed receipt proves that an attempt failed; it does not
+prove that the cause is external. A reproducible local input or software defect remains
+`INTERNAL_FIXABLE`: preserve its evidence, make the minimal Git-backed causal repair and successor
+contract, then resume from the last valid checkpoint. A generated prompt may use
+report-only/never-restart behavior only when the user
 explicitly requested observation-only operation or a measured external/irreversible boundary makes
 recovery unauthorized. Persist process identity, checkpoint/output, idempotency key, attempt/limit,
 recovery predicate, and terminal proof; a heartbeat or blocker paragraph is not progress by itself.

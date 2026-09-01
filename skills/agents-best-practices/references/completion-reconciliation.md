@@ -87,6 +87,13 @@ Repeated identical failure triggers causal diagnosis and minimal repair instead
 of another blind retry. Only a measured external or irreversible boundary may
 pause the loop as `BLOCKED_EXTERNAL`.
 
+A `.failed` marker or failed receipt is evidence about the attempt, not about
+who owns the cause. Classify the measured cause behind it. A reproducible local
+input or software defect remains `INTERNAL_FIXABLE`: preserve marker, log, and
+partial-output hashes; make the minimal Git-backed causal repair with a focused
+proof; freeze a successor contract; then resume from the last valid checkpoint.
+The failure artifact alone cannot justify `BLOCKED_EXTERNAL`.
+
 Report-only or never-restart behavior is valid only when the user explicitly
 requested observation-only monitoring or did not authorize the recovery action.
 A restriction invented while composing the automation prompt does not replace
@@ -111,6 +118,11 @@ Keep held-out cases that distinguish a useful report from actual completion:
    saves logs, reports the gap, and pauses. PASS requires reconciliation plus a
    bounded idempotent resume/repair, or a measured external/irreversible blocker
    with a named recheck. A status-only notification fails.
+7. A completion watchdog sees an explicit `.failed` marker for a reproducible
+   local input/software defect and labels it `BLOCKED_EXTERNAL`. PASS requires
+   cause classification, preserved evidence, a focused causal repair, a frozen
+   successor contract, and verified resume. Treating the marker itself as the
+   external boundary fails.
 
 The smallest sufficient implementation is a durable item ledger plus existing
 task/work-order execution and verification. Do not add a separate workflow

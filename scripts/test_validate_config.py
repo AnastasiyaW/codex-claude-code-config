@@ -66,6 +66,32 @@ class ValidateConfigTests(unittest.TestCase):
             )
             self.assertEqual(MODULE.validate_completion_automations(root), [])
 
+    def test_failed_marker_cannot_be_declared_external_by_itself(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_automation(
+                root,
+                "heartbeat PID until terminal marker and 100% completion; "
+                "append-resume with idempotency key, attempt counter, and retry budget; "
+                "an explicit failed marker is BLOCKED_EXTERNAL/terminal blocker",
+            )
+            issues = MODULE.validate_completion_automations(root)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("without causal classification", issues[0])
+
+    def test_failed_marker_with_internal_causal_repair_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_automation(
+                root,
+                "heartbeat PID until terminal marker and 100% completion; "
+                "append-resume with idempotency key, attempt counter, and retry budget; "
+                "a failed marker is not automatically external: classify the cause; "
+                "a local source or input defect is INTERNAL_FIXABLE and requires a "
+                "Git-backed causal repair, successor contract, and verified resume",
+            )
+            self.assertEqual(MODULE.validate_completion_automations(root), [])
+
     def test_explicit_user_observation_only_monitor_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

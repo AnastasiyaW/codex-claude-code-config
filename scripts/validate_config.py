@@ -269,6 +269,12 @@ OBSERVE_ONLY_MARKERS = (
     "пользователь явно попросил только наблюдение",
     "mode=observe-only",
 )
+FAILED_MARKER_EXTERNAL_RE = re.compile(
+    r"(?:explicit\s+|current\s+root\s+|root\s+)?"
+    r"(?:\.?failed\s+marker|failed\s+receipt|маркер\s+(?:\.?failed|ошибк\w*))"
+    r".{0,240}(?:blocked_external|terminal\s+blocker|терминальн\w*\s+блокер)",
+    re.DOTALL,
+)
 
 
 def validate_completion_automations(automations_root: Path) -> list[str]:
@@ -292,12 +298,18 @@ def validate_completion_automations(automations_root: Path) -> list[str]:
         observe_only = any(marker in content for marker in OBSERVE_ONLY_MARKERS)
         has_recovery_identity = any(marker in content for marker in RECOVERY_IDENTITY_MARKERS)
         has_recovery_budget = any(marker in content for marker in RECOVERY_BUDGET_MARKERS)
+        failed_marker_claims_external = bool(FAILED_MARKER_EXTERNAL_RE.search(content))
         if completion_owned and long_running and not observe_only and not (
             has_recovery_identity and has_recovery_budget
         ):
             issues.append(
                 f"{automation_file}: completion supervisor lacks durable "
                 "idempotency/recovery identity plus attempt limit"
+            )
+        if completion_owned and long_running and not observe_only and failed_marker_claims_external:
+            issues.append(
+                f"{automation_file}: failed marker/receipt is treated as "
+                "BLOCKED_EXTERNAL without causal classification"
             )
     return issues
 
