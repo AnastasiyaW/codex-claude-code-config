@@ -121,6 +121,16 @@ For work that is still in progress, every substantive update must make forward m
 
 The agent executes its next safe action itself. It must not turn an agent-owned operation into
 user homework, a request for permission, a choice of next task, or an offer to continue later.
+Data already supplied in messages, screenshots, attached files, local config, or an approved tool
+is available working input: the agent reads it and performs the reversible in-scope command itself.
+It must not tell the user to copy a value, paste it into PowerShell/terminal, set an environment
+variable, or launch a CLI merely because a later stage is interactive. Split ownership at the real
+boundary: execute the whole machine-owned prefix first; only then request the irreducibly human
+OTP, CAPTCHA, biometric/physical confirmation, or external approval, and request only that value
+or action. If the environment itself is inaccessible, prove that with an access inventory and name
+`Blocker`, `Needed authority`, and `Recheck`, then bind the exact work order to an evidence-backed
+durable `BLOCKED_EXTERNAL` state; labels in prose are not proof. An explicit tutorial/how-to request is different:
+there the commands are the requested result, not displaced agent work.
 At a genuine external or irreversible boundary, replace a false "next step" with `Blocker:` the
 observed boundary, `Needed authority:` the exact decision/credential, and `Recheck:` the named
 receipt or event that will unblock it. At a terminal result, report `Result:` and `Evidence:`.
@@ -176,7 +186,9 @@ P6 не разрешает заглушки, ложный PASS, ослаблен
 
 ## Механически (на хуках, активно)
 - `stop-phrase-guard.py` (Stop) — блок завершения при фразах-отговорках: deferral / ownership
-  dodging / «next session» / «что дальше?»-меню вместо доделывания (`deferral_via_next_step_question`).
+  dodging / «next session» / «что дальше?»-меню вместо доделывания (`deferral_via_next_step_question`),
+  а также при перекладывании доступной машинной команды на пользователя
+  (`agent_capable_user_homework`).
   Легитимный стоп — только реальный внешний блокер (назвать явно) или overflow (handoff), не «shall I?».
 - `session-handoff-reminder.py` / `session-handoff-check.py` (Stop / SessionStart) — handoff в конце,
   показ свежих при старте.

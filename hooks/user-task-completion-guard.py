@@ -75,8 +75,9 @@ REQUEST_WORDS = re.compile(
     r"записывай|записывать|загружай|загружать|выгрузи|выгружать|сохрани|сохранять|"
     r"дополни|дополнить|дополняй|дополнять|"
     r"обсчитай|посчитай|пересчитай|обработай|прогони|отрендери|собери|сравни|"
+    r"разверни|развернуть|развертывай|задеплой|деплой|"
     r"оцени|вычисли|calculate|compute|process|render|build|compare|evaluate|"
-    r"fix|check|verify|research|find|add|implement|run|update|clean|create|move|"
+    r"fix|check|verify|research|find|add|implement|run|deploy|update|clean|create|move|"
     r"connect|sync|close|finish|continue|install|test)\b",
     re.IGNORECASE | re.UNICODE,
 )

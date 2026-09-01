@@ -37,6 +37,25 @@ or a final status paragraph. A diagnosis can close only when the user explicitly
 asked for diagnosis without remediation, or the boundary is genuinely external
 or irreversible and the requested authority is named.
 
+## Machine-owned prefix versus human-only input
+
+Do not mistake a later interactive step for permission to hand the whole workflow
+to the user. Values supplied in the conversation, image, attachment, local config,
+or approved tool are working inputs. For an action request, the agent must read
+them, set the scoped configuration, and execute every reversible machine-owned
+step itself. Only after the runtime reaches the actual human boundary may it ask
+for the minimal OTP, CAPTCHA, biometric/physical confirmation, or external
+approval. The request must name the observed waiting prompt and the recheck that
+will consume the input.
+
+Instructions such as "copy this value", "paste it into PowerShell", or "run this
+command" are valid terminal output only when the user explicitly requested a
+tutorial/how-to answer, or when an access inventory proves the target environment
+is unavailable, the response records the blocker, needed authority, and named
+recheck, and the exact durable work order validates as evidence-backed
+`BLOCKED_EXTERNAL`. Prose labels alone are not a receipt. An interactive process
+is not by itself an external blocker.
+
 ## Retry ledger
 
 Retries must be mechanical, not conversational optimism. The record contains:

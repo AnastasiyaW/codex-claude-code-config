@@ -146,6 +146,8 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.write_state(status="COMPLETE", result="gap repaired", evidence=[evidence])
 
     def test_action_request_creates_a_durable_project_task(self) -> None:
+        self.assertEqual(guard.classify_prompt("разверни webhook"), ("request", True))
+        self.assertEqual(guard.classify_prompt("deploy the webhook"), ("request", True))
         payload = self.invoke_prompt()
         self.assertIn("[user-task]", payload["hookSpecificOutput"]["additionalContext"])
         request = self.request()
