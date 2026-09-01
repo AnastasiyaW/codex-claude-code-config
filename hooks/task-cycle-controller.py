@@ -323,11 +323,6 @@ def register_plan_drift(
         raise CycleError(f"plan file does not exist: {plan_path}")
     if not source_path.is_file():
         raise CycleError(f"source file does not exist: {source_path}")
-    if output_root.exists():
-        raise CycleError(
-            "plan drift is not auto-repairable after output-root exists; "
-            "record a separate migration assessment finding"
-        )
     plan_text = plan_path.read_text(encoding="utf-8", errors="replace")
     if expected not in plan_text.lower():
         raise CycleError("plan does not contain the expected SHA-256 digest")
@@ -336,21 +331,42 @@ def register_plan_drift(
         raise CycleError("source SHA-256 matches the plan; no plan drift exists")
     quiescence_receipt = evidence_path(task_dir, quiescence_evidence)
 
-    finding = {
-        "finding_id": finding_id,
-        "classification": INTERNAL,
-        "accepted_requirement": (
+    output_root_exists = output_root.exists()
+    if output_root_exists:
+        accepted_requirement = (
+            "Existing outputs must not be silently invalidated while the plan and reviewed source disagree."
+        )
+        boundary = (
+            f"plan/source digest drift: expected {expected}, observed {actual}; "
+            f"output root exists: {output_root}"
+        )
+        next_action = (
+            "Perform a read-only migration assessment for the existing outputs before choosing a successor plan."
+        )
+        proof_plan = {
+            "focused_test": (
+                "Inventory the existing output provenance and the exact old/new source diff; write a migration "
+                "assessment that names the safe successor action and save it under evidence/."
+            ),
+            "runtime_proof": (
+                "Run a no-mutation validation of the existing outputs and save a fresh process/output trace under evidence/."
+            ),
+            "independent_review": (
+                "A fresh reviewer verifies the provenance inventory, migration assessment, source diff, and no-mutation trace."
+            ),
+        }
+    else:
+        accepted_requirement = (
             "The execution plan and receipt must pin the reviewed source SHA-256 before launch."
-        ),
-        "boundary": (
+        )
+        boundary = (
             f"plan/source digest drift: expected {expected}, observed {actual}; "
             f"output root is absent: {output_root}"
-        ),
-        "next_action": (
+        )
+        next_action = (
             "Create a successor plan and receipt for the reviewed source, then run its no-launch preflight."
-        ),
-        "proof_requirements": REQUIRED_PROOF_ORDER,
-        "proof_plan": {
+        )
+        proof_plan = {
             "focused_test": (
                 "Review the exact old/new source diff, write a successor plan and receipt pinning "
                 f"{actual}, then run its focused validator; save the receipt under evidence/."
@@ -361,7 +377,16 @@ def register_plan_drift(
             "independent_review": (
                 "A fresh reviewer verifies the source diff, successor SHA, quiescence receipt, and no-launch trace."
             ),
-        },
+        }
+
+    finding = {
+        "finding_id": finding_id,
+        "classification": INTERNAL,
+        "accepted_requirement": accepted_requirement,
+        "boundary": boundary,
+        "next_action": next_action,
+        "proof_requirements": REQUIRED_PROOF_ORDER,
+        "proof_plan": proof_plan,
     }
     validated = validate_finding(finding)
     input_path = findings_path(task_dir)
@@ -388,7 +413,7 @@ def register_plan_drift(
             "expected_sha256": expected,
             "actual_sha256": actual,
             "output_root": str(output_root.resolve()),
-            "output_root_exists": False,
+            "output_root_exists": output_root_exists,
             "quiescence_evidence": quiescence_receipt,
         },
     )

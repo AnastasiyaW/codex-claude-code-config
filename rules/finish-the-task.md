@@ -93,10 +93,11 @@ reviewed source, the agent must not merely report it. When a fresh receipt
 proves that no process is running and the declared output root is absent, it
 must register `INTERNAL_FIXABLE` work with
 `task-cycle-controller.py register-plan-drift`, create the successor
-plan/receipt, run no-launch preflight, and obtain fresh review. Only the
-existence of outputs changes the route: then first create a separate internal
-migration-assessment finding; never silently rewrite an in-use plan and never
-mislabel the mismatch as `BLOCKED_EXTERNAL`.
+plan/receipt, run no-launch preflight, and obtain fresh review. The existence
+of outputs changes the route but must not end the cycle: register a separate
+read-only internal migration-assessment finding, then work it through the same
+proof order. Never silently rewrite an in-use plan or mislabel the mismatch as
+`BLOCKED_EXTERNAL`.
 
 ### Visible execution: action, not user homework
 

@@ -257,7 +257,7 @@ class TaskCycleControllerTests(unittest.TestCase):
         self.assertEqual(findings["findings"][0]["classification"], "INTERNAL_FIXABLE")
         self.assertIn(hashlib.sha256(source.read_bytes()).hexdigest(), findings["findings"][0]["boundary"])
 
-    def test_plan_drift_does_not_rewrite_or_queue_after_output_root_exists(self) -> None:
+    def test_plan_drift_with_output_root_queues_migration_assessment(self) -> None:
         expected = hashlib.sha256(b"old reviewed source\n").hexdigest()
         plan = self.task / "person-plan.md"
         plan.write_text(f"script sha256: {expected}\n", encoding="utf-8")
@@ -266,7 +266,7 @@ class TaskCycleControllerTests(unittest.TestCase):
         output_root = self.task / "person-output"
         output_root.mkdir()
 
-        code, _result, stderr = self.invoke(
+        code, result, stderr = self.invoke(
             "register-plan-drift",
             "--finding",
             "PLAN-DRIFT-001",
@@ -282,9 +282,13 @@ class TaskCycleControllerTests(unittest.TestCase):
             self.evidence("person-quiescent.json"),
         )
 
-        self.assertEqual(code, 2)
-        self.assertIn("migration assessment", stderr)
-        self.assertFalse((self.task / "findings.json").exists())
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "WORK")
+        findings = json.loads((self.task / "findings.json").read_text(encoding="utf-8"))
+        finding = findings["findings"][0]
+        self.assertEqual(finding["classification"], "INTERNAL_FIXABLE")
+        self.assertIn("migration assessment", finding["next_action"])
+        self.assertIn("output root exists", finding["boundary"])
 
 
 if __name__ == "__main__":

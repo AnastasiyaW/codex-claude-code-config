@@ -69,11 +69,11 @@ python hooks/task-cycle-controller.py register-plan-drift \
 ```
 
 The command proves that the plan actually pins the old digest, records the
-observed digest, requires the output root to be absent, appends an
-`INTERNAL_FIXABLE` finding, reconciles it, and returns `WORK` for the successor
-plan/preflight/review cycle. It deliberately refuses once the output root
-exists: an agent must then make a separate internal migration-assessment
-finding, not rewrite the plan or call it external by default.
+observed digest, appends an `INTERNAL_FIXABLE` finding, reconciles it, and
+returns `WORK`. With no output root it starts the successor
+plan/preflight/review cycle. With an existing root it starts a separate
+read-only migration assessment instead: it never rewrites the plan or calls
+the mismatch external by default.
 
 ### Legacy action migration
 
