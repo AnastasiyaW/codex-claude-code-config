@@ -1,6 +1,6 @@
 ---
 name: motion-framer
-description: Modern animation library for React and JavaScript. Create smooth, production-ready animations with motion components, variants, gestures (hover/tap/drag), layout animations, AnimatePresence exit animations, spring physics, and scroll-based effects. Use when building interactive UI components, micro-interactions, page transitions, or complex animation sequences.
+description: Use when implementing Motion or Framer Motion in React/JavaScript: interactive UI components, micro-interactions, gestures, layout or page transitions, and scroll-based animation. Do not use for static styling, backend/API work, or animation in another runtime unless Motion/Framer Motion is an explicit dependency.
 ---
 
 # Motion & Framer Motion

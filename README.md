@@ -54,11 +54,15 @@ python ~/claude-code-config/scripts/install_hooks.py --global
 mkdir -p ~/.claude/skills
 cp -r ~/claude-code-config/skills/ai-ml/ml-research-lab ~/.claude/skills/
 
-# Codex desktop and Claude Code: sync all public skills with backups for changed local copies
-python ~/claude-code-config/scripts/sync_skills_to_codex.py --apply --also-claude
+# Codex desktop, its shared ~/.agents root, and Claude Code: sync public skills
+# with independent backups for changed local copies. Target-only skills remain intact.
+python ~/claude-code-config/scripts/sync_skills_to_codex.py --apply --also-claude --also-agents
 ```
 
-`~/.claude/hooks/` stores the hook scripts; `~/.claude/settings.json` is where they are registered. The install script merges safe defaults into your existing settings.
+The canonical tracked checkout's `hooks/` directory stores the global hook scripts;
+`~/.claude/settings.json` and `~/.codex/hooks.json` register that exact source.
+The installer must not create a second active `~/.claude/hooks/` tree; it merges
+safe defaults into the existing manifests and keeps backups before changes.
 
 ### Option 3: Project-local (hooks/skills only in this project)
 
@@ -154,7 +158,7 @@ See [docs/rtk-integration.md](docs/rtk-integration.md) and
 | [test-muting-guard](hooks/test-muting-guard.py) | `PreToolUse` | Blocks adding `@skip`, `.only()`, `@Ignore` to existing tests |
 | [backup-retention-cleanup](hooks/backup-retention-cleanup.py) | `Stop` | Cleans up old backup branches (14-day retention) |
 | [file-cohesion-guard](hooks/file-cohesion-guard.py) | `PreToolUse` | Advisory: warns when a durable file is written to a scratch location (home root, Desktop, Downloads, /tmp) instead of the project structure |
-| [human-confirmation-guard](hooks/human-confirmation-guard.py) | `PreToolUse` | Requires explicit user confirmation before any deletion-intent command |
+| [human-confirmation-guard](hooks/human-confirmation-guard.py) | `PreToolUse` | Blocks destructive actions until a host-verifiable approval record can be checked |
 | [ask-question-guard](hooks/ask-question-guard.py) | `PreToolUse` | Blocks deferral/menu `AskUserQuestion` ("what next?", "which of these?") on reversible work — decide and proceed instead |
 | [over-engineering-advisor](hooks/over-engineering-advisor.py) | `PostToolUse` | Advisory nudge when an edit adds a large code block or a new dependency — "is this the minimal solution?" (never blocks) |
 | [module-shape-advisor](hooks/module-shape-advisor.py) | `PostToolUse` | The mirror of the row above: advisory nudge when the whole FILE has outgrown its shape — "where is the seam?" Fires on cumulative size, not on your edit, because that is how a file gets there (never blocks) |

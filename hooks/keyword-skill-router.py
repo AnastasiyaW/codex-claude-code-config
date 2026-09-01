@@ -41,6 +41,13 @@ LOCAL_ONLY_SKILLS = {
     "harness-audit",
 }
 
+# This hook is shared by Claude and Codex.  An unprofiled registration must be
+# conservative: it cannot truthfully require a skill that is only available in
+# one client.  Manifest owners pass the concrete client profile; old manifests
+# safely fall back to the common capability set until upgraded.
+VALID_PROFILES = frozenset({"claude", "codex", "shared"})
+DEFAULT_PROFILE = "shared"
+
 # ─── Keyword → Skill mapping ───
 # Each entry: pattern (regex, case-insensitive) → skill name + description
 # Patterns should be specific enough to avoid false positives on normal conversation
@@ -73,6 +80,7 @@ ROUTES = [
             "references/retouch-native.md",
         ],
         "required": True,
+        "profiles": ["claude"],
     },
     # Retouch security / ethical hacking / release hardening
     {
@@ -88,6 +96,7 @@ ROUTES = [
             "references/sources.md",
         ],
         "required": True,
+        "profiles": ["claude"],
     },
     # ComfyUI driven through MCP / comfy-cli (agent-orchestrated graphs)
     {
@@ -127,6 +136,7 @@ ROUTES = [
             "references/advanced-cpp.md",
         ],
         "required": True,
+        "profiles": ["claude"],
     },
     # Clean architecture guardrails — keep this as an advisory rule, not a
     # skill route. The old target (clean-architecture) is not installed in the
@@ -316,6 +326,7 @@ ROUTES = [
         ],
         "skill": "investigate",
         "description": "Systematic investigation with root cause analysis",
+        "profiles": ["claude"],
     },
     # Debugging
     {
@@ -325,6 +336,7 @@ ROUTES = [
         ],
         "skill": "investigate",
         "description": "Root cause investigation (Iron Law: no fixes without root cause)",
+        "profiles": ["claude"],
     },
     # Simplify / Clean
     {
@@ -412,6 +424,7 @@ ROUTES = [
         ],
         "skill": "claude-seo:seo",
         "description": "site review / SEO audit - technical SEO, schema, sitemaps, hreflang, Core Web Vitals, GEO/AEO. Use claude-seo:seo-page for one page, claude-seo:seo-audit for a full crawl",
+        "profiles": ["claude"],
     },
     # Init new project
     {
@@ -424,8 +437,26 @@ ROUTES = [
 ]
 
 
-def detect_keywords(user_message: str) -> list[dict]:
-    """Return matching skills for the user's message."""
+def normalize_profile(value: object) -> str:
+    """Return a known client profile; unknown values fail closed to shared."""
+    profile = str(value or DEFAULT_PROFILE).strip().lower()
+    return profile if profile in VALID_PROFILES else DEFAULT_PROFILE
+
+
+def route_available_in_profile(route: dict, profile: str) -> bool:
+    """Whether the receiving client is declared able to load this route."""
+    allowed = route.get("profiles", ("claude", "codex"))
+    if not isinstance(allowed, (list, tuple, set, frozenset)):
+        return False
+    allowed_profiles = {str(item).strip().lower() for item in allowed}
+    if profile == "shared":
+        return {"claude", "codex"}.issubset(allowed_profiles)
+    return profile in allowed_profiles
+
+
+def detect_keywords(user_message: str, *, profile: str = DEFAULT_PROFILE) -> list[dict]:
+    """Return matches without naming unavailable skills as usable routes."""
+    profile = normalize_profile(profile)
     matches = []
     by_skill = {}
     for route in ROUTES:
@@ -443,6 +474,12 @@ def detect_keywords(user_message: str) -> list[dict]:
                     "refs": route.get("refs", []),
                     "required": route.get("required", False),
                 }
+                if not route_available_in_profile(route, profile):
+                    matches.append({
+                        "unavailable_skill": item["skill"],
+                        "profile": profile,
+                    })
+                    break
                 existing = by_skill.get(item["skill"])
                 if existing:
                     existing["required"] = existing.get("required", False) or item.get("required", False)
@@ -458,7 +495,13 @@ def detect_keywords(user_message: str) -> list[dict]:
     return matches
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    profile = DEFAULT_PROFILE
+    if argv:
+        if len(argv) == 2 and argv[0] == "--profile":
+            profile = normalize_profile(argv[1])
+        else:
+            return 2
     # Read the hook event from stdin
     try:
         raw_input = sys.stdin.read().lstrip("\ufeff")
@@ -481,7 +524,12 @@ def main() -> int:
     if not message or len(message) < 5:
         return 0
 
-    matches = detect_keywords(message)
+    # Fixtures and future launchers may use the event form.  Installed
+    # manifests should pass --profile so the client capability is fixed outside
+    # user-controlled prompt text.
+    if not argv:
+        profile = normalize_profile(event.get("skill_router_profile", profile))
+    matches = detect_keywords(message, profile=profile)
     if not matches:
         return 0
 
@@ -490,6 +538,13 @@ def main() -> int:
     for m in matches:
         if "suggest" in m:
             suggestions.append(f"  {m['suggest']}")
+            continue
+        if "unavailable_skill" in m:
+            suggestions.append(
+                "  BLOCKED_SKILL_UNAVAILABLE: "
+                f"{m['unavailable_skill']} is not available in the {m['profile']} profile; "
+                "do not claim that this skill was applied."
+            )
             continue
         if m.get("required"):
             suggestions.append(f"  REQUIRED: Use skill {m['skill']} - {m['description']}")
@@ -507,4 +562,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

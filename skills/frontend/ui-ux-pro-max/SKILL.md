@@ -1,6 +1,6 @@
 ---
 name: ui-ux-pro-max
-description: "UI/UX design intelligence for web, mobile, and desktop. This skill should be used when designing, building, reviewing, or fixing interfaces, including pages, components, design systems, accessibility, interaction, responsive layout, typography, color, charts, and stack-specific UI implementation. Searchable local data: 79 searchable styles (50 active), 192 product palettes and reasoning profiles, 74 font pairings, 119 UX guidelines, 105 icons, 17 GSAP presets, 25 chart types, and 22 stacks."
+description: "Use when designing, building, reviewing, or fixing a web, mobile, or desktop interface: pages, components, design systems, accessibility, interaction, responsive layout, typography, color, charts, or stack-specific UI implementation. Do not use for pure backend/API/database/DevOps work or non-visual scripts unless the task changes how the product looks, feels, moves, or is interacted with. Searchable local data: 79 styles, 192 palettes, 74 font pairings, 119 UX guidelines, 105 icons, 17 GSAP presets, 25 chart types, and 22 stacks."
 ---
 
 # UI/UX Pro Max - Design Intelligence

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import hashlib
 import importlib.util
 import io
@@ -64,11 +65,25 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         path.write_text("real receipt\n", encoding="utf-8")
         return name
 
-    def reconciliation_observation(self) -> tuple[Path, Path, dict]:
+    def reconciliation_observation(self, classification: str = "INTERNAL_FIXABLE") -> tuple[Path, Path, dict]:
         task = self.root / ".agent" / "tasks" / "release-rollout"
         evidence = task / "evidence"
         evidence.mkdir(parents=True, exist_ok=True)
         (evidence / "bootstrap-published.json").write_text("published\n", encoding="utf-8")
+        unresolved = {
+            "item_id": "signature",
+            "state": classification,
+            "boundary": "signature missing",
+            "next_action": "sign it",
+        }
+        if classification == "EXTERNAL_REQUIRED":
+            next_check = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).replace(
+                microsecond=0
+            ).isoformat().replace("+00:00", "Z")
+            unresolved.update({
+                "blocker": "signer is unavailable",
+                "next_check_at": next_check,
+            })
         observation = {
             "schema": guard.RECONCILIATION_OBSERVATION_SCHEMA,
             "scope_id": "release-rollout",
@@ -76,12 +91,59 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
             "observed_at": "2026-09-01T10:00:00Z",
             "items": [
                 {"item_id": "bootstrap", "state": "SATISFIED", "satisfaction_receipt": "evidence/bootstrap-published.json"},
-                {"item_id": "signature", "state": "INTERNAL_FIXABLE", "boundary": "signature missing", "next_action": "sign it"},
+                unresolved,
             ],
         }
         path = evidence / "reconciliation-observation.json"
         path.write_text(json.dumps(observation), encoding="utf-8")
         return task, path, observation
+
+    def register_observation(self, task: Path, observation_path: Path, observation: dict) -> dict:
+        item = next(raw for raw in observation["items"] if raw["state"] != "SATISFIED")
+        finding_id = f"RECONCILE-release-rollout-20260901-{item['item_id']}"
+        finding = {
+            "finding_id": finding_id,
+            "classification": item["state"],
+            "accepted_requirement": "the release rollout must reach its desired state",
+            "boundary": item["boundary"],
+            "next_action": item["next_action"],
+        }
+        if item["state"] == "INTERNAL_FIXABLE":
+            finding.update({
+                "proof_requirements": list(guard.REQUIRED_PROOF_ORDER),
+                "proof_plan": {
+                    "focused_test": "run the focused signing test",
+                    "runtime_proof": "verify the signed artifact",
+                    "independent_review": "fresh reviewer checks the receipt",
+                },
+            })
+        else:
+            finding.update({
+                "blocker": item["blocker"],
+                "last_checked_at": observation["observed_at"],
+                "next_check_at": item["next_check_at"],
+                "last_check_evidence": "evidence/external-check.txt",
+                "proof_requirements": [],
+                "proof_plan": {},
+            })
+        (task / "findings.json").write_text(json.dumps({
+            "schema": "agent-task-findings/v1",
+            "findings": [finding],
+        }), encoding="utf-8")
+        registration = {
+            "schema": guard.RECONCILIATION_REGISTRATION_SCHEMA,
+            "batch_id": "release-rollout-20260901",
+            "observation_evidence": observation_path.relative_to(task).as_posix(),
+            "observation_sha256": hashlib.sha256(observation_path.read_bytes()).hexdigest(),
+            "registered_findings": [finding_id],
+        }
+        registration_path = task / "evidence" / "reconciliation-release-rollout-20260901-registration.json"
+        registration_path.write_text(json.dumps(registration), encoding="utf-8")
+        return finding
+
+    def complete_active_request(self) -> None:
+        evidence = self.receipt()
+        self.write_state(status="COMPLETE", result="gap repaired", evidence=[evidence])
 
     def test_action_request_creates_a_durable_project_task(self) -> None:
         payload = self.invoke_prompt()
@@ -167,31 +229,146 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
                          items=[{"item_id": "250", "status": "PASS", "evidence": [first]}])
         self.assertIsNone(self.invoke_stop())
 
-    def test_stop_requires_a_measured_gap_to_be_registered_as_work(self) -> None:
+    def test_registration_without_terminal_cycle_still_blocks(self) -> None:
         self.invoke_prompt()
-        evidence = self.receipt()
-        self.write_state(status="COMPLETE", result="gap captured", evidence=[evidence])
-        task, observation_path, _ = self.reconciliation_observation()
+        self.complete_active_request()
+        task, observation_path, observation = self.reconciliation_observation()
 
         blocked = self.invoke_stop()
         self.assertEqual(blocked and blocked.get("decision"), "block")
         self.assertIn("has no controller registration receipt", blocked["reason"])
 
-        registration = {
-            "schema": guard.RECONCILIATION_REGISTRATION_SCHEMA,
-            "batch_id": "release-rollout-20260901",
-            "observation_evidence": observation_path.relative_to(task).as_posix(),
-            "observation_sha256": hashlib.sha256(observation_path.read_bytes()).hexdigest(),
-            "registered_findings": ["RECONCILE-release-rollout-20260901-signature"],
+        finding = self.register_observation(task, observation_path, observation)
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("missing cycle.json", blocked["reason"])
+
+        cycle_path = task / "cycle.json"
+        cycle = {
+            "schema": guard.CYCLE_SCHEMA,
+            "task_id": "release-rollout",
+            "work_orders": [{
+                **finding,
+                "status": "READY",
+                "attempts": 0,
+                "proofs": {},
+            }],
         }
-        (task / "findings.json").write_text(json.dumps({
-            "schema": "agent-task-findings/v1",
-            "findings": [{"finding_id": "RECONCILE-release-rollout-20260901-signature"}],
+        cycle_path.write_text(json.dumps(cycle), encoding="utf-8")
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("not ACCEPTED", blocked["reason"])
+
+        cycle["work_orders"][0]["next_action"] = "stale replacement action"
+        cycle_path.write_text(json.dumps(cycle), encoding="utf-8")
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("work order is stale", blocked["reason"])
+
+    def test_accepted_internal_reconciliation_allows_stop(self) -> None:
+        self.invoke_prompt()
+        self.complete_active_request()
+        task, observation_path, observation = self.reconciliation_observation()
+        finding = self.register_observation(task, observation_path, observation)
+        proof_records = {}
+        for proof in guard.REQUIRED_PROOF_ORDER:
+            proof_path = task / "evidence" / f"{proof}.txt"
+            proof_path.write_text(f"{proof} passed\n", encoding="utf-8")
+            proof_records[proof] = {
+                "result": "PASS",
+                "evidence": proof_path.relative_to(task).as_posix(),
+            }
+        proof_records["independent_review"].update({
+            "reviewer": "fresh-reviewer",
+            "fresh_context": True,
+        })
+        (task / "cycle.json").write_text(json.dumps({
+            "schema": guard.CYCLE_SCHEMA,
+            "task_id": "release-rollout",
+            "work_orders": [{
+                **finding,
+                "status": "ACCEPTED",
+                "attempts": 0,
+                "proofs": proof_records,
+            }],
         }), encoding="utf-8")
-        registration_path = task / "evidence" / "reconciliation-release-rollout-20260901-registration.json"
-        registration_path.write_text(json.dumps(registration), encoding="utf-8")
 
         self.assertIsNone(self.invoke_stop())
+
+    def test_hand_written_nonlegacy_cycle_without_typed_receipts_blocks(self) -> None:
+        self.invoke_prompt()
+        self.complete_active_request()
+        task, observation_path, observation = self.reconciliation_observation()
+        finding = self.register_observation(task, observation_path, observation)
+        proofs = {}
+        for proof in guard.REQUIRED_PROOF_ORDER:
+            proof_path = task / "evidence" / f"forged-{proof}.txt"
+            proof_path.write_text("model-authored PASS claim\n", encoding="utf-8")
+            proofs[proof] = {
+                "result": "PASS",
+                "evidence": proof_path.relative_to(task).as_posix(),
+            }
+        proofs["independent_review"].update({
+            "reviewer": "invented-reviewer",
+            "fresh_context": True,
+        })
+        (task / "cycle.json").write_text(json.dumps({
+            "schema": guard.CYCLE_SCHEMA,
+            "task_id": "release-rollout",
+            "work_orders": [{
+                **finding,
+                "status": "ACCEPTED",
+                "attempts": 0,
+                "proofs": proofs,
+                "created_at": "2026-09-01T10:00:00Z",
+                "budget": {
+                    "max_attempts": 3,
+                    "max_tool_calls": 12,
+                    "max_wall_time_seconds": 21600,
+                    "started_at": "2026-09-01T10:00:00Z",
+                    "tool_calls": 0,
+                    "exhausted_reason": None,
+                },
+                "attempt_history": [],
+            }],
+        }), encoding="utf-8")
+
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("canonical controller validation", blocked["reason"])
+        self.assertIn("receipt", blocked["reason"])
+
+    def test_current_external_reconciliation_allows_stop(self) -> None:
+        self.invoke_prompt()
+        self.complete_active_request()
+        task, observation_path, observation = self.reconciliation_observation("EXTERNAL_REQUIRED")
+        finding = self.register_observation(task, observation_path, observation)
+        external_receipt = task / "evidence" / "external-check.txt"
+        external_receipt.write_text("signer unavailable at the checked endpoint\n", encoding="utf-8")
+        (task / "cycle.json").write_text(json.dumps({
+            "schema": guard.CYCLE_SCHEMA,
+            "task_id": "release-rollout",
+            "work_orders": [{
+                **finding,
+                "status": "BLOCKED_EXTERNAL",
+                "attempts": 0,
+                "proofs": {},
+            }],
+        }), encoding="utf-8")
+
+        self.assertIsNone(self.invoke_stop())
+
+        cycle = json.loads((task / "cycle.json").read_text(encoding="utf-8"))
+        cycle["work_orders"][0]["last_checked_at"] = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        cycle["work_orders"][0]["next_check_at"] = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        (task / "cycle.json").write_text(json.dumps(cycle), encoding="utf-8")
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("run the named recheck", blocked["reason"])
 
     def test_other_session_is_not_wedged_and_session_start_surfaces_open_work(self) -> None:
         self.invoke_prompt()

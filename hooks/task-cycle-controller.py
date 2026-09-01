@@ -41,10 +41,14 @@ INTERNAL = "INTERNAL_FIXABLE"
 EXTERNAL = "EXTERNAL_REQUIRED"
 VALID_CLASSIFICATIONS = {INTERNAL, EXTERNAL}
 ACTIVE = {"READY", "IN_PROGRESS", "TESTING", "RUNTIME_PROOF", "REVIEWING"}
-TERMINAL = {"ACCEPTED", "ESCALATED"}
+TERMINAL = {"ACCEPTED", "ESCALATED", "BUDGET_EXHAUSTED"}
 MAX_FAILED_PROOFS = 3
+DEFAULT_MAX_TOOL_CALLS = 9
+DEFAULT_MAX_WALL_TIME_SECONDS = 30 * 24 * 60 * 60
 REQUIRED_PROOF_ORDER = ["focused_test", "runtime_proof", "independent_review"]
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ATTEMPT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+PROOF_RECEIPT_SCHEMA = "agent-task-proof-receipt/v1"
 RECONCILIATION_OBSERVATION_SCHEMA = "agent-reconciliation-observation/v1"
 RECONCILIATION_COMPONENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RECONCILIATION_SATISFIED = "SATISFIED"
@@ -129,6 +133,43 @@ def string_list(value: Any, field: str) -> list[str]:
     if len(set(result)) != len(result):
         raise CycleError(f"{field} must not repeat proof names")
     return result
+
+
+def string_sequence(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise CycleError(f"{field} must be a non-empty list")
+    return [nonempty_string(item, f"{field}[]") for item in value]
+
+
+def default_budget(started_at: str) -> dict[str, Any]:
+    return {
+        "max_attempts": MAX_FAILED_PROOFS,
+        "max_tool_calls": DEFAULT_MAX_TOOL_CALLS,
+        "max_wall_time_seconds": DEFAULT_MAX_WALL_TIME_SECONDS,
+        "started_at": started_at,
+        "tool_calls": 0,
+    }
+
+
+def validate_budget(value: Any, started_at: str, finding_id: str) -> dict[str, Any]:
+    budget = default_budget(started_at) if value is None else dict(value) if isinstance(value, dict) else None
+    if budget is None:
+        raise CycleError(f"{finding_id}.budget must be an object")
+    for field in ("max_attempts", "max_tool_calls", "max_wall_time_seconds"):
+        number = budget.get(field)
+        if not isinstance(number, int) or number <= 0:
+            raise CycleError(f"{finding_id}.budget.{field} must be a positive integer")
+    tool_calls = budget.get("tool_calls", 0)
+    if not isinstance(tool_calls, int) or tool_calls < 0:
+        raise CycleError(f"{finding_id}.budget.tool_calls must be a non-negative integer")
+    budget["tool_calls"] = tool_calls
+    budget["started_at"] = parse_utc(
+        budget.get("started_at", started_at), f"{finding_id}.budget.started_at"
+    ).isoformat().replace("+00:00", "Z")
+    exhausted_reason = budget.get("exhausted_reason")
+    if exhausted_reason is not None:
+        budget["exhausted_reason"] = nonempty_string(exhausted_reason, f"{finding_id}.budget.exhausted_reason")
+    return budget
 
 
 def validate_finding(raw: Any) -> dict[str, Any]:
@@ -228,12 +269,63 @@ def validate_order(order: Any) -> dict[str, Any]:
         raise CycleError(f"{required['finding_id']}: EXTERNAL_REQUIRED must stay BLOCKED_EXTERNAL")
     if required["classification"] == INTERNAL and status == "BLOCKED_EXTERNAL":
         raise CycleError(f"{required['finding_id']}: INTERNAL_FIXABLE cannot be BLOCKED_EXTERNAL")
+    legacy_terminal_proofs = order.get("legacy_terminal_proofs", False)
+    if not isinstance(legacy_terminal_proofs, bool):
+        raise CycleError(f"{required['finding_id']}.legacy_terminal_proofs must be boolean")
+    legacy_untyped_shape = "budget" not in order and "attempt_history" not in order
+    if legacy_untyped_shape and status == "ACCEPTED":
+        # Compatibility is deliberately terminal-only. Orders accepted by the
+        # pre-receipt controller remain readable, but this flag never permits a
+        # new proof submission or an active order to advance without v1 receipts.
+        legacy_terminal_proofs = True
+    if legacy_terminal_proofs and status != "ACCEPTED":
+        raise CycleError(f"{required['finding_id']}: legacy proof compatibility is ACCEPTED-only")
     proofs = order.get("proofs", {})
     if not isinstance(proofs, dict):
         raise CycleError(f"{required['finding_id']}.proofs must be an object")
     attempts = order.get("attempts", 0)
     if not isinstance(attempts, int) or attempts < 0:
         raise CycleError(f"{required['finding_id']}.attempts must be a non-negative integer")
+    created_at = parse_utc(
+        order.get("created_at", now_utc()), f"{required['finding_id']}.created_at"
+    ).isoformat().replace("+00:00", "Z")
+    budget = validate_budget(order.get("budget"), created_at, required["finding_id"])
+    attempt_history = order.get("attempt_history", [])
+    if not isinstance(attempt_history, list):
+        raise CycleError(f"{required['finding_id']}.attempt_history must be a list")
+    seen_attempts: set[str] = set()
+    seen_receipts: set[str] = set()
+    failed_attempts = 0
+    for item in attempt_history:
+        if not isinstance(item, dict):
+            raise CycleError(f"{required['finding_id']}.attempt_history entries must be objects")
+        attempt_id = nonempty_string(item.get("attempt_id"), f"{required['finding_id']}.attempt_history.attempt_id")
+        if not ATTEMPT_ID_RE.fullmatch(attempt_id):
+            raise CycleError(f"{required['finding_id']}: invalid attempt_id {attempt_id!r}")
+        receipt_sha256 = nonempty_string(
+            item.get("receipt_sha256"), f"{required['finding_id']}.attempt_history.receipt_sha256"
+        )
+        if not SHA256_RE.fullmatch(receipt_sha256):
+            raise CycleError(f"{required['finding_id']}: invalid proof receipt SHA-256")
+        if attempt_id in seen_attempts:
+            raise CycleError(f"{required['finding_id']}: repeated attempt_id {attempt_id!r}")
+        if receipt_sha256 in seen_receipts:
+            raise CycleError(f"{required['finding_id']}: repeated proof receipt digest {receipt_sha256}")
+        seen_attempts.add(attempt_id)
+        seen_receipts.add(receipt_sha256)
+        result = item.get("result")
+        if result not in {"PASS", "FAIL"}:
+            raise CycleError(f"{required['finding_id']}.attempt_history.result must be PASS or FAIL")
+        if result == "FAIL":
+            failed_attempts += 1
+    if legacy_terminal_proofs:
+        if attempt_history or budget["tool_calls"]:
+            raise CycleError(f"{required['finding_id']}: legacy terminal proofs cannot mix with typed receipts")
+    else:
+        if attempts != failed_attempts:
+            raise CycleError(f"{required['finding_id']}.attempts does not match typed FAIL receipts")
+        if budget["tool_calls"] != len(attempt_history):
+            raise CycleError(f"{required['finding_id']}.budget.tool_calls does not match typed proof receipts")
     if status == "ACCEPTED":
         for proof in required["proof_requirements"]:
             record = proofs.get(proof)
@@ -247,7 +339,44 @@ def validate_order(order: Any) -> dict[str, Any]:
     order["status"] = status
     order["proofs"] = proofs
     order["attempts"] = attempts
+    order["created_at"] = created_at
+    order["budget"] = budget
+    order["attempt_history"] = attempt_history
+    if legacy_terminal_proofs:
+        order["legacy_terminal_proofs"] = True
+    else:
+        order.pop("legacy_terminal_proofs", None)
+    if status == "BUDGET_EXHAUSTED" and not budget.get("exhausted_reason"):
+        raise CycleError(f"{required['finding_id']}: BUDGET_EXHAUSTED needs budget.exhausted_reason")
     return order
+
+
+def budget_exhaustion_reason(order: dict[str, Any], now: dt.datetime | None = None) -> str | None:
+    if order["classification"] != INTERNAL or order["status"] not in ACTIVE:
+        return None
+    budget = order["budget"]
+    if order["attempts"] >= budget["max_attempts"]:
+        return "max_attempts"
+    if budget["tool_calls"] >= budget["max_tool_calls"]:
+        return "max_tool_calls"
+    current = now or dt.datetime.now(dt.timezone.utc)
+    started = parse_utc(budget["started_at"], f"{order['finding_id']}.budget.started_at")
+    if (current - started).total_seconds() >= budget["max_wall_time_seconds"]:
+        return "max_wall_time_seconds"
+    return None
+
+
+def refresh_budget_statuses(cycle: dict[str, Any], now: dt.datetime | None = None) -> list[str]:
+    exhausted: list[str] = []
+    for index, raw in enumerate(cycle["work_orders"]):
+        order = validate_order(raw)
+        reason = budget_exhaustion_reason(order, now)
+        if reason is not None:
+            order["status"] = "BUDGET_EXHAUSTED"
+            order["budget"]["exhausted_reason"] = reason
+            exhausted.append(order["finding_id"])
+        cycle["work_orders"][index] = order
+    return exhausted
 
 
 def reconcile(task_dir: Path) -> dict[str, Any]:
@@ -277,11 +406,14 @@ def reconcile(task_dir: Path) -> dict[str, Any]:
         old = existing.get(finding["finding_id"])
         if old is None:
             order = dict(finding)
+            created_at = now_utc()
             order.update({
                 "status": "READY" if finding["classification"] == INTERNAL else "BLOCKED_EXTERNAL",
                 "attempts": 0,
+                "attempt_history": [],
                 "proofs": {},
-                "created_at": now_utc(),
+                "created_at": created_at,
+                "budget": default_budget(created_at),
             })
             cycle["work_orders"].append(order)
             created.append(finding["finding_id"])
@@ -295,6 +427,7 @@ def reconcile(task_dir: Path) -> dict[str, Any]:
         # timestamp in the input file; ``record-external-check`` owns that
         # transition and requires a new receipt on disk.
 
+    refresh_budget_statuses(cycle)
     cycle["updated_at"] = now_utc()
     validate_evidence_files(task_dir, cycle)
     write_json_atomic(cycle_path(task_dir), cycle)
@@ -603,6 +736,115 @@ def evidence_path(task_dir: Path, supplied: str) -> str:
     return relative.as_posix()
 
 
+def proof_receipt(
+    task_dir: Path,
+    supplied: str,
+    finding_id: str,
+    proof: str,
+    result: str,
+) -> tuple[dict[str, Any], str, str]:
+    """Load and verify a typed receipt plus the raw evidence it binds."""
+    receipt_relative = evidence_path(task_dir, supplied)
+    receipt_path = task_dir / receipt_relative
+    receipt = load_json(receipt_path, "proof receipt")
+    if receipt.get("schema") != PROOF_RECEIPT_SCHEMA:
+        raise CycleError(f"proof receipt.schema must equal {PROOF_RECEIPT_SCHEMA!r}")
+    if receipt.get("finding_id") != finding_id:
+        raise CycleError("proof receipt.finding_id does not match --finding")
+    if receipt.get("proof") != proof:
+        raise CycleError("proof receipt.proof does not match --proof")
+    if receipt.get("result") != result:
+        raise CycleError("proof receipt.result does not match --result")
+    attempt_id = nonempty_string(receipt.get("attempt_id"), "proof receipt.attempt_id")
+    if not ATTEMPT_ID_RE.fullmatch(attempt_id):
+        raise CycleError("proof receipt.attempt_id is not a durable identifier")
+    recorded_at = parse_utc(receipt.get("recorded_at"), "proof receipt.recorded_at")
+    evidence_relative = evidence_path(
+        task_dir, nonempty_string(receipt.get("evidence_path"), "proof receipt.evidence_path")
+    )
+    if evidence_relative == receipt_relative:
+        raise CycleError("proof receipt must bind a separate raw evidence artifact")
+    claimed_evidence_sha = nonempty_string(receipt.get("evidence_sha256"), "proof receipt.evidence_sha256")
+    if not SHA256_RE.fullmatch(claimed_evidence_sha):
+        raise CycleError("proof receipt.evidence_sha256 must be a lowercase SHA-256 digest")
+    actual_evidence_sha = sha256_file(task_dir / evidence_relative)
+    if actual_evidence_sha != claimed_evidence_sha:
+        raise CycleError("proof receipt evidence SHA-256 is stale")
+
+    producer = receipt.get("producer")
+    if not isinstance(producer, dict):
+        raise CycleError("proof receipt.producer must be an object")
+    producer_type = nonempty_string(producer.get("type"), "proof receipt.producer.type")
+    producer_identity = nonempty_string(producer.get("identity"), "proof receipt.producer.identity")
+    normalized_producer: dict[str, Any] = {"type": producer_type, "identity": producer_identity}
+    normalized = dict(receipt)
+    normalized["attempt_id"] = attempt_id
+    normalized["recorded_at"] = recorded_at.isoformat().replace("+00:00", "Z")
+    normalized["evidence_path"] = evidence_relative
+    normalized["evidence_sha256"] = actual_evidence_sha
+    if proof == "independent_review":
+        if producer_type != "review":
+            raise CycleError("independent review receipt requires producer.type='review'")
+        reviewer = nonempty_string(receipt.get("reviewer"), "proof receipt.reviewer")
+        if reviewer != producer_identity:
+            raise CycleError("proof receipt reviewer must equal producer.identity")
+        if receipt.get("fresh_context") is not True:
+            raise CycleError("independent review receipt requires fresh_context=true")
+        verdict = nonempty_string(receipt.get("verdict"), "proof receipt.verdict")
+        if verdict != result:
+            raise CycleError("independent review receipt verdict must equal result")
+        normalized["reviewer"] = reviewer
+        normalized["fresh_context"] = True
+        normalized["verdict"] = verdict
+    else:
+        if producer_type != "command":
+            raise CycleError(f"{proof} receipt requires producer.type='command'")
+        normalized_producer["command"] = string_sequence(
+            producer.get("command"), "proof receipt.producer.command"
+        )
+    normalized["producer"] = normalized_producer
+    return normalized, receipt_relative, sha256_file(receipt_path)
+
+
+def proof_record_from_receipt(
+    receipt: dict[str, Any], receipt_relative: str, receipt_sha256: str,
+) -> dict[str, Any]:
+    record = {
+        "result": receipt["result"],
+        "attempt_id": receipt["attempt_id"],
+        "recorded_at": receipt["recorded_at"],
+        "receipt": receipt_relative,
+        "receipt_sha256": receipt_sha256,
+        "evidence": receipt["evidence_path"],
+        "evidence_sha256": receipt["evidence_sha256"],
+        "producer": receipt["producer"],
+    }
+    if receipt["proof"] == "independent_review":
+        record.update({
+            "reviewer": receipt["reviewer"],
+            "fresh_context": True,
+            "verdict": receipt["verdict"],
+        })
+    return record
+
+
+def validate_stored_proof(
+    task_dir: Path, finding_id: str, proof: str, record: dict[str, Any],
+) -> None:
+    result = nonempty_string(record.get("result"), f"{finding_id}.{proof}.result")
+    receipt, receipt_relative, receipt_sha256 = proof_receipt(
+        task_dir,
+        nonempty_string(record.get("receipt"), f"{finding_id}.{proof}.receipt"),
+        finding_id,
+        proof,
+        result,
+    )
+    expected = proof_record_from_receipt(receipt, receipt_relative, receipt_sha256)
+    for key, value in expected.items():
+        if record.get(key) != value:
+            raise CycleError(f"{finding_id}.{proof} stored proof is stale at {key}")
+
+
 def validate_evidence_files(task_dir: Path, cycle: dict[str, Any]) -> None:
     """Do not let a hand-edited queue point to evidence that is not on disk."""
     for raw in cycle["work_orders"]:
@@ -610,8 +852,20 @@ def validate_evidence_files(task_dir: Path, cycle: dict[str, Any]) -> None:
         if order["classification"] == EXTERNAL:
             evidence_path(task_dir, order.get("last_check_evidence"))
         for proof, record in order["proofs"].items():
-            if isinstance(record, dict) and record.get("result") == "PASS":
-                evidence_path(task_dir, record.get("evidence"))
+            if not isinstance(record, dict):
+                raise CycleError(f"{order['finding_id']}.{proof} proof record must be an object")
+            if order.get("legacy_terminal_proofs"):
+                evidence_path(
+                    task_dir,
+                    nonempty_string(record.get("evidence"), f"{order['finding_id']}.{proof}.evidence"),
+                )
+            else:
+                validate_stored_proof(task_dir, order["finding_id"], proof, record)
+        for index, record in enumerate(order["attempt_history"]):
+            if not isinstance(record, dict):
+                raise CycleError(f"{order['finding_id']}.attempt_history[{index}] must be an object")
+            proof = nonempty_string(record.get("proof"), f"{order['finding_id']}.attempt_history[{index}].proof")
+            validate_stored_proof(task_dir, order["finding_id"], proof, record)
         migration = order.get("legacy_action_migration")
         if migration is not None:
             if not isinstance(migration, dict):
@@ -705,10 +959,16 @@ def record_proof(
         raise CycleError("result must be PASS or FAIL")
     cycle = load_cycle(task_dir)
     validate_evidence_files(task_dir, cycle)
+    exhausted = refresh_budget_statuses(cycle)
+    if exhausted:
+        cycle["updated_at"] = now_utc()
+        write_json_atomic(cycle_path(task_dir), cycle)
     order = find_order(cycle, finding_id)
     if order["classification"] != INTERNAL:
         raise CycleError(f"{finding_id}: external blockers do not accept proof records")
     if order["status"] in TERMINAL:
+        if order["status"] == "BUDGET_EXHAUSTED":
+            return select_next(cycle)
         raise CycleError(f"{finding_id}: terminal work order cannot accept new proof")
     if proof not in order["proof_requirements"]:
         raise CycleError(f"{finding_id}: {proof!r} is not a required proof")
@@ -716,13 +976,29 @@ def record_proof(
     if not pending or proof != pending[0]:
         expected = pending[0] if pending else "no proof"
         raise CycleError(f"{finding_id}: proof order violation; expected {expected!r}, got {proof!r}")
-    relative_evidence = evidence_path(task_dir, evidence)
-    proof_record: dict[str, Any] = {"result": result, "evidence": relative_evidence, "recorded_at": now_utc()}
+    receipt, receipt_relative, receipt_sha256 = proof_receipt(
+        task_dir, evidence, finding_id, proof, result
+    )
+    proof_record = proof_record_from_receipt(receipt, receipt_relative, receipt_sha256)
+    used_attempt_ids = {
+        item.get("attempt_id") for item in order["attempt_history"] if isinstance(item, dict)
+    }
+    used_receipt_digests = {
+        item.get("receipt_sha256") for item in order["attempt_history"] if isinstance(item, dict)
+    }
+    if proof_record["attempt_id"] in used_attempt_ids:
+        raise CycleError(f"{finding_id}: attempt_id {proof_record['attempt_id']!r} was already recorded")
+    if proof_record["receipt_sha256"] in used_receipt_digests:
+        raise CycleError(f"{finding_id}: identical proof receipt was already recorded")
     if proof == "independent_review":
-        proof_record["reviewer"] = nonempty_string(reviewer, "reviewer")
-        if not fresh_context:
-            raise CycleError("independent_review requires --fresh-context")
-        proof_record["fresh_context"] = True
+        if reviewer is not None and nonempty_string(reviewer, "reviewer") != proof_record["reviewer"]:
+            raise CycleError("--reviewer does not match the typed review receipt")
+        if fresh_context and proof_record["fresh_context"] is not True:
+            raise CycleError("--fresh-context does not match the typed review receipt")
+    history_record = dict(proof_record)
+    history_record["proof"] = proof
+    order["attempt_history"].append(history_record)
+    order["budget"]["tool_calls"] += 1
     if result == "FAIL":
         failure_action = nonempty_string(next_action, "--next-action after a failed proof")
         failure_boundary = nonempty_string(causal_boundary, "--causal-boundary after a failed proof")
@@ -733,15 +1009,23 @@ def record_proof(
         order["proofs"] = {}
         order["last_failure"] = {
             "proof": proof,
-            "evidence": relative_evidence,
+            "attempt_id": proof_record["attempt_id"],
+            "receipt": proof_record["receipt"],
+            "receipt_sha256": proof_record["receipt_sha256"],
+            "evidence": proof_record["evidence"],
+            "evidence_sha256": proof_record["evidence_sha256"],
             "causal_boundary": failure_boundary,
             "next_action": failure_action,
-            "recorded_at": now_utc(),
+            "recorded_at": proof_record["recorded_at"],
         }
-        order["status"] = "ESCALATED" if order["attempts"] >= MAX_FAILED_PROOFS else "READY"
+        order["status"] = "READY"
     else:
         order["proofs"][proof] = proof_record
         order["status"] = next_status(order)
+    reason = budget_exhaustion_reason(order)
+    if reason is not None:
+        order["status"] = "BUDGET_EXHAUSTED"
+        order["budget"]["exhausted_reason"] = reason
     cycle["updated_at"] = now_utc()
     validate_evidence_files(task_dir, cycle)
     write_json_atomic(cycle_path(task_dir), cycle)
@@ -785,6 +1069,17 @@ def record_external_check(
 def select_next(cycle: dict[str, Any], now: dt.datetime | None = None) -> dict[str, Any]:
     current = now or dt.datetime.now(dt.timezone.utc)
     orders = [validate_order(order) for order in cycle["work_orders"]]
+    budget_exhausted = [order for order in orders if order["status"] == "BUDGET_EXHAUSTED"]
+    if budget_exhausted:
+        order = budget_exhausted[0]
+        return {
+            "decision": "BUDGET_EXHAUSTED",
+            "completed": False,
+            "finding_id": order["finding_id"],
+            "boundary": order.get("last_failure", {}).get("causal_boundary", order["boundary"]),
+            "next_action": order.get("last_failure", {}).get("next_action", order["next_action"]),
+            "budget_reason": order["budget"]["exhausted_reason"],
+        }
     escalated = [order for order in orders if order["status"] == "ESCALATED"]
     if escalated:
         return {
@@ -838,7 +1133,10 @@ def print_result(result: dict[str, Any], as_json: bool) -> None:
         return
     decision = result["decision"]
     print(f"DECISION: {decision}")
-    for key in ("finding_id", "status", "boundary", "next_action", "next_proof", "proof_instruction", "blocker", "next_check_at"):
+    for key in (
+        "finding_id", "status", "boundary", "next_action", "next_proof",
+        "proof_instruction", "blocker", "next_check_at", "budget_reason",
+    ):
         if result.get(key):
             print(f"{key}: {result[key]}")
     if decision == "WAIT_EXTERNAL":
@@ -902,6 +1200,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "next":
             cycle = load_cycle(task_dir)
             validate_evidence_files(task_dir, cycle)
+            if refresh_budget_statuses(cycle):
+                cycle["updated_at"] = now_utc()
+                write_json_atomic(cycle_path(task_dir), cycle)
             result = select_next(cycle)
         elif args.command == "validate":
             cycle = load_cycle(task_dir)

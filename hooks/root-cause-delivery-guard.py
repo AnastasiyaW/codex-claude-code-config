@@ -103,6 +103,115 @@ CHANGE_PATTERNS = (
     r"\b(сделай|реализуй|создай|разработай|напиши|рефактор|перепиши|мигрируй)\b",
 )
 
+# ``focused_argv`` is written by an agent, then later handed directly to
+# subprocess.run by ``capture``.  Equality with a frozen plan proves only that
+# the agent did not change its mind; it does not make the planned program safe
+# to execute.  Keep this intentionally small: the capture runner is for local
+# proof, not an escape hatch to a shell, package manager, network client, or
+# arbitrary interpreter payload.
+_SHELL_EXECUTABLES = frozenset({
+    "bash", "sh", "zsh", "fish", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
+})
+_NETWORK_EXECUTABLES = frozenset({
+    "curl", "wget", "ssh", "scp", "sftp", "ftp", "rsync", "git", "gh",
+    "npm", "npx", "pnpm", "yarn", "pip", "pip.exe", "uv", "poetry",
+    "invoke-webrequest", "iwr",
+})
+_DESTRUCTIVE_EXECUTABLES = frozenset({
+    "rm", "del", "erase", "rmdir", "rd", "remove-item", "move-item", "rename-item",
+    "format", "diskpart", "dd", "shred", "unlink", "drop-database",
+})
+_DYNAMIC_ARGUMENTS = frozenset({
+    "-c", "/c", "-command", "--command", "-encodedcommand", "--encodedcommand",
+    "-e", "--eval", "--execute", "--shell", "--shell-exec",
+})
+_MUTATING_ARGUMENTS = frozenset({
+    "--fix", "--unsafe-fixes", "--write", "--delete", "--remove", "--update", "--apply",
+})
+_PYTHON_MODULES = frozenset({"pytest", "unittest", "compileall", "py_compile", "ruff", "mypy"})
+_PROOF_SCRIPT_NAME = re.compile(
+    r"^(?:test_.+|.+_test|check_.+|.+_check|validate_.+|.+_validate|lint_.+|.+_lint|"
+    r"run_.+_(?:checks|tests)|.+_(?:checks|tests))$",
+    re.IGNORECASE,
+)
+
+
+def _proof_executable_name(value: str) -> str:
+    return Path(value).name.casefold()
+
+
+def _proof_argv_error(argv: list[str], root: Path | None) -> str | None:
+    """Reject agent-authored argv outside the local proof-executor contract."""
+    if not nonempty_strings(argv):
+        return "must contain non-empty string argv entries"
+    executable = _proof_executable_name(argv[0])
+    if executable in _SHELL_EXECUTABLES:
+        return "must not invoke a shell interpreter"
+    if executable in _NETWORK_EXECUTABLES:
+        return "must not invoke a network or package-management executable"
+    if executable in _DESTRUCTIVE_EXECUTABLES:
+        return "must not invoke a destructive executable"
+    for argument in argv[1:]:
+        lowered = argument.casefold()
+        if lowered in _DYNAMIC_ARGUMENTS:
+            return f"must not use dynamic execution argument {argument!r}"
+        if lowered in _MUTATING_ARGUMENTS:
+            return f"must not use mutating argument {argument!r}"
+
+    if re.fullmatch(r"(?:python(?:[0-9]+(?:\.[0-9]+)?)?|py)(?:\.exe)?", executable):
+        return _python_proof_argv_error(argv, root)
+    if executable in {"pytest", "pytest.exe"}:
+        return None
+    if executable in {"ruff", "ruff.exe"}:
+        if len(argv) >= 2 and argv[1] == "check":
+            return None
+        if len(argv) >= 2 and argv[1] == "format" and "--check" in argv[2:]:
+            return None
+        return "ruff proof must use `ruff check` or `ruff format --check`"
+    if executable in {"mypy", "mypy.exe", "pyright", "pyright.exe"}:
+        return None
+    if executable == "go":
+        if len(argv) >= 2 and argv[1] in {"test", "vet"}:
+            return None
+        return "go proof must use `go test` or `go vet`"
+    if executable == "cargo":
+        if len(argv) >= 2 and argv[1] in {"test", "check", "clippy"}:
+            return None
+        return "cargo proof must use `cargo test`, `cargo check`, or `cargo clippy`"
+    if executable in {"gcc", "gcc.exe", "g++", "g++.exe", "clang", "clang.exe", "clang++", "clang++.exe", "cl", "cl.exe"}:
+        if "-fsyntax-only" in argv[1:] or "/zs" in {argument.casefold() for argument in argv[1:]}:
+            return None
+        return "compiler proof must be syntax-only (`-fsyntax-only` or `/Zs`)"
+    return "must use an approved local test, compiler, linter, or validator executable"
+
+
+def _python_proof_argv_error(argv: list[str], root: Path | None) -> str | None:
+    index = 1
+    while index < len(argv) and argv[index] in {"-B", "-E", "-I", "-s", "-S"}:
+        index += 1
+    if index >= len(argv):
+        return "python proof must name an approved module or local verification script"
+    if argv[index] == "-m":
+        if index + 1 < len(argv) and argv[index + 1] in _PYTHON_MODULES:
+            return None
+        return "python -m proof must name an approved test or validator module"
+    if argv[index].startswith("-"):
+        return "python proof must not use interpreter options other than -B/-E/-I/-s/-S or approved -m modules"
+    script = Path(argv[index])
+    if script.suffix.casefold() != ".py" or not _PROOF_SCRIPT_NAME.fullmatch(script.stem):
+        return "python proof script must be a local test, check, lint, or validate .py file"
+    if root is None:
+        return None
+    try:
+        root_resolved = root.resolve()
+        script_resolved = (script if script.is_absolute() else root_resolved / script).resolve()
+        script_resolved.relative_to(root_resolved)
+    except (OSError, ValueError):
+        return "python proof script must stay inside the repository"
+    if not script_resolved.is_file():
+        return "python proof script must exist inside the repository"
+    return None
+
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
@@ -455,8 +564,13 @@ def validation_errors(
             errors.append("plan.causal_hypothesis is required")
         if not nonempty_strings(plan.get("fix_steps")):
             errors.append("plan.fix_steps must contain bounded source changes")
-        if not nonempty_strings(plan.get("focused_argv")):
+        focused_argv = plan.get("focused_argv")
+        if not nonempty_strings(focused_argv):
             errors.append("plan.focused_argv must contain the post-fix verifier command")
+        else:
+            proof_error = _proof_argv_error(focused_argv, root)
+            if proof_error:
+                errors.append(f"plan.focused_argv {proof_error}")
 
     observed = case.get("observed") if isinstance(case.get("observed"), dict) else {}
     verification = case.get("verification") if isinstance(case.get("verification"), dict) else {}
@@ -639,6 +753,9 @@ def capture(root: Path, case_id: str, phase: str, argv: list[str]) -> tuple[int,
     focused_argv = plan.get("focused_argv")
     if not nonempty_strings(focused_argv) or argv != focused_argv:
         return 2, "CASE: FAIL - capture argv must exactly match the plan.focused_argv frozen for this case"
+    proof_error = _proof_argv_error(argv, root)
+    if proof_error:
+        return 2, f"CASE: FAIL - unsafe focused_argv: {proof_error}"
     try:
         result = subprocess.run(
             argv,

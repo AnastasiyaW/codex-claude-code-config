@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-08-31T10:29:41+00:00",
-  "skill_count": 55,
-  "aggregate_hash": "sha256:012ef59b27759570906f97e97bde0d67630c59cbb25c5eab45b246c46663c08b",
+  "generated_at": "2026-09-01T09:55:20+00:00",
+  "skill_count": 56,
+  "aggregate_hash": "sha256:3f5e315d74bb9466312d8964d61a1fafa6af87847c985d7ca5e264ccd0169412",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:698f850dd8e71ec4dcde9bdaa670c067852e47a67f97dcdcbe72db385e29621a",
@@ -21,6 +21,36 @@
         "references/agent-tool-design.md",
         "references/agentic-rag-model-policy.md",
         "references/context-trust-labels.md"
+      ]
+    },
+    "agents-best-practices": {
+      "content_hash": "sha256:b41ce6885658871e968a9ffdf93b2a29ba5b92dde2910042861cd43d12ec881e",
+      "size_bytes": 267701,
+      "file_count": 23,
+      "files": [
+        "SKILL.md",
+        "references/agent-legibility-feedback-loops.md",
+        "references/agentic-loop.md",
+        "references/architecture.md",
+        "references/checklists.md",
+        "references/coding-agents.md",
+        "references/completion-reconciliation.md",
+        "references/context-memory-compaction.md",
+        "references/coverage-audit.md",
+        "references/environment-adaptive-tools.md",
+        "references/evals.md",
+        "references/mvp-agent-blueprint.md",
+        "references/planning-and-goals.md",
+        "references/prompt-caching-and-cost.md",
+        "references/provider-api-patterns.md",
+        "references/security-observability.md",
+        "references/self-refining-recursive-harnesses.md",
+        "references/skills-and-connectors.md",
+        "references/source-links.md",
+        "references/speculative-tool-execution.md",
+        "references/system-prompts-instructions.md",
+        "references/tools-and-permissions.md",
+        "references/workflow-orchestration.md"
       ]
     },
     "ai-ml/diffusion-engineering": {
@@ -409,8 +439,8 @@
       ]
     },
     "frontend/motion-framer": {
-      "content_hash": "sha256:97ab16fdae6d93e579d336680d54e1683db0c398e91e7ef8d68fa80de1aa9e21",
-      "size_bytes": 71025,
+      "content_hash": "sha256:40571e165d79af6d74d8fcd9b36d0f5184e7f5c7b7865009780110224ff2c8dc",
+      "size_bytes": 70977,
       "file_count": 4,
       "files": [
         "SKILL.md",
@@ -428,8 +458,8 @@
       ]
     },
     "frontend/ui-ux-pro-max": {
-      "content_hash": "sha256:9bb52c25373ab85853646b514c752752d0a2fe46f3bcc25508d09751b58924b3",
-      "size_bytes": 476896,
+      "content_hash": "sha256:2edc6c158ae5740e65020485e0ddde988ab71a70baec31748fc32d168181577c",
+      "size_bytes": 476937,
       "file_count": 31,
       "files": [
         "SKILL.md",
@@ -623,8 +653,8 @@
       ]
     },
     "writing/caveman": {
-      "content_hash": "sha256:b4361f891a46329da5ab024a4f9bc710fb39abca36aabcfa6da84e746a7b67c5",
-      "size_bytes": 12083,
+      "content_hash": "sha256:4cc9df88d2579b3520227e3d89cffd6530b47406a110a1030cc6f4761c80ed6a",
+      "size_bytes": 12234,
       "file_count": 1,
       "files": [
         "SKILL.md"

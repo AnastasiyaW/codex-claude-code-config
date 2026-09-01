@@ -27,7 +27,7 @@ secrets,api-key-leak,auto-backup,backup-retention,billing,hooks}.md`. Ориги
 | PreToolUse `Bash` | `destructive-command-guard` | `rm -rf` корней, `DROP`/`TRUNCATE`, `docker system prune`, `mkfs`, `dd` | `destructive` |
 | PreToolUse `Bash` | `git-destructive-guard` | `reset --hard`, `push --force`, `branch -D`, `clean -fdx`, `checkout -- .`, `filter-branch` | `git-destructive` |
 | PreToolUse `Bash` | `command-injection-guard` | `$(...)` и бэктики с нетривиальным телом | `injection` |
-| PreToolUse `Bash` | `human-confirmation-guard` | любое destructive-намерение без подтверждения | маркер `# user-confirmed: "<фраза>" <ts>`, живёт 10 мин |
+| PreToolUse `Bash`/`PowerShell` | `human-confirmation-guard` | destructive intent вне routine safe-targets | block до host-verifiable approval record; model-authored marker не действует |
 | PreToolUse `Bash` | `db-snapshot-guard` | обойдённый destructive SQL без снапшота | снимает снапшот сам |
 | PreToolUse `Bash` | `git-auto-backup` | перед обойдённой destructive-операцией git | создаёт ветку/stash |
 | PreToolUse `Bash` | **`secret-leak-guard`** | чтение секрет-путей **и упоминание их имён в команде** | `CLAUDE_ALLOW_SECRETS=1` |

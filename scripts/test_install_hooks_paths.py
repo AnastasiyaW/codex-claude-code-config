@@ -68,6 +68,38 @@ def main() -> int:
         assert MODULE._merge_hook(matcher_split, "PreToolUse", router, "Bash") == "added"
         assert MODULE._merge_hook(matcher_split, "PreToolUse", router, "PowerShell") == "added"
         assert len(matcher_split["hooks"]["PreToolUse"]) == 2
+
+        git_home = Path(td) / "git-home"
+        live_pre_push = MODULE._git_hooks_dir(git_home) / "pre-push"
+        live_pre_push.parent.mkdir(parents=True)
+        live_pre_push.write_text("legacy scanner\n", encoding="utf-8")
+        installed, backup = MODULE._install_git_pre_push(git_home, dry_run=False)
+        assert installed == live_pre_push
+        assert backup is not None and backup.read_text(encoding="utf-8") == "legacy scanner\n"
+        rendered = installed.read_text(encoding="utf-8")
+        assert 'PUBLIC_SCANNER="$CANONICAL_ROOT/hooks/pre-push-public-repo-scan.py"' in rendered
+        assert 'CANONICAL_ROOT="$CLAUDE_DIR/claude-code-config"' in rendered
+        assert 'ATTRIBUTION_SCANNER="$CLAUDE_DIR/scripts/pre_push_claude_attribution.py"' in rendered
+        assert '$CLAUDE_CONFIG_ROOT' not in rendered
+        assert '"$HOME"' not in rendered
+        assert rendered.startswith("#!/bin/sh")
+        assert 'unset CLAUDE_CONFIG_ROOT CLAUDE_PUBLIC_SCAN_NAMES' in rendered
+        assert '"$PUBLIC_SCANNER" "$@"' in rendered
+        assert "scripts/pre_push_public_repo_scan.py" not in rendered
+
+        claude_router = {"hooks": {"UserPromptSubmit": []}}
+        assert MODULE._merge_hook(
+            claude_router, "UserPromptSubmit", router, None, "claude"
+        ) == "added"
+        claude_command = claude_router["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        assert claude_command.endswith(" --profile claude"), claude_command
+
+        codex_router = {"hooks": {"UserPromptSubmit": []}}
+        assert MODULE._merge_hook(
+            codex_router, "UserPromptSubmit", router, None, "codex"
+        ) == "added"
+        codex_command = codex_router["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        assert codex_command.endswith(" --profile codex"), codex_command
     print("test_install_hooks_paths: OK")
     return 0
 

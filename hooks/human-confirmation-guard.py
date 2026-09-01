@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse: require dual confirmation for any destructive intent.
+"""PreToolUse: fail closed for destructive intent until the host can prove approval.
 
 Universal "human-in-the-loop" gate for any operation that removes / drops /
 deletes / terminates / overwrites. Replaces narrow catastrophic-only check
@@ -9,42 +9,38 @@ prompt the user.
 
 Replit incident pattern (Aug 2026, Jason Lemkin)
 ================================================
-Single bypass marker can be added by the agent itself after internal
-reasoning — no human-in-the-loop. We close that hole by demanding a
-`# user-confirmed:` token containing a verbatim user phrase + timestamp
-fresher than 10 minutes. The phrase is a *proof artifact in the command*,
-not a rule in the prompt.
+An agent can write any marker, phrase, timestamp, or local file that it can
+then present to this hook. None of those are human authorization. The current
+Claude/Codex hook event contains neither a host-signed approval result nor a
+trusted transcript/approval API, so this hook cannot distinguish an actual
+user decision from a forged one. Non-whitelisted destructive operations must
+therefore remain blocked rather than forge a green result.
 
 Verdict matrix
 ==============
-| destructive intent | target whitelist | user-confirmed | result |
+| destructive intent | target whitelist | host-verifiable approval | result |
 |---|---|---|---|
 | no                 | n/a              | -              | allow |
 | yes                | all targets safe | -              | allow (silent) |
-| yes                | non-safe target  | no             | **BLOCK** |
-| yes                | non-safe target  | fresh          | allow |
-| yes                | non-safe target  | stale >10 min  | **BLOCK** |
+| yes                | non-safe target  | unavailable in current hook API | **BLOCK** |
 
 Design notes
 ============
-- The token is checked from the command text — hooks run in sibling
-  processes, env state is unreliable.
-- The phrase content is *not* matched against an allowlist. The point is
-  not what the user said, it's that they *said something explicit very
-  recently* — that is the human contact event.
-- Timestamp prevents reusing yesterday's approval for today's command.
+- Command text, environment flags, git state, and any file writable by the
+  agent are not approval credentials.
+- A future allow path must verify a host-issued, single-use approval record
+  bound to the canonical action digest, targets, session, expiry, and approver.
 - This hook does not perform backups (see pre_db_snapshot, pre_fs_snapshot
   for that). It is the gate, not the safety net.
 
 Bypass of *this* hook
 =====================
-There is intentionally no bypass for this hook. Destructive ops always
-require fresh human confirmation. CI/CD pipelines should not run inside
-Claude Code sessions.
+There is intentionally no bypass for this hook. Until a host-verifiable
+approval interface exists, destructive ops remain blocked. CI/CD pipelines
+should not run inside Claude Code sessions.
 """
 from __future__ import annotations
 
-import datetime as _dt
 import re
 import shlex
 import sys
@@ -240,40 +236,6 @@ SAFE_TARGET_PATTERNS = [
     r"\.rej(\s|$|/)",         # patch reject
 ]
 
-MAX_AGE_MINUTES = 10
-
-USER_CONFIRMED_RE = re.compile(
-    r"#\s*user-confirmed\s*:\s*"
-    r"(['\"])(?P<phrase>.+?)\1\s+"
-    r"(?P<ts>\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)",
-    re.IGNORECASE,
-)
-
-
-def parse_iso(ts: str) -> _dt.datetime | None:
-    s = ts.strip().replace("T", " ")
-    s = re.sub(r"\s*(Z|[+-]\d{2}:?\d{2})\s*$", "", s)
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-        try:
-            return _dt.datetime.strptime(s, fmt).replace(tzinfo=_dt.timezone.utc)
-        except ValueError:
-            continue
-    return None
-
-
-def find_user_confirmed(cmd: str) -> tuple[str, _dt.datetime] | None:
-    m = USER_CONFIRMED_RE.search(cmd)
-    if not m:
-        return None
-    phrase = (m.group("phrase") or "").strip()
-    if not phrase:
-        return None
-    ts = parse_iso(m.group("ts"))
-    if ts is None:
-        return None
-    return phrase, ts
-
-
 def is_target_safe(target: str) -> bool:
     """Check if a single rm target matches a safe pattern."""
     for pat in SAFE_TARGET_PATTERNS:
@@ -335,49 +297,17 @@ def main() -> None:
         log("INFO", "require_human_confirmation", "safe-target", hit, cmd[:200])
         allow()
 
-    # Step 3: must have a user-confirmed token
-    confirmed = find_user_confirmed(cmd)
-    if confirmed is None:
-        log("BLOCK", "require_human_confirmation", "no-token", hit, cmd[:300])
-        sample_ts = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
-        block(
-            "Эта операция destructive — требуется подтверждение от user.\n\n"
-            f"Detected pattern: /{hit}/\n\n"
-            "У тебя нет маркера `# user-confirmed: \"<verbatim phrase>\" <timestamp>`.\n\n"
-            "Что делать:\n"
-            "  1. Спроси пользователя в чате explicit подтверждение этой команды.\n"
-            "     Опиши что именно собираешься удалить/остановить/переписать,\n"
-            "     обратимо или нет, какие риски.\n"
-            "  2. Получи ответ — любая фраза согласия ('да', 'делай', 'yes',\n"
-            "     'поехали', 'ок', и т.п.).\n"
-            "  3. Добавь в начало команды маркер:\n"
-            f"       # user-confirmed: \"<точная фраза user>\" {sample_ts}\n"
-            "  4. Запусти команду.\n\n"
-            "Token действителен 10 минут. После этого нужно свежее подтверждение.\n\n"
-            "Исключения (allow без token):\n"
-            "  - rm на build/, dist/, node_modules/, target/, __pycache__/,\n"
-            "    .cache/, .venv/, /tmp/, .pyc, .bak, .DS_Store и т.п.\n"
-            "  - Эти пути в whitelist — для них confirmation не нужен."
-        )
-
-    phrase, ts = confirmed
-    age = _dt.datetime.now(_dt.timezone.utc) - ts
-    if age.total_seconds() > MAX_AGE_MINUTES * 60:
-        log("BLOCK", "require_human_confirmation", "stale-token", hit, cmd[:300])
-        age_min = int(age.total_seconds() / 60)
-        block(
-            f"User-confirmed token устарел: возраст {age_min} мин > {MAX_AGE_MINUTES} мин.\n"
-            f"Фраза была: \"{phrase}\". Запросовай у user свежее подтверждение."
-        )
-
-    log(
-        "WARN",
-        "require_human_confirmation",
-        "confirmed",
-        hit,
-        f'phrase="{phrase}" age={int(age.total_seconds())}s :: {cmd[:200]}',
+    log("BLOCK", "require_human_confirmation", "approval-interface-unavailable", hit, cmd[:300])
+    block(
+        "Эта операция destructive и заблокирована.\n\n"
+        f"Detected pattern: /{hit}/\n\n"
+        "Текущий hook API не передаёт проверяемую запись одобрения от user. "
+        "Маркер в команде, фраза, timestamp, env или файл, который может создать agent, "
+        "не являются доказательством human approval.\n\n"
+        "Нужен host-issued одноразовый approval record, привязанный к действию, target, "
+        "session и expiry. Пока такого интерфейса нет, destructive operation не выполняется.\n\n"
+        "Исключения: только whitelisted routine build/cache/temp targets."
     )
-    allow()
 
 
 if __name__ == "__main__":

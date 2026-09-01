@@ -60,7 +60,10 @@ class TaskContract:
 
 def selected_skills(task_text: str) -> list[str]:
     """Return the smallest curated skill set selected before dispatch."""
-    matches = [item for item in detect_keywords(task_text) if "skill" in item]
+    # Claude Code is the only client that enforces this Task-bound contract;
+    # select against its capability profile, not the safe shared default for
+    # old global UserPromptSubmit registrations.
+    matches = [item for item in detect_keywords(task_text, profile="claude") if "skill" in item]
     required = [str(item["skill"]) for item in matches if item.get("required")]
     if required:
         return list(dict.fromkeys(required))

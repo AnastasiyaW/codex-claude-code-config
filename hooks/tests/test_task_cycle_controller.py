@@ -66,6 +66,46 @@ class TaskCycleControllerTests(unittest.TestCase):
         path.write_text(f"real {name} output\n", encoding="utf-8")
         return path.relative_to(self.task).as_posix()
 
+    def proof_receipt(
+        self,
+        proof: str,
+        result: str,
+        attempt_id: str,
+        *,
+        finding_id: str = "F-001",
+        reviewer: str = "fresh-evaluator",
+        receipt_name: str | None = None,
+    ) -> str:
+        stem = receipt_name or attempt_id
+        evidence_path = self.task / "evidence" / f"{stem}.txt"
+        evidence_path.write_text(f"{proof} {result} from {attempt_id}\n", encoding="utf-8")
+        receipt = {
+            "schema": "agent-task-proof-receipt/v1",
+            "finding_id": finding_id,
+            "proof": proof,
+            "attempt_id": attempt_id,
+            "recorded_at": "2026-09-01T10:00:00Z",
+            "evidence_path": evidence_path.relative_to(self.task).as_posix(),
+            "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+            "result": result,
+        }
+        if proof == "independent_review":
+            receipt.update({
+                "producer": {"type": "review", "identity": reviewer},
+                "reviewer": reviewer,
+                "fresh_context": True,
+                "verdict": result,
+            })
+        else:
+            receipt["producer"] = {
+                "type": "command",
+                "identity": "test-runner",
+                "command": ["python", "-m", "unittest", proof],
+            }
+        receipt_path = self.task / "evidence" / f"{stem}.receipt.json"
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        return receipt_path.relative_to(self.task).as_posix()
+
     def invoke(self, *args: str) -> tuple[int, dict | None, str]:
         result = subprocess.run(
             [sys.executable, str(CONTROLLER), *args, "--task-dir", str(self.task), "--json"],
@@ -85,28 +125,30 @@ class TaskCycleControllerTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         self.assertEqual(result and result["next_proof"], "focused_test")
 
-        for proof, evidence in (
-            ("focused_test", "focused.txt"),
-            ("runtime_proof", "trace.json"),
+        for proof, attempt_id in (
+            ("focused_test", "focused-pass-1"),
+            ("runtime_proof", "runtime-pass-1"),
         ):
             code, result, stderr = self.invoke(
                 "record-proof", "--finding", "F-001", "--proof", proof,
-                "--result", "PASS", "--evidence", self.evidence(evidence),
+                "--result", "PASS", "--evidence", self.proof_receipt(proof, "PASS", attempt_id),
             )
             self.assertEqual(code, 0, stderr)
         self.assertEqual(result and result["next_proof"], "independent_review")
         code, result, stderr = self.invoke(
             "record-proof", "--finding", "F-001", "--proof", "independent_review",
-            "--result", "PASS", "--evidence", self.evidence("review.md"),
+            "--result", "PASS", "--evidence", self.proof_receipt(
+                "independent_review", "PASS", "review-pass-1"
+            ),
             "--reviewer", "fresh-evaluator", "--fresh-context",
         )
         self.assertEqual(code, 0, stderr)
         self.assertEqual(result and result["decision"], "ACCEPTED")
 
-    def test_failed_proof_needs_causal_requeue_then_escalates(self) -> None:
+    def test_failed_proof_needs_causal_requeue_then_exhausts_budget(self) -> None:
         self.write_findings([internal_finding()])
         self.reconcile()
-        receipt = self.evidence("failed.txt")
+        receipt = self.proof_receipt("focused_test", "FAIL", "focused-fail-missing-action")
         code, _result, stderr = self.invoke(
             "record-proof", "--finding", "F-001", "--proof", "focused_test",
             "--result", "FAIL", "--evidence", receipt,
@@ -116,12 +158,137 @@ class TaskCycleControllerTests(unittest.TestCase):
         for attempt in (1, 2, 3):
             code, result, stderr = self.invoke(
                 "record-proof", "--finding", "F-001", "--proof", "focused_test",
-                "--result", "FAIL", "--evidence", receipt,
+                "--result", "FAIL", "--evidence", self.proof_receipt(
+                    "focused_test", "FAIL", f"focused-fail-{attempt}"
+                ),
                 "--next-action", "Repair the parser before repeating the test.",
                 "--causal-boundary", "parser rejects the signed version epoch",
             )
             self.assertEqual(code, 0, stderr)
-            self.assertEqual(result and result["decision"], "ESCALATED" if attempt == 3 else "WORK")
+            self.assertEqual(result and result["decision"], "BUDGET_EXHAUSTED" if attempt == 3 else "WORK")
+        self.assertFalse(result and result.get("completed", True))
+
+        cycle = json.loads((self.task / "cycle.json").read_text(encoding="utf-8"))
+        self.assertEqual(cycle["work_orders"][0]["status"], "BUDGET_EXHAUSTED")
+        self.assertEqual(cycle["work_orders"][0]["budget"]["exhausted_reason"], "max_attempts")
+
+    def test_tool_call_budget_exhaustion_is_explicit_and_noncomplete(self) -> None:
+        self.write_findings([internal_finding()])
+        self.reconcile()
+        code, _, stderr = self.invoke(
+            "record-proof", "--finding", "F-001", "--proof", "focused_test",
+            "--result", "PASS", "--evidence", self.proof_receipt(
+                "focused_test", "PASS", "focused-tool-budget"
+            ),
+        )
+        self.assertEqual(code, 0, stderr)
+        cycle_path = self.task / "cycle.json"
+        cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
+        cycle["work_orders"][0]["budget"]["max_tool_calls"] = 1
+        cycle_path.write_text(json.dumps(cycle), encoding="utf-8")
+
+        code, result, stderr = self.invoke("next")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "BUDGET_EXHAUSTED")
+        self.assertEqual(result and result["budget_reason"], "max_tool_calls")
+        self.assertFalse(result and result.get("completed", True))
+
+    def test_wall_time_budget_exhaustion_is_explicit_and_noncomplete(self) -> None:
+        self.write_findings([internal_finding()])
+        self.reconcile()
+        cycle_path = self.task / "cycle.json"
+        cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
+        budget = cycle["work_orders"][0]["budget"]
+        budget["started_at"] = "2000-01-01T00:00:00Z"
+        budget["max_wall_time_seconds"] = 1
+        cycle_path.write_text(json.dumps(cycle), encoding="utf-8")
+
+        code, result, stderr = self.invoke("next")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "BUDGET_EXHAUSTED")
+        self.assertEqual(result and result["budget_reason"], "max_wall_time_seconds")
+        self.assertFalse(result and result.get("completed", True))
+
+    def test_proof_requires_typed_digest_bound_receipt_and_unique_attempt(self) -> None:
+        self.write_findings([internal_finding()])
+        self.reconcile()
+
+        code, _, stderr = self.invoke(
+            "record-proof", "--finding", "F-001", "--proof", "focused_test",
+            "--result", "PASS", "--evidence", self.evidence("plain-output.txt"),
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("proof receipt", stderr)
+
+        stale_receipt = self.proof_receipt("focused_test", "PASS", "stale-digest")
+        receipt_payload = json.loads((self.task / stale_receipt).read_text(encoding="utf-8"))
+        (self.task / receipt_payload["evidence_path"]).write_text("mutated after receipt\n", encoding="utf-8")
+        code, _, stderr = self.invoke(
+            "record-proof", "--finding", "F-001", "--proof", "focused_test",
+            "--result", "PASS", "--evidence", stale_receipt,
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("evidence SHA-256 is stale", stderr)
+
+        first_failure = self.proof_receipt("focused_test", "FAIL", "attempt-reused", receipt_name="fail-a")
+        code, result, stderr = self.invoke(
+            "record-proof", "--finding", "F-001", "--proof", "focused_test",
+            "--result", "FAIL", "--evidence", first_failure,
+            "--next-action", "repair the focused boundary",
+            "--causal-boundary", "focused boundary is still red",
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "WORK")
+
+        duplicate_attempt = self.proof_receipt(
+            "focused_test", "FAIL", "attempt-reused", receipt_name="fail-b"
+        )
+        code, _, stderr = self.invoke(
+            "record-proof", "--finding", "F-001", "--proof", "focused_test",
+            "--result", "FAIL", "--evidence", duplicate_attempt,
+            "--next-action", "repair the focused boundary again",
+            "--causal-boundary", "focused boundary remains red",
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("attempt_id", stderr)
+
+    def test_legacy_accepted_cycle_remains_readable_but_cannot_accept_new_proofs(self) -> None:
+        finding = internal_finding()
+        proofs = {}
+        for proof in finding["proof_requirements"]:
+            record = {
+                "result": "PASS",
+                "evidence": self.evidence(f"legacy-{proof}.txt"),
+                "recorded_at": "2026-08-20T10:00:00Z",
+            }
+            if proof == "independent_review":
+                record.update({"reviewer": "legacy-evaluator", "fresh_context": True})
+            proofs[proof] = record
+        order = {
+            **finding,
+            "status": "ACCEPTED",
+            "attempts": 1,
+            "proofs": proofs,
+            "created_at": "2026-08-20T09:00:00Z",
+        }
+        (self.task / "cycle.json").write_text(json.dumps({
+            "schema": "agent-task-cycle/v1",
+            "task_id": "demo",
+            "work_orders": [order],
+        }), encoding="utf-8")
+
+        code, result, stderr = self.invoke("validate")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "VALID")
+        code, result, stderr = self.invoke("next")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "ACCEPTED")
+        code, _, stderr = self.invoke(
+            "record-proof", "--finding", "F-001", "--proof", "focused_test",
+            "--result", "PASS", "--evidence", self.evidence("legacy-new-proof.txt"),
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("terminal work order", stderr)
 
     def test_external_finding_is_rechecked_when_due(self) -> None:
         self.evidence("external-check.txt")
@@ -144,7 +311,9 @@ class TaskCycleControllerTests(unittest.TestCase):
         self.reconcile()
         code, _result, stderr = self.invoke(
             "record-proof", "--finding", "F-001", "--proof", "runtime_proof",
-            "--result", "PASS", "--evidence", self.evidence("wrong-order.txt"),
+            "--result", "PASS", "--evidence", self.proof_receipt(
+                "runtime_proof", "PASS", "wrong-order-runtime"
+            ),
         )
         self.assertEqual(code, 2)
         self.assertIn("proof order violation", stderr)
@@ -165,12 +334,16 @@ class TaskCycleControllerTests(unittest.TestCase):
         self.reconcile()
         code, _result, stderr = self.invoke(
             "record-proof", "--finding", "F-001", "--proof", "focused_test",
-            "--result", "PASS", "--evidence", self.evidence("green-focused.txt"),
+            "--result", "PASS", "--evidence", self.proof_receipt(
+                "focused_test", "PASS", "focused-before-runtime-fail"
+            ),
         )
         self.assertEqual(code, 0, stderr)
         code, _result, stderr = self.invoke(
             "record-proof", "--finding", "F-001", "--proof", "runtime_proof",
-            "--result", "FAIL", "--evidence", self.evidence("failed-trace.txt"),
+            "--result", "FAIL", "--evidence", self.proof_receipt(
+                "runtime_proof", "FAIL", "runtime-fail-1"
+            ),
             "--next-action", "Repair the process tracing boundary before re-running it.",
             "--causal-boundary", "VM trace drops child-process ancestry",
         )

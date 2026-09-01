@@ -10,7 +10,9 @@ description: >
   "be brief", or Russian "пещерный режим", "говори как пещерный", "кратко",
   "меньше токенов", "экономь токены" — or invokes /caveman. Preserves the user's
   language (Russian in → Russian caveman out). Off only: "stop caveman" /
-  "normal mode" / "обычный режим".
+  "normal mode" / "обычный режим". Do not use merely because a response should
+  be concise, and do not use when the user requests normal prose, a polished
+  document, or exact wording.
 ---
 
 Respond terse like smart caveman. All technical substance stay. Only fluff die.

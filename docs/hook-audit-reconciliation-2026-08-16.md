@@ -4,7 +4,8 @@ This note corrects the numerical claim in the original round-seven receipt.
 That receipt listed twelve commands but stated "190 checks across thirteen
 suites". Its own listed totals sum to 178, so neither number was a valid
 measurement. Historical receipt files are preserved; this is the replacement
-measurement and its executable source.
+measurement and its executable source. The table below is updated when the
+executable corpus gains a suite; it is not the historical round-seven claim.
 
 ## Current guard corpus
 
@@ -14,15 +15,17 @@ Run:
 python -B hooks/tests/run_guard_regressions.py
 ```
 
-The runner fixes `HOOKS_DIR` to the hook tree under test, runs these twelve
+The runner fixes `HOOKS_DIR` to the hook tree under test, runs these fourteen
 suites, and derives the total from their actual `all N … correct` output:
 
 | Suites | Checks |
 |---:|---:|
 | rounds 1–6 | 118 |
 | round 7 | 18 |
-| shared matcher / transfer / delivery / PowerShell / live smoke | 48 |
-| **total** | **184** |
+| shared matcher / transfer / delivery / PowerShell / live smoke | 55 |
+| dynamic PowerShell data-to-code guard | 24 |
+| proof-executor permission boundary | 12 |
+| **total** | **227** |
 
 Round seven now permanently covers the measured redirect/group bridges that
 must remain blocked: write-to-file then `bash`, process substitution, group

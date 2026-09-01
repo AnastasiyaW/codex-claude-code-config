@@ -50,6 +50,7 @@ REQUIRED_PRECOMPACT_HOOKS = (
 
 REQUIRED_SESSIONSTART_HOOKS = (
     "session-handoff-check.py",
+    "handoff-resume-gate.py",
     "review_handoff_memory_loop.py",
     "docs-staleness-guard.py",
     "continuity-session-check.py",
@@ -60,6 +61,7 @@ REQUIRED_PRETOOLUSE_HOOKS = (
     "handoff-closure-audit-guard.py",
     "github-workflow-security.py",
     "continuity-contract-guard.py",
+    "powershell-dynamic-execution-guard.py",
 )
 
 REQUIRED_POSTTOOLUSE_HOOKS = (
@@ -240,6 +242,109 @@ class TaskCompletionHookTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload.get("decision"), "block")
             self.assertIn("actually finish the work", payload.get("reason", ""))
+
+    def test_stop_phrase_guard_blocks_private_credential_refusal(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="private-credential-stop-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".claude").mkdir()
+            transcript = tmp_path / "transcript.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "Не вывожу учётные данные в переписку. "
+                                "Они находятся локально в STAGING-LOGIN.txt."
+                            ),
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(STOP_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript)}, ensure_ascii=False),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload.get("decision"), "block")
+            self.assertIn("inside the configured trust boundary", payload.get("reason", ""))
+
+    def test_stop_phrase_guard_allows_measured_public_credential_boundary(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="public-credential-stop-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".claude").mkdir()
+            transcript = tmp_path / "transcript.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "Не публикую учётные данные в публичный GitHub repository; "
+                                "его visibility механически подтверждён как PUBLIC."
+                            ),
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(STOP_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript)}, ensure_ascii=False),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.strip(), "", result.stdout)
+
+    def test_stop_phrase_guard_rejects_hypothetical_public_credential_boundary(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="hypothetical-public-credential-stop-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".claude").mkdir()
+            transcript = tmp_path / "transcript.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "Не вывожу токен в переписку, потому что репозиторий "
+                                "может быть публичным."
+                            ),
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(STOP_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript)}, ensure_ascii=False),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload.get("decision"), "block")
+            self.assertIn("measured PUBLIC/external boundary", payload.get("reason", ""))
 
     def test_outward_claim_guard_requires_measurement_for_hash_equality(self) -> None:
         with tempfile.TemporaryDirectory(prefix="claim-evidence-hook-") as tmp:

@@ -15,6 +15,7 @@ Safety-critical hooks installed by default (--safe-defaults):
   - git-auto-backup              PreToolUse    creates branch snapshot before rewrites
   - session-drift-validator      SessionStart  reports broken file paths in CLAUDE.md
   - command-injection-guard      PreToolUse    blocks `cmd $(evil)` shell substitution
+  - powershell-dynamic-execution-guard PreToolUse blocks untrusted data-to-code bridges in PowerShell
   - directory-creation-guard     PreToolUse    keeps new folders in project hierarchy
   - self-harm-guard              PreToolUse    stops agent from killing its own process
   - dependency-currency-guard    PreToolUse    checks package names and release age
@@ -35,7 +36,7 @@ Opt-in extras (use --extras):
   - subagent-evidence-receipt    Codex SubagentStop: requires a decision-source receipt
   - task-inbox-show              SessionStart  surfaces .claude/task-inbox/ pending tasks
   - claude-attribution-guard     PreToolUse    blocks Co-Authored-By: Claude footers
-  - human-confirmation-guard     PreToolUse    requires explicit user OK for deletions
+  - human-confirmation-guard     PreToolUse    blocks destructive actions until a host-verifiable approval API exists
   - db-snapshot-guard            PreToolUse    auto-snapshot before destructive SQL
   - verify-deleted-guard         PostToolUse   verifies destructive ops actually completed
   - file-cohesion-guard          PreToolUse    advisory: durable files belong in project structure
@@ -84,6 +85,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 
@@ -96,6 +98,7 @@ SAFE_DEFAULTS: list[tuple[str, str, str | None]] = [
     ("git-destructive-guard.py",     "PreToolUse", "Bash"),
     ("git-auto-backup.py",           "PreToolUse", "Bash"),
     ("command-injection-guard.py",   "PreToolUse", "Bash"),
+    ("powershell-dynamic-execution-guard.py", "PreToolUse", "PowerShell"),
     ("directory-creation-guard.py",  "PreToolUse", "Bash"),
     ("dependency-currency-guard.py", "PreToolUse", "Write|Edit|MultiEdit"),
     ("dependency-provenance-guard.py", "PreToolUse", "Bash|PowerShell"),
@@ -119,6 +122,7 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("backup-retention-cleanup.py",  "Stop", None),
     ("session-handoff-reminder.py",  "Stop", None),
     ("session-handoff-check.py",     "SessionStart", None),
+    ("handoff-resume-gate.py",       "SessionStart", None),
     ("keyword-skill-router.py",      "UserPromptSubmit", None),
     ("agent-skill-contract.py",      "PreToolUse", "Task"),
     ("subagent-skill-context.py",    "SubagentStart", None),
@@ -161,6 +165,37 @@ SHARED = ["safety_common.py"]
 # is already backed up by _save_settings.  The source rename remains in Git.
 REPLACED_HOOKS = {"batch-completion-guard.py": "user-task-completion-guard.py"}
 COMMAND_SUFFIXES = {("user-task-completion-guard.py", "SessionStart"): " --session-start"}
+GIT_HOOKS_SOURCE_DIR = REPO_ROOT / "scripts" / "git-hooks"
+
+
+def _git_hooks_dir(home: Path) -> Path:
+    """The live global ``core.hooksPath``; its contents are installed artifacts."""
+    return home / ".claude" / "scripts" / "git-hooks"
+
+
+def _install_git_pre_push(home: Path, dry_run: bool) -> tuple[Path, Path | None]:
+    """Install the tracked pre-push wrapper, preserving a recoverable backup."""
+    source = GIT_HOOKS_SOURCE_DIR / "pre-push"
+    if not source.is_file():
+        raise RuntimeError(f"tracked Git hook source is missing: {source}")
+    destination = _git_hooks_dir(home) / "pre-push"
+    if dry_run:
+        print(f"  [dry-run] would install {source} -> {destination}")
+        return destination, None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    backup: Path | None = None
+    if destination.exists():
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        backup = destination.with_name(f"pre-push.bak-{stamp}")
+        serial = 1
+        while backup.exists():
+            backup = destination.with_name(f"pre-push.bak-{stamp}-{serial}")
+            serial += 1
+        shutil.copy2(destination, backup)
+    shutil.copy2(source, destination)
+    if os.name != "nt":
+        destination.chmod(destination.stat().st_mode | 0o755)
+    return destination, backup
 
 
 def _resolve_targets(args: argparse.Namespace) -> tuple[Path, Path]:
@@ -251,7 +286,7 @@ def _script_name_from_command(command: str) -> str:
     return matches[-1].lower() if matches else ""
 
 
-def _command_for(script_path: Path, event: str) -> str:
+def _command_for(script_path: Path, event: str, client_profile: str | None = None) -> str:
     """Return the cross-harness command form used by the Codex hook runner.
 
     Codex interprets an unquoted backslash path as a workspace-relative
@@ -260,11 +295,14 @@ def _command_for(script_path: Path, event: str) -> str:
     unchanged.
     """
     suffix = COMMAND_SUFFIXES.get((script_path.name, event), "")
+    if script_path.name == "keyword-skill-router.py" and event == "UserPromptSubmit":
+        profile = client_profile if client_profile in {"claude", "codex"} else "shared"
+        suffix = f" --profile {profile}"
     return f'python "{script_path.as_posix()}"{suffix}'
 
 
 def _merge_hook(settings: dict, event: str, script_path: Path,
-                matcher: str | None) -> str:
+                matcher: str | None, client_profile: str | None = None) -> str:
     """Register one hook and return its added/repaired/deduplicated state.
 
     A hook identity is ``event + matcher + script``.  The same script can
@@ -276,7 +314,7 @@ def _merge_hook(settings: dict, event: str, script_path: Path,
     settings.setdefault("hooks", {})
     settings["hooks"].setdefault(event, [])
 
-    command = _command_for(script_path, event)
+    command = _command_for(script_path, event, client_profile)
     script_name = script_path.name.lower()
     groups = settings["hooks"][event]
     matches: list[dict] = []
@@ -365,14 +403,29 @@ def main() -> int:
                         help="Install to ./.claude/ (this project only)")
     target.add_argument("--codex", action="store_true",
                         help="Install to ~/.codex/hooks.json using canonical tracked hook scripts")
+    target.add_argument("--git-hooks", action="store_true",
+                        help="Install tracked pre-push wrapper to global core.hooksPath (backs up old wrapper)")
     p.add_argument("--extras", action="store_true",
                    help="Also install opt-in hooks (session-handoff, skill-router, ...)")
     p.add_argument("--skip-copy", action="store_true",
                    help="Do not copy .py files; only update settings.json "
                         "(use when scripts are already in target dir)")
     p.add_argument("--dry-run", action="store_true",
-                   help="Preview changes, write nothing")
+                        help="Preview changes, write nothing")
     args = p.parse_args()
+
+    if args.git_hooks:
+        try:
+            destination, backup = _install_git_pre_push(Path.home(), args.dry_run)
+        except RuntimeError as exc:
+            sys.exit(f"ERROR: {exc}")
+        if args.dry_run:
+            print("Dry-run complete. Re-run without --dry-run to apply.")
+        else:
+            print(f"Installed tracked pre-push wrapper: {destination}")
+            if backup is not None:
+                print(f"Previous wrapper backed up to: {backup}")
+        return 0
 
     try:
         hooks_dir, settings_path = _resolve_targets(args)
@@ -413,7 +466,13 @@ def main() -> int:
     deduplicated = 0
     for name, event, matcher in selection:
         script_path = hooks_dir / name
-        result = _merge_hook(settings, event, script_path, matcher)
+        result = _merge_hook(
+            settings,
+            event,
+            script_path,
+            matcher,
+            "codex" if args.codex else "claude",
+        )
         if result == "added":
             added += 1
             print(f"  registered: {event:18} {name}{f'  ({matcher})' if matcher else ''}")

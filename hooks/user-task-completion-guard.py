@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -38,9 +39,25 @@ STATE_SCHEMA = "agent-user-task-state/v1"
 TERMINAL_RECEIPT_SCHEMA = "agent-user-task-terminal-receipt/v1"
 RECONCILIATION_OBSERVATION_SCHEMA = "agent-reconciliation-observation/v1"
 RECONCILIATION_REGISTRATION_SCHEMA = "agent-reconciliation-registration-receipt/v1"
+CYCLE_SCHEMA = "agent-task-cycle/v1"
+INTERNAL_FINDING = "INTERNAL_FIXABLE"
+EXTERNAL_FINDING = "EXTERNAL_REQUIRED"
+REQUIRED_PROOF_ORDER = ["focused_test", "runtime_proof", "independent_review"]
 ACTIVE_STATUSES = {"OPEN", "IN_PROGRESS"}
 TERMINAL_STATUSES = {"COMPLETE", "BLOCKED_EXTERNAL"}
 ITEM_STATUSES = {"PENDING", "RUNNING", "PASS", "BLOCKED_EXTERNAL"}
+
+
+def load_task_cycle_controller() -> Any:
+    """Load the canonical validator instead of duplicating its proof trust rules."""
+    path = Path(__file__).with_name("task-cycle-controller.py")
+    spec = importlib.util.spec_from_file_location("user_task_cycle_controller", path)
+    if spec is None or spec.loader is None:
+        raise ValueError("cannot load task-cycle-controller.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 TASK_CAPTURE_ENV = "CLAUDE_USER_TASK_CAPTURE"
 
 # Derived from the live request ledger's deliberately conservative classifier.
@@ -249,8 +266,10 @@ def nonempty(value: Any, label: str) -> str:
     return value.strip()
 
 
-def reconciliation_item_ids(observation: dict[str, Any], task_dir: Path) -> tuple[list[str], list[str]]:
-    """Return satisfied ids and the controller finding ids an observation requires.
+def reconciliation_item_ids(
+    observation: dict[str, Any], task_dir: Path,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Return satisfied ids and unresolved ids with their required classifications.
 
     This intentionally checks only the receipt chain at Stop. The controller
     owns classification and proof-plan validation; the guard rejects a raw
@@ -260,7 +279,7 @@ def reconciliation_item_ids(observation: dict[str, Any], task_dir: Path) -> tupl
     if not isinstance(items, list) or not items:
         raise ValueError("reconciliation observation.items must be a non-empty list")
     satisfied: list[str] = []
-    unresolved: list[str] = []
+    unresolved: list[tuple[str, str]] = []
     seen: set[str] = set()
     for raw_item in items:
         if not isinstance(raw_item, dict):
@@ -271,12 +290,113 @@ def reconciliation_item_ids(observation: dict[str, Any], task_dir: Path) -> tupl
         if item_id in seen:
             raise ValueError(f"reconciliation observation repeats item_id {item_id!r}")
         seen.add(item_id)
-        if raw_item.get("state") == "SATISFIED":
+        state = raw_item.get("state")
+        if state == "SATISFIED":
             evidence_file(task_dir, raw_item.get("satisfaction_receipt"), f"{item_id}.satisfaction_receipt")
             satisfied.append(item_id)
+        elif state in {INTERNAL_FINDING, EXTERNAL_FINDING}:
+            unresolved.append((item_id, state))
         else:
-            unresolved.append(item_id)
+            raise ValueError(f"{item_id}.state is invalid: {state!r}")
     return satisfied, unresolved
+
+
+def utc_timestamp(value: Any, label: str) -> dt.datetime:
+    text = nonempty(value, label)
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label} is not ISO-8601: {text!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{label} must include a timezone")
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def validate_registered_work(
+    task_dir: Path,
+    expected: list[tuple[str, str]],
+    findings: list[Any],
+) -> None:
+    """Require every registered gap to have a current terminal controller order."""
+    finding_by_id: dict[str, dict[str, Any]] = {}
+    for raw in findings:
+        if not isinstance(raw, dict) or not isinstance(raw.get("finding_id"), str):
+            continue
+        finding_id = raw["finding_id"]
+        if finding_id in finding_by_id:
+            raise ValueError(f"findings.json repeats finding_id {finding_id!r}")
+        finding_by_id[finding_id] = raw
+
+    cycle_path = task_dir / "cycle.json"
+    if not cycle_path.is_file():
+        raise ValueError("registered reconciliation work is missing cycle.json")
+    cycle = load_json(cycle_path)
+    if cycle.get("schema") != CYCLE_SCHEMA:
+        raise ValueError(f"cycle.json.schema must equal {CYCLE_SCHEMA!r}")
+    orders = cycle.get("work_orders")
+    if not isinstance(orders, list):
+        raise ValueError("cycle.json.work_orders must be a list")
+    try:
+        controller = load_task_cycle_controller()
+        controller_cycle = controller.load_cycle(task_dir)
+        controller.validate_evidence_files(task_dir, controller_cycle)
+    except Exception as exc:
+        raise ValueError(f"cycle.json failed canonical controller validation: {exc}") from exc
+    order_by_id: dict[str, dict[str, Any]] = {}
+    for raw in orders:
+        if not isinstance(raw, dict) or not isinstance(raw.get("finding_id"), str):
+            continue
+        finding_id = raw["finding_id"]
+        if finding_id in order_by_id:
+            raise ValueError(f"cycle.json repeats finding_id {finding_id!r}")
+        order_by_id[finding_id] = raw
+
+    for finding_id, classification in expected:
+        finding = finding_by_id.get(finding_id)
+        if finding is None:
+            raise ValueError(f"registered reconciliation finding is missing: {finding_id}")
+        if finding.get("classification") != classification:
+            raise ValueError(f"{finding_id}: finding classification does not match the observation")
+        order = order_by_id.get(finding_id)
+        if order is None:
+            raise ValueError(f"{finding_id}: cycle work order is missing")
+        for key in (
+            "classification", "accepted_requirement", "boundary", "next_action",
+            "proof_requirements", "proof_plan",
+        ):
+            if order.get(key) != finding.get(key):
+                raise ValueError(f"{finding_id}: cycle work order is stale at {key}")
+
+        if classification == INTERNAL_FINDING:
+            if order.get("status") != "ACCEPTED":
+                raise ValueError(f"{finding_id}: internal reconciliation work is not ACCEPTED")
+            if order.get("proof_requirements") != REQUIRED_PROOF_ORDER:
+                raise ValueError(f"{finding_id}: internal proof order is invalid")
+            proofs = order.get("proofs")
+            if not isinstance(proofs, dict):
+                raise ValueError(f"{finding_id}.proofs must be an object")
+            for proof in REQUIRED_PROOF_ORDER:
+                record = proofs.get(proof)
+                if not isinstance(record, dict) or record.get("result") != "PASS":
+                    raise ValueError(f"{finding_id}: ACCEPTED is missing PASS evidence for {proof}")
+                evidence_file(task_dir, record.get("evidence"), f"{finding_id}.{proof}.evidence")
+            review = proofs["independent_review"]
+            nonempty(review.get("reviewer"), f"{finding_id}.independent_review.reviewer")
+            if review.get("fresh_context") is not True:
+                raise ValueError(f"{finding_id}: independent review must have fresh_context=true")
+            continue
+
+        if order.get("status") != "BLOCKED_EXTERNAL":
+            raise ValueError(f"{finding_id}: external reconciliation work is not BLOCKED_EXTERNAL")
+        nonempty(order.get("blocker"), f"{finding_id}.blocker")
+        nonempty(order.get("next_action"), f"{finding_id}.next_action")
+        checked = utc_timestamp(order.get("last_checked_at"), f"{finding_id}.last_checked_at")
+        next_check = utc_timestamp(order.get("next_check_at"), f"{finding_id}.next_check_at")
+        if next_check <= checked:
+            raise ValueError(f"{finding_id}.next_check_at must be after last_checked_at")
+        if next_check <= dt.datetime.now(dt.timezone.utc):
+            raise ValueError(f"{finding_id}.next_check_at is due; run the named recheck before completion")
+        evidence_file(task_dir, order.get("last_check_evidence"), f"{finding_id}.last_check_evidence")
 
 
 def assess_reconciliation_observation(task_dir: Path, observation_path: Path) -> str | None:
@@ -290,6 +410,7 @@ def assess_reconciliation_observation(task_dir: Path, observation_path: Path) ->
 
     registrations = sorted(observation_path.parent.glob("reconciliation-*-registration.json"))
     matched = False
+    terminal_defect: str | None = None
     for registration_path in registrations:
         try:
             registration = load_json(registration_path)
@@ -305,10 +426,14 @@ def assess_reconciliation_observation(task_dir: Path, observation_path: Path) ->
         batch_id = registration.get("batch_id")
         if not isinstance(batch_id, str) or not RECONCILIATION_COMPONENT_RE.fullmatch(batch_id):
             continue
-        expected = [f"RECONCILE-{batch_id}-{item_id}" for item_id in unresolved_items]
-        if registration.get("registered_findings") != expected:
+        expected = [
+            (f"RECONCILE-{batch_id}-{item_id}", classification)
+            for item_id, classification in unresolved_items
+        ]
+        expected_ids = [finding_id for finding_id, _ in expected]
+        if registration.get("registered_findings") != expected_ids:
             continue
-        if expected:
+        if expected_ids:
             findings_file = task_dir / "findings.json"
             try:
                 findings = load_json(findings_file).get("findings")
@@ -318,9 +443,16 @@ def assess_reconciliation_observation(task_dir: Path, observation_path: Path) ->
                 item.get("finding_id") for item in findings
                 if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
             } if isinstance(findings, list) else set()
-            if not set(expected).issubset(actual):
+            if not set(expected_ids).issubset(actual):
+                continue
+            try:
+                validate_registered_work(task_dir, expected, findings if isinstance(findings, list) else [])
+            except ValueError as exc:
+                terminal_defect = str(exc)
                 continue
         return None
+    if terminal_defect:
+        return terminal_defect
     if matched:
         return "controller registration receipt does not bind the current observation and every required finding"
     return "has no controller registration receipt"

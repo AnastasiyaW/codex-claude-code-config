@@ -81,15 +81,36 @@ def sync(source_root: Path, target_root: Path, backup_root: Path, apply: bool) -
     return residual, []
 
 
+def deployment_targets(
+    codex_target: Path,
+    codex_backup_root: Path,
+    *,
+    also_claude: bool,
+    also_agents: bool,
+    claude_target: Path,
+    claude_backup_root: Path,
+    agents_target: Path,
+    agents_backup_root: Path,
+) -> list[tuple[Path, Path]]:
+    """Return distinct deployment roots with their independently recoverable backups."""
+    targets = [(codex_target, codex_backup_root)]
+    for enabled, target, backup_root in (
+        (also_claude, claude_target, claude_backup_root),
+        (also_agents, agents_target, agents_backup_root),
+    ):
+        if enabled and all(target != existing_target for existing_target, _ in targets):
+            targets.append((target, backup_root))
+    return targets
+
+
 def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--source", type=Path, default=repo_root / "skills", help="repository skills directory")
-    # Codex reads two roots: user-level ~/.codex/skills, and project-level .agents/skills
-    # found by walking up from the cwd to the repository root. A home-level ~/.agents/skills
-    # is neither, so syncing there reported "synchronized: N skill(s)" while Codex saw none
-    # of them. Measured 2026-08-01 on two machines independently. Pass --target for the
-    # project-level root of a specific repo.
+    # Codex exposes both its user-level ~/.codex/skills and the shared
+    # ~/.agents/skills runtime root. Deploy the latter only when --also-agents
+    # is explicit: it can carry target-only skills owned outside this repository.
+    # A project-local .agents/skills root is still deployed by passing --target.
     parser.add_argument("--target", type=Path, default=Path.home() / ".codex" / "skills",
                         help="active Codex skills directory (default: user-level ~/.codex/skills)")
     parser.add_argument("--backup-root", type=Path, default=Path.home() / ".codex" / "skill-backups")
@@ -97,6 +118,23 @@ def main(argv: list[str] | None = None) -> int:
         "--also-claude",
         action="store_true",
         help="also synchronize the same source into ~/.claude/skills",
+    )
+    parser.add_argument(
+        "--also-agents",
+        action="store_true",
+        help="also synchronize the same source into the shared ~/.agents/skills Codex root",
+    )
+    parser.add_argument(
+        "--agents-target",
+        type=Path,
+        default=Path.home() / ".agents" / "skills",
+        help="shared Codex skills directory used with --also-agents",
+    )
+    parser.add_argument(
+        "--agents-backup-root",
+        type=Path,
+        default=Path.home() / ".agents" / "skill-backups",
+        help="backup root for changed ~/.agents/skills copies",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="report drift without writing (default)")
@@ -106,14 +144,21 @@ def main(argv: list[str] | None = None) -> int:
     if not args.source.is_dir():
         print(f"[skill-sync] source missing: {args.source}")
         return 2
-    targets = [args.target]
     claude_target = Path.home() / ".claude" / "skills"
-    if args.also_claude and claude_target not in targets:
-        targets.append(claude_target)
+    claude_backup_root = Path.home() / ".claude" / "skill-backups"
+    targets = deployment_targets(
+        args.target,
+        args.backup_root,
+        also_claude=args.also_claude,
+        also_agents=args.also_agents,
+        claude_target=claude_target,
+        claude_backup_root=claude_backup_root,
+        agents_target=args.agents_target,
+        agents_backup_root=args.agents_backup_root,
+    )
 
     had_drift = False
-    for target in targets:
-        backup_root = args.backup_root if target == args.target else Path.home() / ".claude" / "skill-backups"
+    for target, backup_root in targets:
         changes, errors = sync(args.source, target, backup_root, args.apply)
         for error in errors:
             print(f"[skill-sync] ERROR {target}: {error}")

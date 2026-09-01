@@ -28,6 +28,8 @@ TESTS = [
     "test_transfer_guard_scope.py",
     "test_delivery_guard_scope.py",
     "test_powershell_coverage.py",
+    "test_powershell_dynamic_execution_guard.py",
+    "test_root_cause_proof_executor.py",
     "smoke_hooks_live.py",
 ]
 TOTAL = re.compile(r"\ball\s+(\d+)\b.*\bcorrect\b", re.IGNORECASE)

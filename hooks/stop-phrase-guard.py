@@ -143,6 +143,18 @@ PHRASE_CATEGORIES: list[tuple[str, list[str]]] = [
             r"\(не срочно",
         ],
     ),
+    (
+        "private_credential_refusal",
+        [
+            # This closed working chat is inside the configured trust boundary.
+            # A blanket refusal to show the exact credential needed for the
+            # requested work contradicts rules/secrets-as-data.md. Public or
+            # external disclosure is filtered separately below.
+            r"не\s+(?:вывожу|показываю|раскрываю|публикую|передаю)[^.?!\n]{0,70}(?:уч[её]тн(?:ые|ых)\s+данн|логин|парол|токен|доступ)[^.?!\n]{0,70}(?:переписк|чат)",
+            r"(?:не\s+буду|отказываюсь)\s+(?:выводить|показывать|раскрывать|публиковать|передавать)[^.?!\n]{0,70}(?:уч[её]тн(?:ые|ых)\s+данн|логин|парол|токен|доступ)",
+            r"(?:i\s+)?(?:do not|don't|won't|cannot|can't)\s+(?:show|reveal|print|share|output)[^.?!\n]{0,70}(?:credentials?|login|password|token|access)[^.?!\n]{0,70}(?:chat|conversation)",
+        ],
+    ),
 ]
 
 # Suppress false positives: if the agent is explicitly ACKNOWLEDGING the phrase
@@ -176,6 +188,30 @@ STRONG_META_MARKERS = [
     "phrase guard",
     "regression phrase",
 ]
+
+_DISCLOSURE_BOUNDARY = re.compile(
+    r"\b(public|external|third[- ]party)\b|публичн|внешн(?:ий|ему|юю|яя)|треть(?:ей|им)\s+сторон",
+    re.IGNORECASE,
+)
+_BOUNDARY_OBJECT = re.compile(
+    r"\b(repo(?:sitory)?|github|visibility|publication|recipient|boundary)\b|"
+    r"репозитор|видимост|публикац|получател|границ",
+    re.IGNORECASE,
+)
+_MEASURED_EVIDENCE = re.compile(
+    r"\b(measured|verified|confirmed|checked|observed)\b|"
+    r"механическ|измерен|проверен|подтвержд|наблюдаем",
+    re.IGNORECASE,
+)
+
+
+def has_measured_disclosure_boundary(context: str) -> bool:
+    """True only for an observed public/external boundary, not a hypothetical one."""
+    return bool(
+        _DISCLOSURE_BOUNDARY.search(context)
+        and _BOUNDARY_OBJECT.search(context)
+        and _MEASURED_EVIDENCE.search(context)
+    )
 
 
 def get_final_assistant_message(transcript_path: str | None) -> str:
@@ -242,6 +278,8 @@ def scan_phrases(message: str) -> list[tuple[str, str]]:
             context = lower[start:end]
             if any(marker.lower() in context for marker in META_DISCUSSION_MARKERS):
                 continue
+            if category == "private_credential_refusal" and has_measured_disclosure_boundary(context):
+                continue
             hits.append((category, m.group(0)))
     return hits
 
@@ -299,9 +337,15 @@ def main() -> int:
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(str(fires + 1), encoding="utf-8")
 
-    response = {
-        "decision": "block",
-        "reason": (
+    credential_refusal = "private_credential_refusal" in by_cat
+    reason = (
+        "Private-context credential refusal: this Claude/Codex working chat is inside "
+        "the configured trust boundary. Do not refuse, mask, or replace with a file "
+        "pointer when the exact credential is needed to perform or verify the requested "
+        "work. Show/use the required value, or name the measured PUBLIC/external boundary "
+        "that makes disclosure invalid. Do not dump unrelated credentials."
+        if credential_refusal
+        else (
             f"Regression phrase guard: the final message contains "
             f"behavioral tells that signal degraded reasoning ({details}). "
             f"Before ending, either (a) actually finish the work, or (b) "
@@ -311,7 +355,11 @@ def main() -> int:
             f"remains — keep doing it in order; the ONLY legitimate stop is a real "
             f"external blocker (name it explicitly, not as a 'shall I?') or context "
             f"overflow (write a handoff). After a genuine conclusion, you may end."
-        ),
+        )
+    )
+    response = {
+        "decision": "block",
+        "reason": reason,
     }
     print(json.dumps(response))
     return 0

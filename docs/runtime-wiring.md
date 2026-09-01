@@ -42,7 +42,7 @@ pass.
 | Agent-doc freshness | `SessionStart` advisory + `Stop` gate | `SessionStart` advisory + `Stop` gate | hook self-tests |
 | Git source-of-truth setup | `Stop` for long-run projects | `Stop` for long-run projects | `test_lifecycle_hook_contracts.py` |
 | File transfer continuity | `PreToolUse` + `PostToolUse` + `Stop` | `PreToolUse` + `PostToolUse` + `Stop` | `scripts/test_transfer_contract.py` |
-| Skills availability | active skill directory | `~/.claude/skills` | `sync_skills_to_codex.py --check --also-claude` and `skills-lock.json` |
+| Skills availability | `~/.codex/skills` + shared `~/.agents/skills` | `~/.claude/skills` | `sync_skills_to_codex.py --check --also-claude --also-agents` and `skills-lock.json` |
 | Routed subagent skill assignment | `SubagentStart` injects universal selection discipline; `SubagentStop` requires one source-shaped decision receipt | coordinator renders a task-bound contract before delegation; `PreToolUse(Task)` denies a child brief without one complete contract | `scripts/test_subagent_skill_context.py`, `scripts/test_subagent_evidence_receipt.py`, `scripts/test_agent_skill_contract.py`; live client events for activation |
 | Skills survive a machine/account move | active skill directory | `~/.claude/skills` | `recover_skill_trees.py --report` |
 | Optional RTK output compression | instruction-level (`AGENTS.md`) | native `PreToolUse` hook | `scripts/test_rtk_integration.py` plus pinned binary verification |
@@ -187,7 +187,7 @@ python scripts/test_task_completion_hooks.py
 python scripts/test_agent_skill_contract.py
 python scripts/test_subagent_skill_context.py
 python scripts/test_subagent_evidence_receipt.py
-python scripts/sync_skills_to_codex.py --check
+python scripts/sync_skills_to_codex.py --check --also-claude --also-agents
 ```
 
 For a plugin update that causes a hook-schema error:

@@ -23,6 +23,7 @@ Design notes:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import re
 import shutil
 import sys
@@ -34,6 +35,49 @@ DONE_STATUSES = {"CLOSED", "RESUMED", "ABANDONED"}
 ACTIVE_STATUSES = {"ACTIVE"}
 
 STATUS_RE = re.compile(r"^\s*\*\*Status:\*\*\s*([A-Z-]+)", re.MULTILINE)
+FILENAME_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})(?:_|\.)")
+
+
+def handoff_timestamp(md_path: Path) -> float | None:
+    """Return the canonical handoff timestamp encoded in its filename.
+
+    A checkout, sync, or an archive move changes mtime, so mtime is not valid
+    evidence of when a handoff was written. Files without the canonical
+    ``YYYY-MM-DD_HH-MM_...`` prefix are not inventory candidates; they may be
+    project notes that happen to live beside handoffs.
+    """
+    match = FILENAME_TIMESTAMP_RE.match(md_path.name)
+    if not match:
+        return None
+    try:
+        written = datetime.strptime(
+            f"{match.group(1)}_{match.group(2)}-{match.group(3)}",
+            "%Y-%m-%d_%H-%M",
+        )
+        return time.mktime(written.timetuple())
+    except ValueError:
+        return None
+
+
+def inventory_handoffs(handoffs_dir: Path) -> tuple[list[Path], list[Path]]:
+    """Return canonical flat/nested handoffs and non-canonical files skipped.
+
+    The multi-session format stores one handoff directly below the project
+    directory. Do not recurse beyond that contract: deeper markdown can be
+    task evidence or an archived tree, neither of which is cleanup input.
+    """
+    candidates = list(handoffs_dir.glob("*.md")) + list(handoffs_dir.glob("*/*.md"))
+    handoffs: list[Path] = []
+    skipped: list[Path] = []
+    for md_path in sorted(set(candidates)):
+        relative = md_path.relative_to(handoffs_dir)
+        if md_path.name.startswith("INDEX") or "archive" in relative.parts:
+            continue
+        if handoff_timestamp(md_path) is None:
+            skipped.append(md_path)
+            continue
+        handoffs.append(md_path)
+    return handoffs, skipped
 
 
 def parse_status(md_path: Path) -> str:
@@ -55,7 +99,10 @@ def parse_status(md_path: Path) -> str:
 def classify(md_path: Path, now: float, done_ttl: int, orphan_ttl: int) -> str:
     """Classify handoff into: keep | archive | orphan."""
     status = parse_status(md_path)
-    age_days = (now - md_path.stat().st_mtime) / 86400
+    timestamp = handoff_timestamp(md_path)
+    if timestamp is None:
+        raise ValueError(f"non-canonical handoff filename: {md_path.name}")
+    age_days = (now - timestamp) / 86400
 
     if status in DONE_STATUSES:
         if age_days > done_ttl:
@@ -92,11 +139,8 @@ def main() -> int:
 
     buckets = {"keep": [], "archive": [], "orphan": []}
 
-    for md_path in handoffs_dir.glob("*.md"):
-        if md_path.name.startswith("INDEX"):
-            continue  # principle 18: INDEX is append-only, never touched
-        if md_path.parent.name == "archive":
-            continue
+    handoff_files, skipped_files = inventory_handoffs(handoffs_dir)
+    for md_path in handoff_files:
         bucket = classify(md_path, now, args.done_ttl, args.orphan_ttl)
         buckets[bucket].append(md_path)
 
@@ -104,12 +148,14 @@ def main() -> int:
     print(f"  Keep:    {len(buckets['keep'])}")
     print(f"  Archive: {len(buckets['archive'])} (DONE, older than {args.done_ttl}d)")
     print(f"  Orphan:  {len(buckets['orphan'])} (ACTIVE/UNKNOWN, older than {args.orphan_ttl}d)")
+    if skipped_files:
+        print(f"  Skipped: {len(skipped_files)} (non-canonical filenames; no trustworthy handoff timestamp)")
     print()
 
     if buckets["orphan"]:
         print("ORPHANS (review manually - may be real forgotten work):")
         for p in sorted(buckets["orphan"]):
-            age = (now - p.stat().st_mtime) / 86400
+            age = (now - handoff_timestamp(p)) / 86400
             print(f"  {p.name}  ({age:.0f}d old, status={parse_status(p)})")
         print()
 
@@ -117,7 +163,7 @@ def main() -> int:
         if buckets["archive"]:
             print("Would archive (dry run):")
             for p in sorted(buckets["archive"]):
-                age = (now - p.stat().st_mtime) / 86400
+                age = (now - handoff_timestamp(p)) / 86400
                 print(f"  {p.name}  ({age:.0f}d old)")
             print()
             print("Run with --apply to actually move files.")

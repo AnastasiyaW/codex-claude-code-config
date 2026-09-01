@@ -27,7 +27,9 @@
   копия на месте).
 
 ## Механически (на хуках, активно — все wired)
-- `human-confirmation-guard.py` (PreToolUse) — требует подтверждения для destructive intent.
+- `human-confirmation-guard.py` (PreToolUse) — до появления host-verifiable approval
+  record блокирует destructive intent; текстовый маркер в команде не является
+  подтверждением пользователя.
 - `destructive-command-guard.py` / `git-destructive-guard.py` — блок катастрофических удалений.
 - `db-snapshot-guard.py` — снапшот БД перед destructive SQL.
 - `verify-deleted-guard.py` (PostToolUse) — проверяет, что destructive-операция реально завершилась.

@@ -24,14 +24,51 @@ prose.
 python hooks/task-cycle-controller.py reconcile --task-dir .agent/tasks/<id>
 python hooks/task-cycle-controller.py next --task-dir .agent/tasks/<id> --json
 python hooks/task-cycle-controller.py record-proof --task-dir .agent/tasks/<id> \
-  --finding F-001 --proof focused_test --result PASS --evidence evidence/test.txt
+  --finding F-001 --proof focused_test --result PASS \
+  --evidence evidence/focused-test.receipt.json
 ```
 
 `findings.json` is evaluator input. The controller writes `cycle.json`
 atomically and rejects mutation of a finding's frozen contract under the same
-ID. Evidence paths must already exist under the named task directory. A failed
-proof requires a new causal boundary/action and clears later proof epochs; after
-three failures the finding escalates rather than looping forever.
+ID. `--evidence` is a typed `agent-task-proof-receipt/v1` JSON receipt, not raw
+stdout or a prose claim. It binds `finding_id`, proof, unique `attempt_id`, UTC
+`recorded_at`, result, producer identity, a separate raw evidence path, and that
+artifact's SHA-256. Command proofs name their argv. Independent-review receipts
+instead name the reviewer and require `fresh_context: true` plus a verdict equal
+to the recorded result. The controller re-hashes both receipt and raw evidence
+whenever it validates the cycle.
+
+Every internal order carries durable `max_attempts`, `max_tool_calls`, and
+`max_wall_time_seconds` budgets plus a monotonic receipt history. Reusing an
+attempt ID or receipt digest is rejected. A failed proof requires a new causal
+boundary/action and clears later proof epochs; exhausted attempts, proof calls,
+or wall time produce explicit `BUDGET_EXHAUSTED` with `completed: false`, never
+`ACCEPTED` or `BLOCKED_EXTERNAL`.
+
+Cycles accepted before typed receipts were introduced remain readable through an
+explicit terminal-only `legacy_terminal_proofs` marker. Their evidence paths are
+still required to exist, but they cannot accept another proof or return to active
+work under the legacy shape. Every active or newly accepted order uses typed receipts.
+
+Minimal command receipt shape:
+
+```json
+{
+  "schema": "agent-task-proof-receipt/v1",
+  "finding_id": "F-001",
+  "proof": "focused_test",
+  "attempt_id": "F-001-focused-001",
+  "recorded_at": "2026-09-01T10:00:00Z",
+  "evidence_path": "evidence/focused-test.raw.txt",
+  "evidence_sha256": "<lowercase sha256>",
+  "result": "PASS",
+  "producer": {
+    "type": "command",
+    "identity": "pytest",
+    "command": ["python", "-m", "pytest", "-q", "tests/test_focused.py"]
+  }
+}
+```
 
 ## Heartbeat rule
 
@@ -95,7 +132,9 @@ returns `WORK` for the first internal action. It does not perform a domain
 side effect or give new authority. A fully receipted observation returns
 `RECONCILIATION_SATISFIED`; a status paragraph is not a completion state. The
 active Stop guard also rejects a structured observation until this registration
-receipt binds its current SHA and every required finding.
+receipt binds its current SHA and every required finding, and then continues to
+reject it until every bound internal order is `ACCEPTED` or every external order
+has current `BLOCKED_EXTERNAL` recheck evidence.
 
 ### Legacy action migration
 

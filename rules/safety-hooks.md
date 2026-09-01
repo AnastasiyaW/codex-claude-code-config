@@ -29,7 +29,7 @@ Env vars через inline `FOO=1 cmd` НЕ видны хуку — нужен m
 | `self-harm-guard.py` | restart sshd (единств. сессия), kill node/bun/python, iptables/ufw DROP, reboot | self-harm | только при наличии второго канала на хост |
 | `test-muting-guard.py` | @pytest.mark.skip/xfail, it.skip, @Disabled, t.Skip | test-muting | чинить тест; skip только с reason + issue-link |
 | `command-injection-guard.py` | `$(...)` / backticks с non-trivial body (Bash) | injection | одинарные кавычки; heredoc `'EOF'`; `--body-file`/stdin |
-| `human-confirmation-guard.py` | любой destructive intent без явного подтверждения user | (подтвердить) | спросить user с конкретным списком, что удаляем (см. `deletion-confirm-and-verify.md`) |
+| `human-confirmation-guard.py` | любой destructive intent вне routine safe-targets | host-verifiable approval record (пока отсутствует) | block; текст в команде не является approval (см. `deletion-confirm-and-verify.md`) |
 | `ask-question-guard.py` | deferral/меню-ВОПРОС через `AskUserQuestion` на обратимом | ask (`CLAUDE_ALLOW_ASK=1`) | решить самой и делать; спрашивать только необратимое/genuine-fork конкретным вопросом |
 | `db-snapshot-guard.py` | bypass'нутый destructive SQL без снапшота | — | авто-снапшот БД перед операцией |
 | `file-cohesion-guard.py` | (advisory, не блок) durable-файл в scratch-локации | — | положить в правильное место структуры (см. `file-organization-cohesion.md`) |

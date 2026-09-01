@@ -1,0 +1,53 @@
+#!/bin/sh
+# Canonical machine-wide pre-push chain.  Installed by:
+#   python scripts/install_hooks.py --git-hooks
+#
+# This wrapper intentionally lives in the tracked config repository; the live
+# core.hooksPath copy is only the installed artifact.  Do not point the public
+# scan at ~/.claude/scripts/: that legacy tree is not versioned and can drift.
+set -e
+
+case "$0" in
+    */*) HOOK_DIR_PART=${0%/*} ;;
+    *) echo "[pre-push] cannot resolve physical hook path — push blocked" >&2; exit 2 ;;
+esac
+SCRIPT_DIR="$(CDPATH= cd -- "$HOOK_DIR_PART" && pwd -P)"
+CLAUDE_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+USER_ROOT="$(CDPATH= cd -- "$CLAUDE_DIR/.." && pwd -P)"
+CANONICAL_ROOT="$CLAUDE_DIR/claude-code-config"
+ATTRIBUTION_SCANNER="$CLAUDE_DIR/scripts/pre_push_claude_attribution.py"
+PUBLIC_SCANNER="$CANONICAL_ROOT/hooks/pre-push-public-repo-scan.py"
+
+# The caller controls ordinary environment variables.  Rebuild the small trusted
+# runtime environment from this hook's physical installed location before using
+# any external command, Python discovery, gh auth store, or scanner lookup.
+HOME="$USER_ROOT"
+USERPROFILE="$USER_ROOT"
+APPDATA="$USER_ROOT/AppData/Roaming"
+LOCALAPPDATA="$USER_ROOT/AppData/Local"
+PATH="/mingw64/bin:/usr/bin:/bin:$USER_ROOT/AppData/Local/Programs/GitHubCLI/bin:/c/Program Files/Git/cmd"
+export HOME USERPROFILE APPDATA LOCALAPPDATA PATH
+unset CLAUDE_CONFIG_ROOT CLAUDE_PUBLIC_SCAN_NAMES GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN GITHUB_TOKEN
+
+STDIN_DATA="$(cat)"
+
+# WindowsApps Python stubs can be present on PATH but not executable from Git's
+# bash. Prefer a verified interpreter, then a regular PATH Python.
+PY=""
+for candidate in "$USER_ROOT"/AppData/Roaming/uv/python/cpython-3.1*/python.exe \
+                 /usr/bin/python3 /usr/local/bin/python3; do
+    [ -x "$candidate" ] && "$candidate" -c "" >/dev/null 2>&1 && PY="$candidate" && break
+done
+[ -n "$PY" ] || { echo "[pre-push] no working Python interpreter — push blocked" >&2; exit 2; }
+
+if [ ! -f "$ATTRIBUTION_SCANNER" ]; then
+    echo "[pre-push] attribution scanner missing: $ATTRIBUTION_SCANNER — push blocked" >&2
+    exit 2
+fi
+if [ ! -f "$PUBLIC_SCANNER" ]; then
+    echo "[pre-push] canonical public scanner missing: $PUBLIC_SCANNER — push blocked" >&2
+    exit 2
+fi
+
+printf '%s\n' "$STDIN_DATA" | "$PY" "$ATTRIBUTION_SCANNER"
+printf '%s\n' "$STDIN_DATA" | "$PY" "$PUBLIC_SCANNER" "$@"

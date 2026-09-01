@@ -56,6 +56,61 @@ class SyncSkillsToCodexTests(unittest.TestCase):
             self.assertEqual(changes, {})
             self.assertEqual(len(errors), 1)
 
+    def test_three_target_check_and_apply_preserves_target_only_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            source_skill = source / "development" / "demo-skill"
+            source_skill.mkdir(parents=True)
+            (source_skill / "SKILL.md").write_text("fresh", encoding="utf-8")
+
+            codex_target = base / "codex" / "skills"
+            claude_target = base / "claude" / "skills"
+            agents_target = base / "agents" / "skills"
+            backups = {
+                codex_target: base / "codex" / "backups",
+                claude_target: base / "claude" / "backups",
+                agents_target: base / "agents" / "backups",
+            }
+            for target in backups:
+                (target / "demo-skill").mkdir(parents=True)
+                (target / "demo-skill" / "SKILL.md").write_text("old", encoding="utf-8")
+                (target / "target-only" / "SKILL.md").parent.mkdir(parents=True)
+                (target / "target-only" / "SKILL.md").write_text("keep", encoding="utf-8")
+
+            targets = MODULE.deployment_targets(
+                codex_target,
+                backups[codex_target],
+                also_claude=True,
+                also_agents=True,
+                claude_target=claude_target,
+                claude_backup_root=backups[claude_target],
+                agents_target=agents_target,
+                agents_backup_root=backups[agents_target],
+            )
+            self.assertEqual(targets, [(target, backups[target]) for target in backups])
+
+            for target, backup_root in targets:
+                changes, errors = MODULE.sync(source, target, backup_root, apply=False)
+                self.assertEqual(errors, [])
+                self.assertIn("demo-skill", changes)
+
+            for target, backup_root in targets:
+                residual, errors = MODULE.sync(source, target, backup_root, apply=True)
+                self.assertEqual(errors, [])
+                self.assertEqual(residual, {})
+                self.assertEqual((target / "demo-skill" / "SKILL.md").read_text(encoding="utf-8"), "fresh")
+                self.assertEqual((target / "target-only" / "SKILL.md").read_text(encoding="utf-8"), "keep")
+                self.assertEqual(len(list(backup_root.rglob("SKILL.md"))), 1)
+
+    def test_runtime_docs_show_explicit_three_target_command(self) -> None:
+        repo_root = SCRIPT.parent.parent
+        readme = (repo_root / "README.md").read_text(encoding="utf-8")
+        runtime_wiring = (repo_root / "docs" / "runtime-wiring.md").read_text(encoding="utf-8")
+
+        self.assertIn("sync_skills_to_codex.py --apply --also-claude --also-agents", readme)
+        self.assertIn("sync_skills_to_codex.py --check --also-claude --also-agents", runtime_wiring)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
