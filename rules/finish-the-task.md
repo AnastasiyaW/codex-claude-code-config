@@ -86,6 +86,18 @@
 артефактом, retry частично мутировавшей операции или переносом дефекта в документацию. Для
 необратимого удаления по-прежнему действует отдельное подтверждение пользователя.
 
+### Plan/source drift is repair work, not a stopping report
+
+If a canonical plan or receipt pins a SHA-256 that differs from the current
+reviewed source, the agent must not merely report it. When a fresh receipt
+proves that no process is running and the declared output root is absent, it
+must register `INTERNAL_FIXABLE` work with
+`task-cycle-controller.py register-plan-drift`, create the successor
+plan/receipt, run no-launch preflight, and obtain fresh review. Only the
+existence of outputs changes the route: then first create a separate internal
+migration-assessment finding; never silently rewrite an in-use plan and never
+mislabel the mismatch as `BLOCKED_EXTERNAL`.
+
 ### Visible execution: action, not user homework
 
 For work that is still in progress, every substantive update must make forward motion inspectable:

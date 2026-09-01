@@ -2,6 +2,7 @@
 """Executable contracts for the task-cycle controller."""
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -222,6 +223,68 @@ class TaskCycleControllerTests(unittest.TestCase):
         code, _result, stderr = self.invoke("next")
         self.assertEqual(code, 2)
         self.assertIn("ACCEPTED is missing PASS evidence", stderr)
+
+    def test_prelaunch_plan_drift_registers_internal_repair_and_returns_work(self) -> None:
+        expected = hashlib.sha256(b"old reviewed source\n").hexdigest()
+        plan = self.task / "person-plan.md"
+        plan.write_text(f"script sha256: {expected}\n", encoding="utf-8")
+        source = self.task / "person_pose_hand.py"
+        source.write_text("new reviewed source with ear zones\n", encoding="utf-8")
+        output_root = self.task / "person-output"
+
+        code, result, stderr = self.invoke(
+            "register-plan-drift",
+            "--finding",
+            "PLAN-DRIFT-001",
+            "--plan",
+            str(plan),
+            "--source",
+            str(source),
+            "--expected-sha256",
+            expected,
+            "--output-root",
+            str(output_root),
+            "--quiescence-evidence",
+            self.evidence("person-quiescent.json"),
+        )
+
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "WORK")
+        self.assertEqual(result and result["registered"], "PLAN-DRIFT-001")
+        self.assertEqual(result and result["next_proof"], "focused_test")
+        self.assertTrue((self.task / result["drift_evidence"]).is_file())
+        findings = json.loads((self.task / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(findings["findings"][0]["classification"], "INTERNAL_FIXABLE")
+        self.assertIn(hashlib.sha256(source.read_bytes()).hexdigest(), findings["findings"][0]["boundary"])
+
+    def test_plan_drift_does_not_rewrite_or_queue_after_output_root_exists(self) -> None:
+        expected = hashlib.sha256(b"old reviewed source\n").hexdigest()
+        plan = self.task / "person-plan.md"
+        plan.write_text(f"script sha256: {expected}\n", encoding="utf-8")
+        source = self.task / "person_pose_hand.py"
+        source.write_text("new reviewed source with ear zones\n", encoding="utf-8")
+        output_root = self.task / "person-output"
+        output_root.mkdir()
+
+        code, _result, stderr = self.invoke(
+            "register-plan-drift",
+            "--finding",
+            "PLAN-DRIFT-001",
+            "--plan",
+            str(plan),
+            "--source",
+            str(source),
+            "--expected-sha256",
+            expected,
+            "--output-root",
+            str(output_root),
+            "--quiescence-evidence",
+            self.evidence("person-quiescent.json"),
+        )
+
+        self.assertEqual(code, 2)
+        self.assertIn("migration assessment", stderr)
+        self.assertFalse((self.task / "findings.json").exists())
 
 
 if __name__ == "__main__":

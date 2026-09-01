@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -42,6 +44,7 @@ ACTIVE = {"READY", "IN_PROGRESS", "TESTING", "RUNTIME_PROOF", "REVIEWING"}
 TERMINAL = {"ACCEPTED", "ESCALATED"}
 MAX_FAILED_PROOFS = 3
 REQUIRED_PROOF_ORDER = ["focused_test", "runtime_proof", "independent_review"]
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FROZEN_KEYS = (
     "classification",
     "accepted_requirement",
@@ -100,6 +103,14 @@ def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def nonempty_string(value: Any, field: str) -> str:
@@ -285,6 +296,111 @@ def reconcile(task_dir: Path) -> dict[str, Any]:
     validate_evidence_files(task_dir, cycle)
     write_json_atomic(cycle_path(task_dir), cycle)
     return {"decision": "RECONCILED", "created": created, "work_orders": len(cycle["work_orders"])}
+
+
+def register_plan_drift(
+    task_dir: Path,
+    finding_id: str,
+    plan_path: Path,
+    source_path: Path,
+    expected_sha256: str,
+    output_root: Path,
+    quiescence_evidence: str,
+) -> dict[str, Any]:
+    """Turn a measured, pre-launch plan/source mismatch into internal work.
+
+    The automatic route is deliberately narrow: the plan must visibly pin the
+    supplied digest, the source must now differ, a real no-process receipt must
+    already be under ``evidence/``, and the declared output root must not exist.
+    Once outputs exist, a successor plan can require migration or invalidation;
+    this helper refuses to guess which one is safe.
+    """
+    finding_id = nonempty_string(finding_id, "--finding")
+    expected = nonempty_string(expected_sha256, "--expected-sha256").lower()
+    if not SHA256_RE.fullmatch(expected):
+        raise CycleError("--expected-sha256 must be a lowercase SHA-256 digest")
+    if not plan_path.is_file():
+        raise CycleError(f"plan file does not exist: {plan_path}")
+    if not source_path.is_file():
+        raise CycleError(f"source file does not exist: {source_path}")
+    if output_root.exists():
+        raise CycleError(
+            "plan drift is not auto-repairable after output-root exists; "
+            "record a separate migration assessment finding"
+        )
+    plan_text = plan_path.read_text(encoding="utf-8", errors="replace")
+    if expected not in plan_text.lower():
+        raise CycleError("plan does not contain the expected SHA-256 digest")
+    actual = sha256_file(source_path)
+    if actual == expected:
+        raise CycleError("source SHA-256 matches the plan; no plan drift exists")
+    quiescence_receipt = evidence_path(task_dir, quiescence_evidence)
+
+    finding = {
+        "finding_id": finding_id,
+        "classification": INTERNAL,
+        "accepted_requirement": (
+            "The execution plan and receipt must pin the reviewed source SHA-256 before launch."
+        ),
+        "boundary": (
+            f"plan/source digest drift: expected {expected}, observed {actual}; "
+            f"output root is absent: {output_root}"
+        ),
+        "next_action": (
+            "Create a successor plan and receipt for the reviewed source, then run its no-launch preflight."
+        ),
+        "proof_requirements": REQUIRED_PROOF_ORDER,
+        "proof_plan": {
+            "focused_test": (
+                "Review the exact old/new source diff, write a successor plan and receipt pinning "
+                f"{actual}, then run its focused validator; save the receipt under evidence/."
+            ),
+            "runtime_proof": (
+                "Run the successor plan's no-launch preflight and save a fresh process/output trace under evidence/."
+            ),
+            "independent_review": (
+                "A fresh reviewer verifies the source diff, successor SHA, quiescence receipt, and no-launch trace."
+            ),
+        },
+    }
+    validated = validate_finding(finding)
+    input_path = findings_path(task_dir)
+    if input_path.exists():
+        input_data = load_json(input_path, "findings.json")
+        if input_data.get("schema") != FINDINGS_SCHEMA or not isinstance(input_data.get("findings"), list):
+            raise CycleError("findings.json is not a valid task finding document")
+        findings = list(input_data["findings"])
+    else:
+        input_data = {"schema": FINDINGS_SCHEMA}
+        findings = []
+    if any(isinstance(item, dict) and item.get("finding_id") == finding_id for item in findings):
+        raise CycleError(f"{finding_id}: finding already exists; do not overwrite its frozen contract")
+
+    receipt_path = task_dir / "evidence" / f"{finding_id}-plan-drift.json"
+    write_json_atomic(
+        receipt_path,
+        {
+            "schema": "agent-plan-drift-receipt/v1",
+            "finding_id": finding_id,
+            "detected_at": now_utc(),
+            "plan": str(plan_path.resolve()),
+            "source": str(source_path.resolve()),
+            "expected_sha256": expected,
+            "actual_sha256": actual,
+            "output_root": str(output_root.resolve()),
+            "output_root_exists": False,
+            "quiescence_evidence": quiescence_receipt,
+        },
+    )
+    findings.append(validated)
+    input_data["findings"] = findings
+    write_json_atomic(input_path, input_data)
+    reconciled = reconcile(task_dir)
+    decision = select_next(load_cycle(task_dir))
+    decision["registered"] = finding_id
+    decision["drift_evidence"] = receipt_path.relative_to(task_dir).as_posix()
+    decision["reconciled"] = reconciled
+    return decision
 
 
 def evidence_path(task_dir: Path, supplied: str) -> str:
@@ -576,6 +692,15 @@ def main(argv: list[str] | None = None) -> int:
     legacy.add_argument("--original-action", required=True)
     legacy.add_argument("--evidence", required=True)
     legacy.add_argument("--json", action="store_true")
+    drift = sub.add_parser("register-plan-drift")
+    drift.add_argument("--task-dir", type=Path, required=True)
+    drift.add_argument("--finding", required=True)
+    drift.add_argument("--plan", type=Path, required=True)
+    drift.add_argument("--source", type=Path, required=True)
+    drift.add_argument("--expected-sha256", required=True)
+    drift.add_argument("--output-root", type=Path, required=True)
+    drift.add_argument("--quiescence-evidence", required=True)
+    drift.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
         task_dir = args.task_dir.resolve()
@@ -598,6 +723,16 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "migrate-legacy-action":
             result = migrate_legacy_action(task_dir, args.finding, args.original_action, args.evidence)
+        elif args.command == "register-plan-drift":
+            result = register_plan_drift(
+                task_dir,
+                args.finding,
+                args.plan.resolve(),
+                args.source.resolve(),
+                args.expected_sha256,
+                args.output_root.resolve(),
+                args.quiescence_evidence,
+            )
         else:
             result = record_external_check(
                 task_dir, args.finding, args.evidence, args.next_check_at, args.blocker,

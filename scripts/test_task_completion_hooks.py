@@ -111,11 +111,18 @@ class TaskCompletionHookTests(unittest.TestCase):
         offenders: list[str] = []
         for path in PLUGIN_CACHE.rglob("hooks.json"):
             data = json.loads(path.read_text(encoding="utf-8"))
-            extra = sorted(set(data) - {"hooks"})
+            # Official Claude marketplace packages may add human-readable
+            # metadata here. Codex consumes the ``hooks`` object; keep that
+            # contract strict while accepting the documented string metadata.
+            extra = sorted(set(data) - {"hooks", "description"})
             if extra:
                 offenders.append(f"{path}: unsupported top-level keys {extra}")
             if "hooks" not in data:
                 offenders.append(f"{path}: missing top-level hooks")
+            if "description" in data and (
+                not isinstance(data["description"], str) or not data["description"].strip()
+            ):
+                offenders.append(f"{path}: description must be a non-empty string")
         self.assertEqual(offenders, [], "\n".join(offenders))
 
     def test_hook_command_targets_exist(self) -> None:

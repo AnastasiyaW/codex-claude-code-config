@@ -53,6 +53,28 @@ It considers only immediate subdirectories with `findings.json`, persists
 next item (`WORK` or `RECHECK_EXTERNAL`). It never creates findings from chat,
 executes a proof, or records a pass: those require the named work and evidence.
 
+### Plan/source digest drift
+
+A report that a plan pins one SHA-256 while the reviewed local source has
+another is not an external blocker. Before a launch, write a real quiescence
+receipt (no process and no output), then turn the observation into the next
+internal work order rather than ending with prose:
+
+```text
+python hooks/task-cycle-controller.py register-plan-drift \
+  --task-dir .agent/tasks/<id> --finding PLAN-DRIFT-001 \
+  --plan <canonical-plan> --source <current-script> \
+  --expected-sha256 <digest-recorded-in-plan> --output-root <expected-output-root> \
+  --quiescence-evidence evidence/preflight-quiescent.json --json
+```
+
+The command proves that the plan actually pins the old digest, records the
+observed digest, requires the output root to be absent, appends an
+`INTERNAL_FIXABLE` finding, reconciles it, and returns `WORK` for the successor
+plan/preflight/review cycle. It deliberately refuses once the output root
+exists: an agent must then make a separate internal migration-assessment
+finding, not rewrite the plan or call it external by default.
+
 ### Legacy action migration
 
 Only a pre-controller cycle where a failed proof overwrote its frozen
