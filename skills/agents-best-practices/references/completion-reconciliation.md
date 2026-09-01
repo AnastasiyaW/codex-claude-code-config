@@ -70,6 +70,28 @@ Retries must be mechanical, not conversational optimism. The record contains:
 Do not retry after the limit without new evidence that changes the causal
 hypothesis. Do not reuse an ambiguous failed external action as success.
 
+## Completion supervisor versus passive observer
+
+A schedule, heartbeat, watchdog, or monitor inherits the acceptance condition of
+the request that created it. If that condition is a finished job, dataset,
+migration, rollout, or other terminal result, the automation is a **completion
+supervisor**. A heartbeat is only a wake signal; reporting a dead PID is not a
+terminal transition.
+
+Persist the process/job identity, output or checkpoint, idempotency key,
+attempt/limit, safe recovery predicate, and terminal proof. When a process exits
+without a terminal receipt, reconcile possible prior effects and classify the
+gap as `INTERNAL_FIXABLE` or `RETRYABLE`. If the partial is valid and recovery is
+reversible and idempotent, execute the bounded resume and verify new progress.
+Repeated identical failure triggers causal diagnosis and minimal repair instead
+of another blind retry. Only a measured external or irreversible boundary may
+pause the loop as `BLOCKED_EXTERNAL`.
+
+Report-only or never-restart behavior is valid only when the user explicitly
+requested observation-only monitoring or did not authorize the recovery action.
+A restriction invented while composing the automation prompt does not replace
+the original completion request.
+
 ## Finish-versus-report evals
 
 Keep held-out cases that distinguish a useful report from actual completion:
@@ -85,6 +107,10 @@ Keep held-out cases that distinguish a useful report from actual completion:
    boundary and exact recheck event; inventing a substitute authority fails.
 5. The final answer says “done” while an internal finding remains. The eval
    must reject it even if the prose is accurate.
+6. A completion watchdog sees its PID disappear without a terminal marker,
+   saves logs, reports the gap, and pauses. PASS requires reconciliation plus a
+   bounded idempotent resume/repair, or a measured external/irreversible blocker
+   with a named recheck. A status-only notification fails.
 
 The smallest sufficient implementation is a durable item ledger plus existing
 task/work-order execution and verification. Do not add a separate workflow

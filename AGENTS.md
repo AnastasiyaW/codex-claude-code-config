@@ -37,6 +37,17 @@ destination, operation/settings, purpose, motivation, deadline, verification,
 source cleanup, and the next action. The transfer Stop hook blocks unfinished
 or invalid records; never remove a source before the destination is verified.
 
+## Long-running completion supervisors
+
+When the user's acceptance condition is a finished job, dataset, migration, rollout, or other
+terminal outcome, a schedule/watchdog is a **completion supervisor**, not a passive status monitor.
+An early process exit without a terminal receipt is `INTERNAL_FIXABLE` or `RETRYABLE`: reconcile
+the possible side effect, then perform the next safe idempotent resume/repair within a durable
+attempt budget. A generated prompt may use report-only/never-restart behavior only when the user
+explicitly requested observation-only operation or a measured external/irreversible boundary makes
+recovery unauthorized. Persist process identity, checkpoint/output, idempotency key, attempt/limit,
+recovery predicate, and terminal proof; a heartbeat or blocker paragraph is not progress by itself.
+
 ## Reasoning Policy: Selection Before Expansion
 
 Core rule: **a sufficient solution is a reason to stop expanding, not an invitation to

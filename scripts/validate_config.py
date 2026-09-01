@@ -236,6 +236,72 @@ def validate_file(md_file: Path) -> list[str]:
     return issues
 
 
+COMPLETION_AUTOMATION_MARKERS = (
+    "100% completion",
+    "terminal receipt",
+    "terminal marker",
+    "до механически подтверждённого завершения",
+    "довести ровно один",
+)
+LONG_RUNNING_AUTOMATION_MARKERS = (
+    "watchdog",
+    "heartbeat",
+    " pid",
+    "process",
+    "процесс",
+    "launcher log",
+)
+RECOVERY_IDENTITY_MARKERS = (
+    "idempot",
+    "append-resume",
+    "auto_resume",
+    "retryable",
+    "идемпотент",
+)
+RECOVERY_BUDGET_MARKERS = (
+    "attempt",
+    "retry budget",
+    "попыт",
+    "бюджет",
+)
+OBSERVE_ONLY_MARKERS = (
+    "user explicitly requested observation-only",
+    "пользователь явно попросил только наблюдение",
+    "mode=observe-only",
+)
+
+
+def validate_completion_automations(automations_root: Path) -> list[str]:
+    """Reject active completion jobs that are only passive status monitors.
+
+    This deliberately checks a narrow, high-signal contract. It does not try to
+    understand every automation prompt; it catches the proven failure mode where
+    a long-running completion request has neither durable recovery identity nor
+    an attempt budget.
+    """
+    if not automations_root.exists():
+        return []
+
+    issues: list[str] = []
+    for automation_file in automations_root.glob("*/automation.toml"):
+        content = automation_file.read_text(encoding="utf-8", errors="replace").lower()
+        if 'status = "active"' not in content:
+            continue
+        completion_owned = any(marker in content for marker in COMPLETION_AUTOMATION_MARKERS)
+        long_running = any(marker in content for marker in LONG_RUNNING_AUTOMATION_MARKERS)
+        observe_only = any(marker in content for marker in OBSERVE_ONLY_MARKERS)
+        has_recovery_identity = any(marker in content for marker in RECOVERY_IDENTITY_MARKERS)
+        has_recovery_budget = any(marker in content for marker in RECOVERY_BUDGET_MARKERS)
+        if completion_owned and long_running and not observe_only and not (
+            has_recovery_identity and has_recovery_budget
+        ):
+            issues.append(
+                f"{automation_file}: completion supervisor lacks durable "
+                "idempotency/recovery identity plus attempt limit"
+            )
+    return issues
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -288,6 +354,9 @@ def main(argv: list[str] | None = None) -> int:
     for target in targets:
         issues = validate_file(target)
         all_issues.extend(issues)
+    all_issues.extend(
+        validate_completion_automations(Path.home() / ".codex" / "automations")
+    )
 
     # Report - always write report (even on clean run) so file-based readers
     # (incl. verifier agents) consistently see current state. Without this, a

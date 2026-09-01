@@ -153,6 +153,25 @@ local `PASS` receipt, or is honestly `BLOCKED_EXTERNAL` with its own evidence, b
 For a homogeneous long-running collection, launch or resume one manifest-backed runner rather than
 using chat turns as the queue. The task file is continuation state, not a prose promise.
 
+### Long-running completion: supervisor, not observer
+
+If the requested acceptance condition is a finished job, dataset, migration, rollout, or other
+terminal result, any schedule, heartbeat, watchdog, or monitor attached to it owns **supervision to
+that result**. It may not silently narrow the request to observation. The durable supervisor state
+must identify the live process/job, output or checkpoint, idempotency key, attempt/limit, safe
+recovery predicate, and terminal receipt.
+
+An early exit without a terminal receipt is `INTERNAL_FIXABLE` or `RETRYABLE`, not automatically
+`BLOCKED_EXTERNAL`. First reconcile whether the previous mutation actually happened. When the
+partial is valid and recovery is reversible and idempotent, resume it within the recorded budget and
+verify new progress. A repeated identical failure changes the action from blind retry to causal
+diagnosis and minimal repair; it still does not justify a report-only stop. Only a measured external
+or irreversible boundary may pause the loop with a named recheck.
+
+Passive report-only/never-restart behavior is valid only when the user explicitly requested an
+observation-only monitor, or when the recovery action lacks current authority. An agent-generated
+"do not restart" sentence is not user authority and must not override a completion request.
+
 ## 5. Будущее или недоступное не блокирует текущий milestone (P6)
 
 Требование может войти в критический путь **только если** выполняется хотя бы одно условие:
