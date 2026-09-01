@@ -1,0 +1,48 @@
+argv: ["python", "-m", "pytest", "scripts/test_transfer_contract.py", "-q", "-p", "no:cacheprovider"]
+returncode: 1
+
+........F.F.                                                             [100%]
+================================== FAILURES ===================================
+_ TransferContractTests.test_verified_record_cannot_claim_a_cleanup_that_left_the_destination_behind _
+
+self = <test_transfer_contract.TransferContractTests testMethod=test_verified_record_cannot_claim_a_cleanup_that_left_the_destination_behind>
+
+    def test_verified_record_cannot_claim_a_cleanup_that_left_the_destination_behind(self) -> None:
+        """The other direction, so the rule above is not a licence to stop looking."""
+        verified = contract("verified")
+        verified["next_action"] = "none"
+        verified["destination_cleanup"] = {"planned": True, "performed": True}
+        self.record.write_text(json.dumps(verified), encoding="utf-8")
+        (self.root / "destination.txt").write_text("still here", encoding="utf-8")
+        payload, _, _ = run_hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root)})
+>       self.assertEqual(payload and payload.get("decision"), "block")
+E       AssertionError: None != 'block'
+
+scripts\test_transfer_contract.py:167: AssertionError
+_ TransferContractTests.test_verified_record_may_close_after_its_scratch_destination_is_disposed _
+
+self = <test_transfer_contract.TransferContractTests testMethod=test_verified_record_may_close_after_its_scratch_destination_is_disposed>
+
+    def test_verified_record_may_close_after_its_scratch_destination_is_disposed(self) -> None:
+        """The twin of the source-cleanup rule above, for the destination.
+    
+        Without it a transfer whose product was scratch - a mutation copy, a
+        throwaway checkout - could not be closed honestly: the guard required the
+        destination to exist, so the choices were a false record or a directory
+        left on disk forever. A rule whose cheapest compliant answer is litter is
+        a rule people route around.
+        """
+        verified = contract("verified")
+        verified["next_action"] = "none"
+        verified["destination_cleanup"] = {"planned": True, "performed": True}
+        self.record.write_text(json.dumps(verified), encoding="utf-8")
+        # deliberately do NOT create destination.txt: the copy was disposed of
+        payload, output, code = run_hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root)})
+>       self.assertIsNone(payload, output)
+E       AssertionError: {'decision': 'block', 'reason': 'Open or unverifiable file transfer contracts remain. Finish the transfer, record verification/source cleanup, or mark the record failed/blocked with a closure_reason. copy-1.json: destination is absent: D:\\tmp\\transfer-contract-dvi5ddej\\destination.txt'} is not None : {"decision": "block", "reason": "Open or unverifiable file transfer contracts remain. Finish the transfer, record verification/source cleanup, or mark the record failed/blocked with a closure_reason. copy-1.json: destination is absent: D:\\tmp\\transfer-contract-dvi5ddej\\destination.txt"}
+
+scripts\test_transfer_contract.py:156: AssertionError
+=========================== short test summary info ===========================
+FAILED scripts/test_transfer_contract.py::TransferContractTests::test_verified_record_cannot_claim_a_cleanup_that_left_the_destination_behind
+FAILED scripts/test_transfer_contract.py::TransferContractTests::test_verified_record_may_close_after_its_scratch_destination_is_disposed
+2 failed, 10 passed in 1.15s

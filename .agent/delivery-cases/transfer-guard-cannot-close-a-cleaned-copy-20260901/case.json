@@ -1,0 +1,91 @@
+{
+  "attempts": [],
+  "builder": "0eaaa56b-25c8-4e08-99a7-3a32bdae1f75",
+  "created_at": 1788299767.623723,
+  "id": "transfer-guard-cannot-close-a-cleaned-copy-20260901",
+  "intent_id": null,
+  "kind": "change",
+  "layer": {
+    "direct_dependents": [
+      "every .claude/transfers/*.json the Stop hook inspects, in every repository",
+      "the source_cleanup branch three lines below, which already models this for the source"
+    ],
+    "entrypoints": [
+      "hooks/transfer-contract-guard.py::_verified_path_errors"
+    ],
+    "owner_paths": [
+      "hooks/transfer-contract-guard.py",
+      "scripts/test_transfer_contract.py"
+    ],
+    "release_boundary": "hook file; effective on the next Stop event, no deploy and no service",
+    "state_or_contract": [
+      "a verified transfer's destination must exist, unless a destination cleanup is recorded planned and performed, in which case it must be gone",
+      "the source rule is untouched"
+    ],
+    "tests_or_probes": [
+      "python -m pytest scripts/test_transfer_contract.py -q -p no:cacheprovider"
+    ]
+  },
+  "notes": [
+    "The guard was not merely inconvenient - it made leaving a stale scratch directory the cheapest compliant option, which is the shape of a rule people learn to route around."
+  ],
+  "observed": {
+    "actual": "the Stop guard refused with 'destination is absent' on a contract I had just cleaned up correctly, having refused two passes earlier because the copy was still being written to. Two refusals on one contract, pointing opposite ways.",
+    "expected": "a transfer whose product was scratch can be closed once the scratch is cleaned up"
+  },
+  "plan": {
+    "causal_hypothesis": "the destination check had no cleanup concept while the source check three lines below it did, so the guard modelled every transfer as leaving a permanent product. A transfer whose product is scratch fell outside its world: it could be honest or it could be closed, not both.",
+    "fix_steps": [
+      "give the destination the inversion the source already has",
+      "add the paired tests this file's own convention calls for, one per direction",
+      "prove them red against the reverted rule before accepting their green"
+    ],
+    "focused_argv": [
+      "python",
+      "-m",
+      "pytest",
+      "scripts/test_transfer_contract.py",
+      "-q",
+      "-p",
+      "no:cacheprovider"
+    ]
+  },
+  "release": {
+    "required": false
+  },
+  "schema_version": 1,
+  "session_id": "0eaaa56b-25c8-4e08-99a7-3a32bdae1f75",
+  "status": "IMPLEMENTING",
+  "summary": "A verified transfer whose destination was deliberately disposed of could not be closed: the guard required the destination to exist, so the only options were a false record or scratch left on disk forever.",
+  "updated_at": 1788299771.129672,
+  "verification": {
+    "after": {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "scripts/test_transfer_contract.py",
+        "-q",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "evidence_path": ".agent/delivery-cases/transfer-guard-cannot-close-a-cleaned-copy-20260901/evidence/after-00.txt",
+      "returncode": 0,
+      "sha256": "079c23d902d2575498ce88eb00c8fe7346cd1057103b10fa9e49ec3753fd8e2d"
+    },
+    "before": {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "scripts/test_transfer_contract.py",
+        "-q",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "evidence_path": ".agent/delivery-cases/transfer-guard-cannot-close-a-cleaned-copy-20260901/evidence/before-00.txt",
+      "returncode": 1,
+      "sha256": "6906084bd7934e0f1759a73148670b05b3da93823532d92d54a6766372fb5a68"
+    }
+  }
+}

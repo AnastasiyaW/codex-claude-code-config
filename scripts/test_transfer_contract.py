@@ -138,6 +138,35 @@ class TransferContractTests(unittest.TestCase):
         self.assertEqual(payload and payload.get("decision"), "block")
         self.assertIn("source cleanup", payload["reason"])
 
+    def test_verified_record_may_close_after_its_scratch_destination_is_disposed(self) -> None:
+        """The twin of the source-cleanup rule above, for the destination.
+
+        Without it a transfer whose product was scratch - a mutation copy, a
+        throwaway checkout - could not be closed honestly: the guard required the
+        destination to exist, so the choices were a false record or a directory
+        left on disk forever. A rule whose cheapest compliant answer is litter is
+        a rule people route around.
+        """
+        verified = contract("verified")
+        verified["next_action"] = "none"
+        verified["destination_cleanup"] = {"planned": True, "performed": True}
+        self.record.write_text(json.dumps(verified), encoding="utf-8")
+        # deliberately do NOT create destination.txt: the copy was disposed of
+        payload, output, code = run_hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root)})
+        self.assertIsNone(payload, output)
+        self.assertEqual(code, 0, output)
+
+    def test_verified_record_cannot_claim_a_cleanup_that_left_the_destination_behind(self) -> None:
+        """The other direction, so the rule above is not a licence to stop looking."""
+        verified = contract("verified")
+        verified["next_action"] = "none"
+        verified["destination_cleanup"] = {"planned": True, "performed": True}
+        self.record.write_text(json.dumps(verified), encoding="utf-8")
+        (self.root / "destination.txt").write_text("still here", encoding="utf-8")
+        payload, _, _ = run_hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root)})
+        self.assertEqual(payload and payload.get("decision"), "block")
+        self.assertIn("destination still exists", payload["reason"])
+
     def test_explicitly_failed_transfer_is_resumable_without_being_orphaned(self) -> None:
         failed = contract("failed")
         failed["closure_reason"] = "remote source returned HTTP 503"

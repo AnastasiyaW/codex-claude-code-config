@@ -1,0 +1,5 @@
+argv: ["python", "-m", "pytest", "scripts/test_transfer_contract.py", "-q", "-p", "no:cacheprovider"]
+returncode: 0
+
+............                                                             [100%]
+12 passed in 1.11s
