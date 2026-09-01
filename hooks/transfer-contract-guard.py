@@ -421,8 +421,19 @@ def _verified_path_errors(contract: dict[str, Any], root: Path) -> list[str]:
         return []
     errors: list[str] = []
     destination = _local_path(contract.get("destination"), root)
-    if destination is not None and not destination.exists():
-        errors.append(f"destination is absent: {destination}")
+    # A destination cleanup inverts what "verified" should see, exactly as a source
+    # cleanup already does below. Without this a transfer whose product was scratch -
+    # a mutation copy, a throwaway checkout - could never be closed honestly: the
+    # choice was a false record or an undeleted directory, and the guard was quietly
+    # arguing for the litter.
+    dest_cleanup = contract.get("destination_cleanup") or {}
+    dest_disposed = bool(dest_cleanup.get("planned") and dest_cleanup.get("performed"))
+    if destination is not None:
+        if dest_disposed:
+            if destination.exists():
+                errors.append(f"destination still exists after claimed cleanup: {destination}")
+        elif not destination.exists():
+            errors.append(f"destination is absent: {destination}")
     cleanup = contract.get("source_cleanup") or {}
     source = _local_path(contract.get("source"), root)
     if cleanup.get("planned") and cleanup.get("performed") and source is not None and source.exists():
@@ -525,6 +536,41 @@ def _self_test() -> int:
         "verification": {"plan": ["check"], "performed": False},
         "source_cleanup": {"planned": False, "performed": False, "verified": False, "reason": "r"},
     }
+
+    def _dest_cleanup_cases() -> list[str]:
+        """Both directions of the destination-cleanup rule, on real paths.
+
+        Each case is red under the opposite behaviour: without the rule the disposed
+        copy is reported absent, and with the rule applied unconditionally a copy that
+        was never disposed of stops being checked at all.
+        """
+        problems: list[str] = []
+        with tempfile.TemporaryDirectory() as raw2:
+            root2 = Path(raw2)
+            gone = root2 / "scratch-copy"          # deliberately never created
+            kept = root2 / "kept-copy"
+            kept.mkdir()
+
+            disposed = dict(base_contract, status="verified", destination=str(gone),
+                            destination_cleanup={"planned": True, "performed": True})
+            if _verified_path_errors(disposed, root2):
+                problems.append("a disposed scratch destination is still reported as a problem")
+
+            lying = dict(base_contract, status="verified", destination=str(kept),
+                         destination_cleanup={"planned": True, "performed": True})
+            if not _verified_path_errors(lying, root2):
+                problems.append("a destination claimed cleaned but still on disk passes")
+
+            plain = dict(base_contract, status="verified", destination=str(gone))
+            if not _verified_path_errors(plain, root2):
+                problems.append("a missing destination with no cleanup claim passes")
+
+            present = dict(base_contract, status="verified", destination=str(kept))
+            if _verified_path_errors(present, root2):
+                problems.append("an ordinary present destination is reported as a problem")
+        return problems
+
+    fails.extend(_dest_cleanup_cases())
 
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
