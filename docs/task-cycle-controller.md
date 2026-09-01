@@ -75,6 +75,28 @@ plan/preflight/review cycle. With an existing root it starts a separate
 read-only migration assessment instead: it never rewrites the plan or calls
 the mismatch external by default.
 
+### Reconciliation gap
+
+Do not report any verified desired/actual gap as a status. Store a structured
+observation below the task first. It names the desired state and every item.
+Each item must be `SATISFIED` with an existing local receipt,
+`INTERNAL_FIXABLE`, or
+`EXTERNAL_REQUIRED` with a named recheck. Then register the whole gap:
+
+```text
+python hooks/task-cycle-controller.py register-reconciliation-gap \
+  --task-dir .agent/tasks/<id> --batch <immutable-observation-id> \
+  --observation evidence/reconciliation-observation.json \
+  --evidence evidence/reconciliation-probe.json --json
+```
+
+The controller writes one frozen work order for every unsatisfied item and
+returns `WORK` for the first internal action. It does not perform a domain
+side effect or give new authority. A fully receipted observation returns
+`RECONCILIATION_SATISFIED`; a status paragraph is not a completion state. The
+active Stop guard also rejects a structured observation until this registration
+receipt binds its current SHA and every required finding.
+
 ### Legacy action migration
 
 Only a pre-controller cycle where a failed proof overwrote its frozen

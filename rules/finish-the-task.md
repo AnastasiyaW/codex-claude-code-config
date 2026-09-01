@@ -99,6 +99,18 @@ read-only internal migration-assessment finding, then work it through the same
 proof order. Never silently rewrite an in-use plan or mislabel the mismatch as
 `BLOCKED_EXTERNAL`.
 
+### A verified gap is a batch, not a status paragraph
+
+When an agent observes any verified difference between a requested/accepted
+state and the actual state, it must write a measured reconciliation observation
+and call `task-cycle-controller.py register-reconciliation-gap`. Every declared
+item is then either backed by a satisfaction receipt, an `INTERNAL_FIXABLE`
+work order, or a measured `EXTERNAL_REQUIRED` recheck. The agent must work the
+returned orders; it may not close on wording such as "only one machine is
+active", "the artifact differs", or "the service is not deployed". An item is
+`SATISFIED` only after its actual receipt, never from configured access, source
+code, a plan, or a previous status report alone.
+
 ### Visible execution: action, not user homework
 
 For work that is still in progress, every substantive update must make forward motion inspectable:

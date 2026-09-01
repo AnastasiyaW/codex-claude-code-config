@@ -45,6 +45,9 @@ TERMINAL = {"ACCEPTED", "ESCALATED"}
 MAX_FAILED_PROOFS = 3
 REQUIRED_PROOF_ORDER = ["focused_test", "runtime_proof", "independent_review"]
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+RECONCILIATION_OBSERVATION_SCHEMA = "agent-reconciliation-observation/v1"
+RECONCILIATION_COMPONENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+RECONCILIATION_SATISFIED = "SATISFIED"
 FROZEN_KEYS = (
     "classification",
     "accepted_requirement",
@@ -428,6 +431,163 @@ def register_plan_drift(
     return decision
 
 
+def register_reconciliation_gap(
+    task_dir: Path,
+    batch_id: str,
+    observation_evidence: str,
+    evidence: str,
+) -> dict[str, Any]:
+    """Turn any measured desired/actual gap into one work order per item.
+
+    An observation is evidence, not a prose status update. Every declared item
+    is either backed by a satisfaction receipt or receives an internal
+    repair/external recheck order. The helper never performs the domain action:
+    it creates the durable, individually receipted work that owns that action.
+    """
+    batch_id = nonempty_string(batch_id, "--batch").lower()
+    if not RECONCILIATION_COMPONENT_RE.fullmatch(batch_id):
+        raise CycleError("--batch must be a lowercase durable identifier")
+    observation_relative = evidence_path(task_dir, observation_evidence)
+    receipt_evidence = evidence_path(task_dir, evidence)
+    observation_path = task_dir / observation_relative
+    observation = load_json(observation_path, "reconciliation observation")
+    if observation.get("schema") != RECONCILIATION_OBSERVATION_SCHEMA:
+        raise CycleError(
+            f"reconciliation observation.schema must equal {RECONCILIATION_OBSERVATION_SCHEMA!r}"
+        )
+    scope_id = nonempty_string(observation.get("scope_id"), "reconciliation observation.scope_id").lower()
+    if not RECONCILIATION_COMPONENT_RE.fullmatch(scope_id):
+        raise CycleError("reconciliation observation.scope_id must be a lowercase durable identifier")
+    desired_state = nonempty_string(observation.get("desired_state"), "reconciliation observation.desired_state")
+    observed_at = parse_utc(observation.get("observed_at"), "reconciliation observation.observed_at")
+    items = observation.get("items")
+    if not isinstance(items, list) or not items:
+        raise CycleError("reconciliation observation.items must be a non-empty list")
+
+    findings: list[dict[str, Any]] = []
+    satisfied: list[str] = []
+    satisfaction_receipts: dict[str, str] = {}
+    item_ids: set[str] = set()
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            raise CycleError("each reconciliation observation item must be an object")
+        item_id = nonempty_string(raw_item.get("item_id"), "reconciliation observation.items[].item_id").lower()
+        if not RECONCILIATION_COMPONENT_RE.fullmatch(item_id):
+            raise CycleError("reconciliation observation item_id must be a lowercase durable identifier")
+        if item_id in item_ids:
+            raise CycleError(f"reconciliation observation repeats item_id {item_id!r}")
+        item_ids.add(item_id)
+        state = nonempty_string(raw_item.get("state"), f"{item_id}.state")
+        if state == RECONCILIATION_SATISFIED:
+            satisfaction_receipts[item_id] = evidence_path(
+                task_dir,
+                nonempty_string(raw_item.get("satisfaction_receipt"), f"{item_id}.satisfaction_receipt"),
+            )
+            satisfied.append(item_id)
+            continue
+        if state not in VALID_CLASSIFICATIONS:
+            raise CycleError(
+                f"{item_id}.state must be {RECONCILIATION_SATISFIED!r} or one of {sorted(VALID_CLASSIFICATIONS)}"
+            )
+        boundary = nonempty_string(raw_item.get("boundary"), f"{item_id}.boundary")
+        next_action = nonempty_string(raw_item.get("next_action"), f"{item_id}.next_action")
+        finding_id = f"RECONCILE-{batch_id}-{item_id}"
+        requirement = (
+            f"Scope {scope_id} must reach its declared desired state: {desired_state}. "
+            f"Item {item_id} needs a satisfaction receipt or a measured external blocker with a named recheck."
+        )
+        if state == INTERNAL:
+            finding = {
+                "finding_id": finding_id,
+                "classification": INTERNAL,
+                "accepted_requirement": requirement,
+                "boundary": boundary,
+                "next_action": next_action,
+                "proof_requirements": REQUIRED_PROOF_ORDER,
+                "proof_plan": {
+                    "focused_test": (
+                        f"Perform the declared repair action for reconciliation item {item_id}: {next_action} "
+                        "Save the exact local contract or test receipt under evidence/."
+                    ),
+                    "runtime_proof": (
+                        f"Verify that reconciliation item {item_id} now satisfies its declared state with a real "
+                        "runtime trace; save the trace under evidence/."
+                    ),
+                    "independent_review": (
+                        f"A fresh reviewer verifies the {item_id} satisfaction receipt and its causal boundary."
+                    ),
+                },
+            }
+        else:
+            blocker = nonempty_string(raw_item.get("blocker"), f"{item_id}.blocker")
+            next_check = parse_utc(raw_item.get("next_check_at"), f"{item_id}.next_check_at")
+            if next_check <= observed_at:
+                raise CycleError(f"{item_id}.next_check_at must be after reconciliation observation.observed_at")
+            finding = {
+                "finding_id": finding_id,
+                "classification": EXTERNAL,
+                "accepted_requirement": requirement,
+                "boundary": boundary,
+                "next_action": next_action,
+                "blocker": blocker,
+                "last_checked_at": observed_at.isoformat().replace("+00:00", "Z"),
+                "next_check_at": next_check.isoformat().replace("+00:00", "Z"),
+                "last_check_evidence": receipt_evidence,
+            }
+        findings.append(validate_finding(finding))
+
+    input_path = findings_path(task_dir)
+    if input_path.exists():
+        input_data = load_json(input_path, "findings.json")
+        if input_data.get("schema") != FINDINGS_SCHEMA or not isinstance(input_data.get("findings"), list):
+            raise CycleError("findings.json is not a valid task finding document")
+        existing = list(input_data["findings"])
+    else:
+        input_data = {"schema": FINDINGS_SCHEMA}
+        existing = []
+    known_ids = {
+        item.get("finding_id") for item in existing if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
+    }
+    conflicts = sorted(finding["finding_id"] for finding in findings if finding["finding_id"] in known_ids)
+    if conflicts:
+        raise CycleError(f"reconciliation batch {batch_id} already has frozen findings: {', '.join(conflicts)}")
+
+    receipt_path = task_dir / "evidence" / f"reconciliation-{batch_id}-registration.json"
+    registration = {
+        "schema": "agent-reconciliation-registration-receipt/v1",
+        "batch_id": batch_id,
+        "scope_id": scope_id,
+        "desired_state": desired_state,
+        "observed_at": observed_at.isoformat().replace("+00:00", "Z"),
+        "observation_evidence": observation_relative,
+        "observation_sha256": sha256_file(observation_path),
+        "evidence": receipt_evidence,
+        "satisfied_items": satisfied,
+        "satisfaction_receipts": satisfaction_receipts,
+        "registered_findings": [finding["finding_id"] for finding in findings],
+    }
+    if not findings:
+        write_json_atomic(receipt_path, registration)
+        return {
+            "decision": "RECONCILIATION_SATISFIED",
+            "scope_id": scope_id,
+            "satisfied_items": satisfied,
+            "registration_evidence": receipt_path.relative_to(task_dir).as_posix(),
+        }
+    existing.extend(findings)
+    input_data["findings"] = existing
+    write_json_atomic(input_path, input_data)
+    reconciled = reconcile(task_dir)
+    write_json_atomic(receipt_path, registration)
+    decision = select_next(load_cycle(task_dir))
+    decision["scope_id"] = scope_id
+    decision["registered"] = [finding["finding_id"] for finding in findings]
+    decision["satisfied_items"] = satisfied
+    decision["registration_evidence"] = receipt_path.relative_to(task_dir).as_posix()
+    decision["reconciled"] = reconciled
+    return decision
+
+
 def evidence_path(task_dir: Path, supplied: str) -> str:
     relative = Path(nonempty_string(supplied, "evidence"))
     if relative.is_absolute():
@@ -726,6 +886,12 @@ def main(argv: list[str] | None = None) -> int:
     drift.add_argument("--output-root", type=Path, required=True)
     drift.add_argument("--quiescence-evidence", required=True)
     drift.add_argument("--json", action="store_true")
+    reconciliation = sub.add_parser("register-reconciliation-gap")
+    reconciliation.add_argument("--task-dir", type=Path, required=True)
+    reconciliation.add_argument("--batch", required=True)
+    reconciliation.add_argument("--observation", required=True)
+    reconciliation.add_argument("--evidence", required=True)
+    reconciliation.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
         task_dir = args.task_dir.resolve()
@@ -758,6 +924,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.output_root.resolve(),
                 args.quiescence_evidence,
             )
+        elif args.command == "register-reconciliation-gap":
+            result = register_reconciliation_gap(task_dir, args.batch, args.observation, args.evidence)
         else:
             result = record_external_check(
                 task_dir, args.finding, args.evidence, args.next_check_at, args.blocker,

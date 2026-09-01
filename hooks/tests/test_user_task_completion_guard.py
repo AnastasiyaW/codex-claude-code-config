@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -62,6 +63,25 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("real receipt\n", encoding="utf-8")
         return name
+
+    def reconciliation_observation(self) -> tuple[Path, Path, dict]:
+        task = self.root / ".agent" / "tasks" / "release-rollout"
+        evidence = task / "evidence"
+        evidence.mkdir(parents=True, exist_ok=True)
+        (evidence / "bootstrap-published.json").write_text("published\n", encoding="utf-8")
+        observation = {
+            "schema": guard.RECONCILIATION_OBSERVATION_SCHEMA,
+            "scope_id": "release-rollout",
+            "desired_state": "every required artifact is verified and published",
+            "observed_at": "2026-09-01T10:00:00Z",
+            "items": [
+                {"item_id": "bootstrap", "state": "SATISFIED", "satisfaction_receipt": "evidence/bootstrap-published.json"},
+                {"item_id": "signature", "state": "INTERNAL_FIXABLE", "boundary": "signature missing", "next_action": "sign it"},
+            ],
+        }
+        path = evidence / "reconciliation-observation.json"
+        path.write_text(json.dumps(observation), encoding="utf-8")
+        return task, path, observation
 
     def test_action_request_creates_a_durable_project_task(self) -> None:
         payload = self.invoke_prompt()
@@ -145,6 +165,32 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
 
         self.write_state(status="COMPLETE", result="every checkpoint measured; two passed",
                          items=[{"item_id": "250", "status": "PASS", "evidence": [first]}])
+        self.assertIsNone(self.invoke_stop())
+
+    def test_stop_requires_a_measured_gap_to_be_registered_as_work(self) -> None:
+        self.invoke_prompt()
+        evidence = self.receipt()
+        self.write_state(status="COMPLETE", result="gap captured", evidence=[evidence])
+        task, observation_path, _ = self.reconciliation_observation()
+
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("has no controller registration receipt", blocked["reason"])
+
+        registration = {
+            "schema": guard.RECONCILIATION_REGISTRATION_SCHEMA,
+            "batch_id": "release-rollout-20260901",
+            "observation_evidence": observation_path.relative_to(task).as_posix(),
+            "observation_sha256": hashlib.sha256(observation_path.read_bytes()).hexdigest(),
+            "registered_findings": ["RECONCILE-release-rollout-20260901-signature"],
+        }
+        (task / "findings.json").write_text(json.dumps({
+            "schema": "agent-task-findings/v1",
+            "findings": [{"finding_id": "RECONCILE-release-rollout-20260901-signature"}],
+        }), encoding="utf-8")
+        registration_path = task / "evidence" / "reconciliation-release-rollout-20260901-registration.json"
+        registration_path.write_text(json.dumps(registration), encoding="utf-8")
+
         self.assertIsNone(self.invoke_stop())
 
     def test_other_session_is_not_wedged_and_session_start_surfaces_open_work(self) -> None:

@@ -13,6 +13,11 @@ request that names a complete collection has one extra invariant: its
 ``state.json.items`` is the real inventory, and each item needs a receipt or a
 measured external blocker.  This is a mode of every user task, not a separate
 checkpoint-specific queue.
+
+Measured desired/actual observations are equally durable: a structured
+reconciliation observation below ``.agent/tasks`` must have a controller
+registration receipt before Stop can close. The hook deliberately does not
+extract observations from prose; untrusted prose is not a safe work order.
 """
 from __future__ import annotations
 
@@ -31,6 +36,8 @@ from typing import Any
 REQUEST_SCHEMA = "agent-user-task-request/v1"
 STATE_SCHEMA = "agent-user-task-state/v1"
 TERMINAL_RECEIPT_SCHEMA = "agent-user-task-terminal-receipt/v1"
+RECONCILIATION_OBSERVATION_SCHEMA = "agent-reconciliation-observation/v1"
+RECONCILIATION_REGISTRATION_SCHEMA = "agent-reconciliation-registration-receipt/v1"
 ACTIVE_STATUSES = {"OPEN", "IN_PROGRESS"}
 TERMINAL_STATUSES = {"COMPLETE", "BLOCKED_EXTERNAL"}
 ITEM_STATUSES = {"PENDING", "RUNNING", "PASS", "BLOCKED_EXTERNAL"}
@@ -67,6 +74,7 @@ QUESTION_ONLY = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 COLLECTION_WORDS = re.compile(r"\b(?:все|всех|кажд(?:ый|ую|ые|ого|ых)|all|every|each)\b", re.IGNORECASE)
+RECONCILIATION_COMPONENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 
 
 def now_utc() -> str:
@@ -212,28 +220,130 @@ def task_requests(root: Path, session: str | None = None) -> list[dict[str, Any]
     return requests
 
 
+def evidence_file(task_dir: Path, value: Any, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty relative evidence path")
+    relative = Path(value)
+    if relative.is_absolute():
+        raise ValueError(f"{label} evidence must be relative")
+    resolved = (task_dir / relative).resolve()
+    try:
+        resolved.relative_to(task_dir.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{label} evidence escapes the task directory") from exc
+    if not resolved.is_file():
+        raise ValueError(f"{label} evidence file does not exist: {relative.as_posix()}")
+    return resolved
+
+
 def evidence_files(task_dir: Path, values: Any, label: str) -> None:
     if not isinstance(values, list) or not values:
         raise ValueError(f"{label} must be a non-empty list of relative evidence paths")
     for value in values:
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"{label} contains an empty evidence path")
-        relative = Path(value)
-        if relative.is_absolute():
-            raise ValueError(f"{label} evidence must be relative")
-        resolved = (task_dir / relative).resolve()
-        try:
-            resolved.relative_to(task_dir.resolve())
-        except ValueError as exc:
-            raise ValueError(f"{label} evidence escapes the task directory") from exc
-        if not resolved.is_file():
-            raise ValueError(f"{label} evidence file does not exist: {relative.as_posix()}")
+        evidence_file(task_dir, value, label)
 
 
 def nonempty(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must be a non-empty string")
     return value.strip()
+
+
+def reconciliation_item_ids(observation: dict[str, Any], task_dir: Path) -> tuple[list[str], list[str]]:
+    """Return satisfied ids and the controller finding ids an observation requires.
+
+    This intentionally checks only the receipt chain at Stop. The controller
+    owns classification and proof-plan validation; the guard rejects a raw
+    observation if that controller work was never registered.
+    """
+    items = observation.get("items")
+    if not isinstance(items, list) or not items:
+        raise ValueError("reconciliation observation.items must be a non-empty list")
+    satisfied: list[str] = []
+    unresolved: list[str] = []
+    seen: set[str] = set()
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            raise ValueError("each reconciliation observation item must be an object")
+        item_id = nonempty(raw_item.get("item_id"), "reconciliation item_id").lower()
+        if not RECONCILIATION_COMPONENT_RE.fullmatch(item_id):
+            raise ValueError(f"reconciliation item_id is not durable: {item_id!r}")
+        if item_id in seen:
+            raise ValueError(f"reconciliation observation repeats item_id {item_id!r}")
+        seen.add(item_id)
+        if raw_item.get("state") == "SATISFIED":
+            evidence_file(task_dir, raw_item.get("satisfaction_receipt"), f"{item_id}.satisfaction_receipt")
+            satisfied.append(item_id)
+        else:
+            unresolved.append(item_id)
+    return satisfied, unresolved
+
+
+def assess_reconciliation_observation(task_dir: Path, observation_path: Path) -> str | None:
+    """Return an unregistered observation's exact defect, otherwise ``None``."""
+    observation_relative = observation_path.relative_to(task_dir).as_posix()
+    observation = load_json(observation_path)
+    if observation.get("schema") != RECONCILIATION_OBSERVATION_SCHEMA:
+        raise ValueError(f"schema must equal {RECONCILIATION_OBSERVATION_SCHEMA!r}")
+    _, unresolved_items = reconciliation_item_ids(observation, task_dir)
+    observation_sha256 = hashlib.sha256(observation_path.read_bytes()).hexdigest()
+
+    registrations = sorted(observation_path.parent.glob("reconciliation-*-registration.json"))
+    matched = False
+    for registration_path in registrations:
+        try:
+            registration = load_json(registration_path)
+        except ValueError:
+            continue
+        if registration.get("schema") != RECONCILIATION_REGISTRATION_SCHEMA:
+            continue
+        if registration.get("observation_evidence") != observation_relative:
+            continue
+        matched = True
+        if registration.get("observation_sha256") != observation_sha256:
+            continue
+        batch_id = registration.get("batch_id")
+        if not isinstance(batch_id, str) or not RECONCILIATION_COMPONENT_RE.fullmatch(batch_id):
+            continue
+        expected = [f"RECONCILE-{batch_id}-{item_id}" for item_id in unresolved_items]
+        if registration.get("registered_findings") != expected:
+            continue
+        if expected:
+            findings_file = task_dir / "findings.json"
+            try:
+                findings = load_json(findings_file).get("findings")
+            except ValueError:
+                continue
+            actual = {
+                item.get("finding_id") for item in findings
+                if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
+            } if isinstance(findings, list) else set()
+            if not set(expected).issubset(actual):
+                continue
+        return None
+    if matched:
+        return "controller registration receipt does not bind the current observation and every required finding"
+    return "has no controller registration receipt"
+
+
+def assess_reconciliation_observations(root: Path) -> list[str]:
+    """Find measured observations that were never converted into durable work."""
+    evidence_root = root / ".agent" / "tasks"
+    if not evidence_root.is_dir():
+        return []
+    unresolved: list[str] = []
+    for observation_path in sorted(evidence_root.glob("*/evidence/reconciliation-*.json")):
+        if observation_path.name.endswith("-registration.json"):
+            continue
+        task_dir = observation_path.parents[1]
+        try:
+            defect = assess_reconciliation_observation(task_dir, observation_path)
+        except ValueError as exc:
+            defect = str(exc)
+        if defect:
+            relative = observation_path.relative_to(root).as_posix()
+            unresolved.append(f"{relative}: {defect}")
+    return unresolved
 
 
 def assess_items(task_dir: Path, state: dict[str, Any]) -> tuple[str, str]:
@@ -366,7 +476,7 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
     root = repo_root(cwd or Path.cwd())
     if root is None:
         return 0
-    unresolved: list[str] = []
+    unresolved = assess_reconciliation_observations(root)
     for request in task_requests(root, session_id(event)):
         outcome, detail = assess_task(root, request)
         if outcome == "INCOMPLETE":
@@ -378,9 +488,11 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
     print(json.dumps({
         "decision": "block",
         "reason": (
-            "A user task from this session has no evidence-bound terminal state. Continue the work; "
-            "then save its local receipt and state.json result, or record the actual external blocker and "
-            "named recheck. A collection must inventory every item rather than closing after one.\n- "
+            "A durable user task or measured reconciliation gap has no evidence-bound terminal state. "
+            "Continue the work; then save its local receipt and state.json result, or record the actual external "
+            "blocker and named recheck. A reconciliation observation must be registered through "
+            "task-cycle-controller.py register-reconciliation-gap; a collection must inventory every item rather "
+            "than closing after one.\n- "
             + "\n- ".join(unresolved)
         ),
     }, ensure_ascii=False))

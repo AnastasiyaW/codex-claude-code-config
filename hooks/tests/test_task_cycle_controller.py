@@ -290,6 +290,124 @@ class TaskCycleControllerTests(unittest.TestCase):
         self.assertIn("migration assessment", finding["next_action"])
         self.assertIn("output root exists", finding["boundary"])
 
+    def test_reconciliation_gap_registers_every_unsatisfied_item_and_returns_work(self) -> None:
+        bootstrap_receipt = self.evidence("bootstrap-published.json")
+        observation = {
+            "schema": "agent-reconciliation-observation/v1",
+            "scope_id": "release-rollout",
+            "desired_state": "every required artifact is verified and published",
+            "observed_at": "2026-09-01T10:00:00Z",
+            "items": [
+                {
+                    "item_id": "bootstrap",
+                    "state": "SATISFIED",
+                    "satisfaction_receipt": bootstrap_receipt,
+                },
+                {
+                    "item_id": "signature",
+                    "state": "INTERNAL_FIXABLE",
+                    "boundary": "new bootstrap exists but has no verified signing receipt",
+                    "next_action": "Generate and verify the signing receipt before publication.",
+                },
+                {
+                    "item_id": "clean-vm",
+                    "state": "INTERNAL_FIXABLE",
+                    "boundary": "clean VM trace has not been captured for the current bootstrap",
+                    "next_action": "Run and retain the clean VM process and URL trace.",
+                },
+                {
+                    "item_id": "publication-access",
+                    "state": "EXTERNAL_REQUIRED",
+                    "boundary": "publisher endpoint is unavailable to the configured release identity",
+                    "next_action": "Recheck the publisher endpoint with the release identity.",
+                    "blocker": "No authenticated publisher route is available.",
+                    "next_check_at": "2026-09-02T10:00:00Z",
+                },
+            ],
+        }
+        observation_path = self.task / "evidence" / "reconciliation-observation.json"
+        observation_path.write_text(json.dumps(observation), encoding="utf-8")
+        code, result, stderr = self.invoke(
+            "register-reconciliation-gap",
+            "--batch",
+            "release-rollout-20260901",
+            "--observation",
+            "evidence/reconciliation-observation.json",
+            "--evidence",
+            self.evidence("reconciliation-probe.json"),
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "WORK")
+        self.assertEqual(
+            result and result["registered"],
+            [
+                "RECONCILE-release-rollout-20260901-signature",
+                "RECONCILE-release-rollout-20260901-clean-vm",
+                "RECONCILE-release-rollout-20260901-publication-access",
+            ],
+        )
+        self.assertEqual(result and result["satisfied_items"], ["bootstrap"])
+        findings = json.loads((self.task / "findings.json").read_text(encoding="utf-8"))["findings"]
+        self.assertEqual(len(findings), 3)
+        self.assertEqual(findings[2]["classification"], "EXTERNAL_REQUIRED")
+        self.assertTrue((self.task / result["registration_evidence"]).is_file())
+        registration = json.loads((self.task / result["registration_evidence"]).read_text(encoding="utf-8"))
+        self.assertEqual(registration["satisfaction_receipts"], {"bootstrap": bootstrap_receipt})
+
+    def test_satisfied_reconciliation_creates_no_work_orders(self) -> None:
+        bootstrap_receipt = self.evidence("bootstrap-published.json")
+        observation = {
+            "schema": "agent-reconciliation-observation/v1",
+            "scope_id": "release-rollout",
+            "desired_state": "every required artifact is verified and published",
+            "observed_at": "2026-09-01T10:00:00Z",
+            "items": [
+                {
+                    "item_id": "bootstrap",
+                    "state": "SATISFIED",
+                    "satisfaction_receipt": bootstrap_receipt,
+                }
+            ],
+        }
+        observation_path = self.task / "evidence" / "reconciliation-satisfied.json"
+        observation_path.write_text(json.dumps(observation), encoding="utf-8")
+        code, result, stderr = self.invoke(
+            "register-reconciliation-gap",
+            "--batch",
+            "release-rollout-satisfied",
+            "--observation",
+            "evidence/reconciliation-satisfied.json",
+            "--evidence",
+            self.evidence("satisfied-reconciliation-probe.json"),
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(result and result["decision"], "RECONCILIATION_SATISFIED")
+        self.assertFalse((self.task / "findings.json").exists())
+
+    def test_satisfied_reconciliation_requires_an_existing_receipt(self) -> None:
+        observation = {
+            "schema": "agent-reconciliation-observation/v1",
+            "scope_id": "release-rollout",
+            "desired_state": "every required artifact is verified and published",
+            "observed_at": "2026-09-01T10:00:00Z",
+            "items": [{
+                "item_id": "bootstrap",
+                "state": "SATISFIED",
+                "satisfaction_receipt": "evidence/missing-publication.json",
+            }],
+        }
+        observation_path = self.task / "evidence" / "reconciliation-missing-receipt.json"
+        observation_path.write_text(json.dumps(observation), encoding="utf-8")
+        code, _, stderr = self.invoke(
+            "register-reconciliation-gap",
+            "--batch", "release-rollout-missing-receipt",
+            "--observation", "evidence/reconciliation-missing-receipt.json",
+            "--evidence", self.evidence("missing-receipt-probe.json"),
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("evidence file does not exist", stderr)
+        self.assertFalse((self.task / "evidence" / "reconciliation-release-rollout-missing-receipt-registration.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
