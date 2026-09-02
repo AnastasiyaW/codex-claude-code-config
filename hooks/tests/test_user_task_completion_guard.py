@@ -178,11 +178,75 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
             "<task-notification>subagent finished; continue the rollout</task-notification>",
             "<heartbeat><automation_id>x</automation_id><instructions>check and run</instructions></heartbeat>",
             "<system-reminder>fix the failing test</system-reminder>",
+            '<scheduled-task name="nightly">run the audit</scheduled-task>',
         ):
             self.assertIsNone(self.invoke_prompt({
                 "prompt": prompt,
                 "session_id": "session-a",
+                # Claude Desktop uses this compatibility value even for a
+                # scheduled-task launch; the explicit envelope must win.
+                "origin_kind": "human",
             }))
+        self.assertFalse((self.root / ".agent" / "user-tasks").exists())
+
+    def test_documented_hook_payload_uses_transcript_origin(self) -> None:
+        prompt = "проверь и исправь обвязку"
+        transcript = Path(self.tmp.name) / "human.jsonl"
+        human_row = {
+            "type": "user",
+            "sessionId": "session-a",
+            "uuid": "human-event",
+            "promptSource": "sdk",
+            "entrypoint": "claude-desktop",
+            "userType": "external",
+            "origin": {"kind": "human"},
+            "message": {"role": "user", "content": prompt},
+        }
+        sessionless_machine_row = {
+            "type": "user",
+            "uuid": "newer-sessionless-machine-event",
+            "origin": {"kind": "task-notification"},
+            "message": {"role": "user", "content": prompt},
+        }
+        transcript.write_text(
+            json.dumps(human_row) + "\n" + json.dumps(sessionless_machine_row) + "\n",
+            encoding="utf-8",
+        )
+
+        payload = self.invoke_prompt({
+            "prompt": prompt,
+            "session_id": "session-a",
+            "transcript_path": str(transcript),
+        })
+
+        self.assertIsNotNone(payload)
+        request = self.request()
+        self.assertEqual(request["origin_kind"], "human")
+        self.assertEqual(request["raw_event_uuid"], "human-event")
+        self.assertEqual(request["prompt_source"], "sdk")
+
+    def test_transcript_machine_origins_are_not_registered(self) -> None:
+        prompt = "continue the work and save the receipt"
+        fixtures = (
+            {"origin": {"kind": "task-notification"}, "uuid": "notification-event"},
+            {"origin": {"kind": "human"}, "isMeta": True, "uuid": "meta-event"},
+            {"origin": {"kind": "human"}, "entrypoint": "sdk-cli", "uuid": "sdk-event"},
+        )
+        for index, metadata in enumerate(fixtures):
+            with self.subTest(index=index):
+                transcript = Path(self.tmp.name) / f"machine-{index}.jsonl"
+                session = f"machine-{index}"
+                transcript.write_text(json.dumps({
+                    "type": "user",
+                    "sessionId": session,
+                    "message": {"role": "user", "content": prompt},
+                    **metadata,
+                }) + "\n", encoding="utf-8")
+                self.assertIsNone(self.invoke_prompt({
+                    "prompt": prompt,
+                    "session_id": session,
+                    "transcript_path": str(transcript),
+                }))
         self.assertFalse((self.root / ".agent" / "user-tasks").exists())
 
     def test_stop_continuation_is_not_recaptured_as_a_new_user_request(self) -> None:

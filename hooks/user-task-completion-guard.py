@@ -62,9 +62,11 @@ STOP_CONTINUATION_MAX_AGE = dt.timedelta(hours=2)
 # prompt remains valid user input.
 MACHINE_PROMPT_ENVELOPE = re.compile(
     r"^\s*<(?:task-notification|subagent-notification|heartbeat|system-reminder|"
-    r"local-command-caveat|command-message|command-name|automation)(?:\s|>)",
+    r"local-command-caveat|command-message|command-name|automation|scheduled-task)(?:\s|>)",
     re.IGNORECASE,
 )
+TRANSCRIPT_TAIL_LIMIT = 16 * 1024 * 1024
+TRANSCRIPT_RECORD_LIMIT = 512
 
 
 def load_task_cycle_controller() -> Any:
@@ -193,14 +195,31 @@ def is_stop_continuation(event: dict[str, Any]) -> bool:
 
 
 def machine_prompt_reason(event: dict[str, Any], prompt: str) -> str | None:
-    explicit = str(event.get("prompt_source") or event.get("source") or "").strip().lower()
-    if explicit in {"hook", "automation", "system", "subagent", "machine"}:
-        return f"explicit source={explicit}"
+    # Claude Desktop serializes scheduled-task launches as origin.kind=human.
+    # The explicit host envelope is therefore the stronger provenance signal.
     match = MACHINE_PROMPT_ENVELOPE.match(prompt)
     if match:
         return f"runtime envelope {match.group(0).strip()}"
+    if bool(event.get("is_meta") or event.get("isMeta")):
+        return "explicit isMeta=true"
+    explicit = str(
+        event.get("prompt_source")
+        or event.get("promptSource")
+        or event.get("source")
+        or ""
+    ).strip().lower()
+    if explicit in {"hook", "automation", "system", "subagent", "machine"}:
+        return f"explicit source={explicit}"
+    entrypoint = str(event.get("entrypoint") or event.get("entryPoint") or "").strip().lower()
+    if entrypoint == "sdk-cli":
+        return "explicit entrypoint=sdk-cli"
     if is_stop_continuation(event):
         return "Stop-generated continuation for the same turn"
+    origin_kind = str(event.get("origin_kind") or event.get("originKind") or "").strip().lower()
+    if origin_kind == "human":
+        return None
+    if origin_kind:
+        return f"explicit origin.kind={origin_kind}"
     return None
 
 
@@ -210,6 +229,101 @@ def event_prompt(event: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def prompt_digest(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return hashlib.sha256(normalized.encode("utf-8", "ignore")).hexdigest()
+
+
+def transcript_message_text(row: dict[str, Any]) -> str:
+    message = row.get("message") if isinstance(row.get("message"), dict) else {}
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(block["text"])
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+    )
+
+
+def reverse_jsonl_rows(path: Path):
+    """Yield a bounded transcript tail newest-first."""
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            end = stream.tell()
+            floor = max(0, end - TRANSCRIPT_TAIL_LIMIT)
+            position = end
+            pending = b""
+            yielded = 0
+            while position > floor and yielded < TRANSCRIPT_RECORD_LIMIT:
+                size = min(64 * 1024, position - floor)
+                position -= size
+                stream.seek(position)
+                pending = stream.read(size) + pending
+                lines = pending.split(b"\n")
+                pending = lines.pop(0) if position > floor else b""
+                for raw in reversed(lines):
+                    if not raw.strip():
+                        continue
+                    try:
+                        row = json.loads(raw.decode("utf-8", errors="replace"))
+                    except (UnicodeDecodeError, ValueError):
+                        continue
+                    if isinstance(row, dict):
+                        yield row
+                        yielded += 1
+                        if yielded >= TRANSCRIPT_RECORD_LIMIT:
+                            return
+            if position == 0 and pending.strip() and yielded < TRANSCRIPT_RECORD_LIMIT:
+                try:
+                    row = json.loads(pending.decode("utf-8", errors="replace"))
+                except (UnicodeDecodeError, ValueError):
+                    return
+                if isinstance(row, dict):
+                    yield row
+    except OSError:
+        return
+
+
+def transcript_provenance(event: dict[str, Any]) -> dict[str, Any]:
+    transcript_text = str(event.get("transcript_path") or "").strip()
+    prompt = event_prompt(event)
+    expected_session = _raw_session_id(event)
+    if not transcript_text or not prompt:
+        return {}
+    wanted = prompt_digest(prompt)
+    for row in reverse_jsonl_rows(Path(transcript_text)):
+        if row.get("type") != "user":
+            continue
+        row_session = str(row.get("sessionId") or row.get("session_id") or "").strip()
+        if expected_session and row_session != expected_session:
+            continue
+        if prompt_digest(transcript_message_text(row)) != wanted:
+            continue
+        origin = row.get("origin") if isinstance(row.get("origin"), dict) else {}
+        return {
+            "prompt_source": row.get("promptSource") or row.get("prompt_source") or "",
+            "entrypoint": row.get("entrypoint") or row.get("entryPoint") or "",
+            "user_type": row.get("userType") or row.get("user_type") or "",
+            "origin_kind": origin.get("kind") or "",
+            "is_meta": bool(row.get("isMeta") or row.get("is_meta")),
+            "raw_event_uuid": row.get("uuid") or row.get("id") or "",
+        }
+    return {}
+
+
+def with_transcript_provenance(event: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(event)
+    recovered = transcript_provenance(event)
+    for key, value in recovered.items():
+        if key not in enriched:
+            enriched[key] = value
+    return enriched
 
 
 def task_capture_enabled() -> bool:
@@ -295,6 +409,12 @@ def record_task(root: Path, event: dict[str, Any], prompt: str) -> dict[str, Any
         "kind": kind,
         "prompt": prompt,
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8", "ignore")).hexdigest(),
+        "prompt_source": str(event.get("prompt_source") or event.get("promptSource") or ""),
+        "entrypoint": str(event.get("entrypoint") or event.get("entryPoint") or ""),
+        "user_type": str(event.get("user_type") or event.get("userType") or ""),
+        "origin_kind": str(event.get("origin_kind") or event.get("originKind") or ""),
+        "is_meta": bool(event.get("is_meta") or event.get("isMeta")),
+        "raw_event_uuid": str(event.get("raw_event_uuid") or event.get("rawEventUuid") or ""),
         "requires_inventory": requires_inventory(prompt),
         "recorded_at": now_utc(),
     }
@@ -699,6 +819,7 @@ def record_terminal_receipt(root: Path, request: dict[str, Any], outcome: str) -
 def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
     if not task_capture_enabled():
         return 0
+    event = with_transcript_provenance(event)
     prompt = event_prompt(event)
     if prompt and machine_prompt_reason(event, prompt):
         return 0
