@@ -124,7 +124,15 @@ DESTRUCTIVE_INTENT = [
 
     # Git destructive (also covered by block_git_destructive)
     r"\bgit\s+reset\s+[^|]*--hard\b",
-    r"\bgit\s+push\s+[^|]*(-f\b|--force\b)",
+    # The wildcard stops at a command separator and the flag is matched
+    # case-exactly (this module applies IGNORECASE to every pattern, so the
+    # exactness is scoped inline). Two false positives measured 2026-09-04
+    # against the old `push\s+[^|]*(-f\b|--force\b)`: a push followed later in
+    # the same line by an unrelated `commit -F` was read as a force, because
+    # `[^|]*` crossed `&&` and IGNORECASE folded -F into -f; and
+    # `--force-with-lease` -- the alternative this very guard recommends --
+    # was blocked, because `--force\b` matches its prefix.
+    r"\bgit\s+push\b[^|;&\n]*?\s(?-i:(?:-[a-zA-Z]*f|--force))\b(?!-with-lease)",
     *GIT_FORCE_BRANCH_DELETE_PATTERNS,
     r"\bgit\s+clean\s+-[fdx]+",
     r"\bgit\s+filter-branch\b",
