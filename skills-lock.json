@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-01T14:27:20+00:00",
-  "skill_count": 56,
-  "aggregate_hash": "sha256:08d38e6a2c54eb4dfe1fb04c4d6e82fbb98e80080a33b517db255f96830abd0f",
+  "generated_at": "2026-09-04T01:36:27+00:00",
+  "skill_count": 57,
+  "aggregate_hash": "sha256:d83969a613d7eb32b44e8b4672e611b21892cc6e7af840106bd05a28fdd140fa",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:698f850dd8e71ec4dcde9bdaa670c067852e47a67f97dcdcbe72db385e29621a",
@@ -253,6 +253,20 @@
         "SKILL.md"
       ]
     },
+    "development/bug-reproducer": {
+      "content_hash": "sha256:9e623d1540cac51c5ffc7be4c231b588eb0ba7eba314aba06610779b2cfd9b83",
+      "size_bytes": 38717,
+      "file_count": 7,
+      "files": [
+        "SKILL.md",
+        "references/bug-discovery-playbook.md",
+        "references/report-schema.md",
+        "references/reproduction-playbook.md",
+        "scripts/capture_command.py",
+        "scripts/compare_evidence.py",
+        "scripts/generate_report.py"
+      ]
+    },
     "development/code-complexity": {
       "content_hash": "sha256:46e0191911fca70111c7148265178176e47c6beeedb66fa392bbddd41d7a49a2",
       "size_bytes": 303774,
@@ -299,8 +313,8 @@
       ]
     },
     "development/deep-review": {
-      "content_hash": "sha256:e652850424276398fda2bfb32946221570e2997f6bbfb30bd611d14fc61ddf1f",
-      "size_bytes": 14498,
+      "content_hash": "sha256:0169daefddd7b5d97139464568fd5dd594830ba53c02caac4e803e6ca78fdc1e",
+      "size_bytes": 16345,
       "file_count": 1,
       "files": [
         "SKILL.md"

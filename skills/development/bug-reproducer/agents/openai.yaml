@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bug Reproducer"
+  short_description: "Find likely bugs and prove them with tests"
+  default_prompt: "Use $bug-reproducer to scan this codebase for likely bugs, rank the strongest candidates, and ask before creating tests or changing code."

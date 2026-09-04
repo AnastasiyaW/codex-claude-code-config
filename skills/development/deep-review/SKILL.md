@@ -105,12 +105,31 @@ For each selected competency, launch an Agent tool call **in parallel**. Each ag
 
 **CRITICAL**: Launch ALL agents in a SINGLE message (parallel tool calls). Do NOT launch them sequentially.
 
+If a reviewer must run tests, give it an isolated writable worktree and a unique
+writable scratch directory. Capture `git status --porcelain=v1`,
+`git diff --exit-code`, and `git diff --cached --exit-code` before and after the
+review. Do not place a test-running reviewer in an OS-level read-only sandbox:
+pytest and similar tools legitimately create temporary files. If only a strict
+read-only sandbox is available, provide immutable test receipts for inspection
+and say that the reviewer did not execute the tests.
+
 ### Agent prompt template
 
 For each competency, use this prompt structure (fill in {COMPETENCY}, {CHECKLIST}, {FILES}):
 
 ```
 You are a {COMPETENCY} specialist reviewing code changes. Your ONLY job is {COMPETENCY} — ignore everything else.
+
+## Review authority and writable scratch
+Repository root: {REPO_ROOT}
+Scratch directory: {REVIEW_SCRATCH}
+
+You are a reviewer, not an implementer. Do not create, modify, delete, format,
+or install anything in {REPO_ROOT}; do not alter Git or worktree state. If a
+review command genuinely needs a file, write only under {REVIEW_SCRATCH}.
+Return findings in the required response format; do not create a project report
+or patch. If tests cannot run without writing elsewhere, inspect the supplied
+immutable test receipts and label execution NOT_RUN.
 
 ## Changed files to review
 {list each relevant file path}
@@ -335,6 +354,12 @@ DEEP REVIEW COMPLETE:
 - **False positives**: parallel agents don't share context, so they may flag things that are addressed in other files. The synthesis step (4a-4c) catches these through cross-referencing.
 - **Cost**: launching 5 parallel agents costs ~5x a single-pass review. This is the trade-off for depth. For quick checks use `/review` instead.
 - **Timing**: parallel agents complete at different speeds. Wait for ALL before synthesizing.
+- **Read-only is a role, not a filesystem**: reviewers do not edit source. A reviewer asked to execute tests still needs isolated writable scratch and a writable runtime.
+
+## Troubleshooting
+
+- **`pytest` reports no usable temporary directory or `Access is denied` before collection**: the reviewer was launched with a contradictory execution contract. Relaunch it in an isolated writable worktree with `{REVIEW_SCRATCH}`, or have it inspect immutable test receipts and report `NOT_RUN`; never count the failed command as test evidence.
+- **Reviewer may have changed the repository**: compare the before/after `git status --porcelain=v1`, `git diff --exit-code`, and `git diff --cached --exit-code` receipts. Any new tracked/staged change invalidates the review until reconciled.
 
 ## When to use /deep-review vs /review
 
