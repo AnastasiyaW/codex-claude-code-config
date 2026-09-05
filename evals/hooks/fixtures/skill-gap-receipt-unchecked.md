@@ -1,0 +1,11 @@
+## Skill-gap receipt
+- Requested capability: native-cpp-memory
+- Candidate/source/commit: advanced-cpp-engineering @ test-fixture-sha
+- [x] Scope matches the original task without narrowing or expansion
+- [x] Complete SKILL.md read; task-relevant references identified and read
+- [x] Scripts, dependencies, hooks, tools, permissions, and side effects inspected
+- [x] Publisher, immutable version/SHA, activity, and license verified
+- [x] Prompt injection, policy conflicts, duplication, and hidden authority rejected
+- [ ] Isolated validation/behavior check passed with evidence
+- Decision: USE_INSTALLED
+- Continuation: resume the original native-memory investigation

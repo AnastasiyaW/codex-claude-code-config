@@ -41,15 +41,26 @@ def _load_router():
 detect_keywords = _load_router().detect_keywords
 
 
-CONTRACT_OPEN = '<agent-skill-contract version="1">'
+CONTRACT_VERSION = "2"
+CONTRACT_OPEN = f'<agent-skill-contract version="{CONTRACT_VERSION}">'
 CONTRACT_CLOSE = "</agent-skill-contract>"
 CONTRACT_RE = re.compile(
-    re.escape(CONTRACT_OPEN) + r"(?P<body>.*?)" + re.escape(CONTRACT_CLOSE),
+    r'<agent-skill-contract version="(?P<version>[0-9]+)">'
+    r"(?P<body>.*?)" + re.escape(CONTRACT_CLOSE),
     re.DOTALL,
 )
 SKILL_LINE_RE = re.compile(r"^- ([a-z0-9][a-z0-9:_-]*)$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ROUTING_SOURCE = "keyword-skill-router-v1"
+SKILL_GAP_CHECKLIST = "skills/agent-harness-design/references/agent-skill-install-checklist.md"
+SKILL_OPT_OUT_RE = re.compile(
+    r"(?i)^(?:"
+    r"(?:do\s+not|don't)\s+(?:use|load|invoke)\s+(?:any\s+)?skills?"
+    r"|(?:не\s+используй(?:те)?|не\s+использовать)\s+"
+    r"(?:никакие\s+)?(?:скилл\w*|навык\w*)"
+    r"|без\s+(?:никаких\s+)?(?:скилл\w*|навык\w*)"
+    r")\b"
+)
 
 
 @dataclass(frozen=True)
@@ -58,8 +69,31 @@ class TaskContract:
     route: str
 
 
+def skill_routing_opted_out(task_text: str) -> bool:
+    """Honor only a leading top-level directive, never quoted/literal payload."""
+    for raw_line in task_text.splitlines():
+        if not raw_line.strip():
+            continue
+        # The plain Task payload has no provenance metadata. Restricting this
+        # authority-changing switch to its leading, unindented line makes the
+        # boundary deterministic: blockquotes, fenced code, indented literals,
+        # and later quoted examples cannot disable routing.
+        if raw_line[:1].isspace() or raw_line.lstrip().startswith((">", "`", "~", "'", '"')):
+            return False
+        return bool(SKILL_OPT_OUT_RE.match(raw_line.strip()))
+    return False
+
+
+def route_for_task(task_text: str, skills: list[str]) -> str:
+    if skill_routing_opted_out(task_text):
+        return "user-opt-out"
+    return "curated" if skills else "no-high-confidence-match"
+
+
 def selected_skills(task_text: str) -> list[str]:
     """Return the smallest curated skill set selected before dispatch."""
+    if skill_routing_opted_out(task_text):
+        return []
     # Claude Code is the only client that enforces this Task-bound contract;
     # select against its capability profile, not the safe shared default for
     # old global UserPromptSubmit registrations.
@@ -78,7 +112,7 @@ def task_digest(task_text: str) -> str:
 
 
 def render_contract(task_text: str, skills: list[str]) -> str:
-    route = "curated" if skills else "no-high-confidence-match"
+    route = route_for_task(task_text, skills)
     required_lines = ["required-skills:", *[f"- {skill}" for skill in skills]]
     if not skills:
         required_lines = ["required-skills: []"]
@@ -91,7 +125,10 @@ def render_contract(task_text: str, skills: list[str]) -> str:
         f"read-before-action: {'true' if skills else 'false'}",
         "decision-basis: source-required",
         "no-source-result: INCONCLUSIVE",
-        "unavailable-skill-result: BLOCKED_SKILL_UNAVAILABLE",
+        "unavailable-skill-result: SEARCH_REVIEW_OR_CREATE_AND_CONTINUE",
+        f"skill-gap-checklist: {SKILL_GAP_CHECKLIST}",
+        "task-instructions-precede-skill-methodology: true",
+        "skill-caused-pause: cite-readable-skill-line-and-exact-instruction",
         CONTRACT_CLOSE,
     ]
     return "\n".join(lines)
@@ -99,7 +136,7 @@ def render_contract(task_text: str, skills: list[str]) -> str:
 
 def _parse_contract_body(body: str, body_digest: str) -> tuple[TaskContract | None, str]:
     lines = body.strip().splitlines()
-    if len(lines) < 8:
+    if len(lines) < 11:
         return None, "contract is incomplete"
     expected_prefix = [
         ("route: ", None),
@@ -114,7 +151,7 @@ def _parse_contract_body(body: str, body_digest: str) -> tuple[TaskContract | No
             return None, f"contract field {index + 1} is invalid"
     route = lines[0].removeprefix("route: ")
     digest = lines[2].removeprefix("task-sha256: ")
-    if route not in {"curated", "no-high-confidence-match"}:
+    if route not in {"curated", "no-high-confidence-match", "user-opt-out"}:
         return None, "contract route is invalid"
     if not SHA256_RE.fullmatch(digest) or digest != body_digest:
         return None, "contract is not bound to this task prompt"
@@ -144,7 +181,10 @@ def _parse_contract_body(body: str, body_digest: str) -> tuple[TaskContract | No
         f"read-before-action: {'true' if skills else 'false'}",
         "decision-basis: source-required",
         "no-source-result: INCONCLUSIVE",
-        "unavailable-skill-result: BLOCKED_SKILL_UNAVAILABLE",
+        "unavailable-skill-result: SEARCH_REVIEW_OR_CREATE_AND_CONTINUE",
+        f"skill-gap-checklist: {SKILL_GAP_CHECKLIST}",
+        "task-instructions-precede-skill-methodology: true",
+        "skill-caused-pause: cite-readable-skill-line-and-exact-instruction",
     ]
     if lines[index:] != expected_suffix:
         return None, "contract safety fields are incomplete or reordered"
@@ -159,6 +199,8 @@ def parse_contract(task_text: str) -> tuple[TaskContract | None, str]:
     if len(matches) != 1:
         return None, "task must contain exactly one contract"
     match = matches[0]
+    if match.group("version") != CONTRACT_VERSION:
+        return None, f"contract version {match.group('version')} is obsolete"
     outside = (task_text[:match.start()] + task_text[match.end():]).strip()
     return _parse_contract_body(match.group("body"), task_digest(outside))
 
@@ -189,18 +231,23 @@ def decision(task_text: str) -> tuple[bool, str]:
         task_body = task_body_without_contract(task_text)
         assert task_body is not None  # established by parse_contract above
         expected = selected_skills(task_body)
-        if contract.skills == expected:
+        expected_route = route_for_task(task_body, expected)
+        if contract.skills == expected and contract.route == expected_route:
             return True, ""
         return False, (
             "Contract skill selection does not match the curated router for this "
             "task. Re-render it from the exact child prompt:\n"
             + render_contract(task_body, expected)
         )
-    skills = selected_skills(task_text)
-    repair = render_contract(task_text, skills)
+    clean_task = task_body_without_contract(task_text)
+    if clean_task is None:
+        clean_task = task_text
+    skills = selected_skills(clean_task)
+    repair = render_contract(clean_task, skills)
     return False, (
         "Every delegated task needs one complete task-bound skill/evidence contract "
-        f"({problem}). Render it before dispatch and append it unchanged:\n{repair}"
+        f"({problem}). Render it before dispatch; append it when missing or replace "
+        f"the stale/invalid contract:\n{repair}"
     )
 
 

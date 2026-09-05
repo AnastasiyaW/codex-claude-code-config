@@ -541,9 +541,14 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if "unavailable_skill" in m:
             suggestions.append(
-                "  BLOCKED_SKILL_UNAVAILABLE: "
+                "  SKILL_GAP: "
                 f"{m['unavailable_skill']} is not available in the {m['profile']} profile; "
-                "do not claim that this skill was applied."
+                "do not stop or claim it was applied. Send a bounded skill-search task when "
+                "delegation is available; inventory local and curated/upstream candidates, "
+                "audit each candidate with skills/agent-harness-design/references/"
+                "agent-skill-install-checklist.md, and use an accepted candidate. If none "
+                "passes, research primary sources, create and validate the smallest local "
+                "skill that fills the gap, then resume the original task."
             )
             continue
         if m.get("required"):

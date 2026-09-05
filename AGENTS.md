@@ -133,6 +133,13 @@ native `Task` boundary. Codex adds the same universal discipline automatically
 through `SubagentStart` and requires one decision-source receipt at
 `SubagentStop`, but neither event can inspect or block a task-specific route;
 use the renderer as well when the coordinator can pass the exact prompt.
+The rendered contract also keeps explicit task instructions above skill
+methodology and requires the child to name the exact skill instruction whenever
+that methodology causes a pause or divergence. A missing routed skill starts a
+bounded search: inventory and audit candidates with the existing install
+checklist; if none passes, research and create the smallest validated local
+skill, then resume the original task. It does not stop the task or authorize an
+unreviewed third-party install.
 
 ## Context engineering notes
 

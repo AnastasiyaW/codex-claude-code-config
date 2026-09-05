@@ -32,10 +32,13 @@ shown. This is a propagation gap, not a missing catalog.
    contract bound by SHA-256 to the exact child prompt; raw keyword matching at
    the hook boundary is deliberately avoided because quoted/literal text creates
    false positives.
-2. The contract requires the child to read each named `SKILL.md` before action,
-   to base a decision on a live/retrieved source, and to return `INCONCLUSIVE`
-   or `BLOCKED_SKILL_UNAVAILABLE` rather than inventing a basis or pretending a
-   missing skill was used. Memory is a lead to re-check, not confirmation.
+2. The contract requires the child to read each named `SKILL.md` before action
+   and to base decisions on live/retrieved sources. A missing routed skill emits
+   `SKILL_GAP`, never a terminal blocker: inventory local and upstream candidates,
+   audit each with the install checklist, or research and create the smallest
+   validated local skill, then resume the original task. `INCONCLUSIVE` remains
+   the honest result when no decision source exists. Memory is a lead to re-check,
+   not confirmation.
 3. Codex's native subagent API does not emit Claude's `Task` hook event. The
    same renderer is available for coordinator integration, but it is not a
    task-specific automatic Codex control. `subagent-skill-context.py` uses the
@@ -43,8 +46,10 @@ shown. This is a propagation gap, not a missing catalog.
    source-required decision rule into every child. The event has no task prompt
    and cannot block a launch, so it does not pretend to validate route accuracy.
    `subagent-evidence-receipt.py` uses the documented `SubagentStop` final
-   message to require a structured decision basis and evidence anchor, with one
-   repair pass. It verifies the receipt's shape and excludes memory as a stated
+   message to require a skill-disposition, decision basis, and evidence anchor,
+   with one repair pass. A resolved gap names its checklist receipt; a
+   skill-caused pause names the exact skill instruction. It verifies the receipt's
+   shape and excludes memory as a stated
    basis; it does not establish the truth of a cited source. This boundary is
    explicit rather than falsely claiming a Claude hook governs Codex.
 4. `epistemic-challenge` is a routed skill, not an always-on argument persona.

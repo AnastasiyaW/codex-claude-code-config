@@ -56,15 +56,15 @@ CASES = [
 ]
 
 PROFILE_CASES = [
-    ("shared", "Optimize retouch plugin native C++ tensor memory", "BLOCKED_SKILL_UNAVAILABLE: native-cpp-memory", "REQUIRED: Use skill native-cpp-memory"),
-    ("codex", "why error investigate this", "BLOCKED_SKILL_UNAVAILABLE: investigate", "REQUIRED: Use skill investigate"),
-    ("claude", "why error investigate this", "/investigate", "BLOCKED_SKILL_UNAVAILABLE"),
-    ("codex", "Optimize retouch plugin native C++ tensor memory", "BLOCKED_SKILL_UNAVAILABLE: native-cpp-memory", "REQUIRED: Use skill native-cpp-memory"),
-    ("claude", "Optimize retouch plugin native C++ tensor memory", "REQUIRED: Use skill native-cpp-memory", "BLOCKED_SKILL_UNAVAILABLE"),
-    ("codex", "Security audit the retouch Photoshop plugin before release", "BLOCKED_SKILL_UNAVAILABLE: retouch-security-audit", "REQUIRED: Use skill retouch-security-audit"),
-    ("claude", "Security audit the retouch Photoshop plugin before release", "REQUIRED: Use skill retouch-security-audit", "BLOCKED_SKILL_UNAVAILABLE"),
-    ("codex", "проверь SEO сайта и sitemap", "BLOCKED_SKILL_UNAVAILABLE: claude-seo:seo", "/claude-seo:seo"),
-    ("claude", "проверь SEO сайта и sitemap", "/claude-seo:seo", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("shared", "Optimize retouch plugin native C++ tensor memory", "SKILL_GAP: native-cpp-memory", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("codex", "why error investigate this", "SKILL_GAP: investigate", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("claude", "why error investigate this", "/investigate", "SKILL_GAP"),
+    ("codex", "Optimize retouch plugin native C++ tensor memory", "SKILL_GAP: native-cpp-memory", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("claude", "Optimize retouch plugin native C++ tensor memory", "REQUIRED: Use skill native-cpp-memory", "SKILL_GAP"),
+    ("codex", "Security audit the retouch Photoshop plugin before release", "SKILL_GAP: retouch-security-audit", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("claude", "Security audit the retouch Photoshop plugin before release", "REQUIRED: Use skill retouch-security-audit", "SKILL_GAP"),
+    ("codex", "проверь SEO сайта и sitemap", "SKILL_GAP: claude-seo:seo", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("claude", "проверь SEO сайта и sitemap", "/claude-seo:seo", "SKILL_GAP"),
 ]
 
 ok = True

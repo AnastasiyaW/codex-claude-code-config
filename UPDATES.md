@@ -4,6 +4,24 @@ Changelog for claude-code-skills. Newest first.
 
 ---
 
+## 2026-09-05 (GPT-6 Astra instruction/skill precedence audit)
+
+- Audited the harness against OpenAI's current GPT-6 Astra prompting guidance:
+  https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra
+- Kept the existing completion, autonomy, minimal causal-test, and bounded
+  delegation rules: they already cover the documented follow-through, testing,
+  and delegation behavior without another controller or a broader test suite.
+- Added the one uncovered boundary to the existing work-discipline rule and
+  subagent contracts: explicit task instructions outrank skill methodology, and
+  any skill-caused pause or divergence must name the exact skill instruction.
+  A missing routed skill now starts a bounded, checklist-backed search across
+  local and upstream candidates. If none passes, the agent researches primary
+  sources, creates and validates the smallest local skill, and resumes the
+  original task instead of manufacturing a blocked terminal state. Codex
+  `SubagentStop` requires the resulting skill-disposition receipt.
+- Did not copy API-only migration settings, prompt-cache changes, or generic
+  style boilerplate into the local coding-agent harness.
+
 ## 2026-08-05 (Cursor Team Kit: selective adoption)
 
 - Added claim-level `verify-this` with matched baseline/treatment evidence and

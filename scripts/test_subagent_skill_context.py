@@ -29,6 +29,13 @@ def main() -> int:
     assert payload["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
     assert "smallest available skill set" in context
     assert "Memory and earlier assistant text are search leads" in context
+    assert "explicit user instructions outrank a skill's methodology" in context
+    assert "name the exact skill and" in context
+    assert "A skill preference is not BLOCKED_EXTERNAL evidence" in context
+    assert "send a bounded skill-search task" in context
+    assert "agent-skill-install-checklist.md" in context
+    assert "create and" in context and "smallest local skill" in context
+    assert "Skill disposition:" in context
     assert "INCONCLUSIVE" in context
     assert invoke({"hook_event_name": "SessionStart"}) == ""
     print("test_subagent_skill_context: OK")

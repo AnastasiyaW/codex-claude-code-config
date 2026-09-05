@@ -136,17 +136,24 @@ There are two deliberately separate routing layers:
 3. `hooks/agent-skill-contract.py` closes the Claude delegation seam. Before dispatch,
    a coordinator runs its `--task` renderer, which reuses the curated router to
    select one primary skill or the explicitly required set. The result is bound
-   to the exact child prompt, carries the evidence-required decision rule, and
-   declares an explicit no-route result when appropriate. Claude Code enforces
+   to the exact child prompt, carries the evidence-required decision rule, keeps
+   task instructions above skill methodology, requires exact attribution when a
+   skill causes a pause or divergence, and turns a missing routed skill into a
+   checklist-backed search/review/create/continue branch. An explicit task-level
+   skill opt-out produces `user-opt-out`; ordinary no-match produces a distinct
+   no-route result. Claude Code enforces
    that a complete contract crosses its native `Task` boundary. Codex's
    collaboration API is not a Claude `Task` event: the renderer is available
    for coordinator integration, but no automatic Codex enforcement is claimed
    until that integration exists. For Codex, the supported `SubagentStart` event
    has no parent-task prompt and cannot stop a launch; instead
-   `hooks/subagent-skill-context.py` injects the minimum-skill and
-   source-required decision discipline into every child, while
+   `hooks/subagent-skill-context.py` injects the minimum-skill, source-required
+   decision discipline, the same task-over-skill precedence, and the missing-skill
+   resolution branch into every child. The authority-changing `user-opt-out`
+   route is recognized only as a leading top-level directive, never inside a
+   quote, fenced/indented literal, or later payload. Meanwhile,
    `hooks/subagent-evidence-receipt.py` asks the child to repair a missing
-   structured basis/evidence receipt once before accepting its result. This
+   structured skill-disposition/basis/evidence receipt once before accepting its result. This
    validates a source-shaped receipt (current command/path/URL, or an exact
    `user request:` constraint), not the truth or freshness of a cited URL or
    command; a parent or task-specific validator still owns that proof. This is
