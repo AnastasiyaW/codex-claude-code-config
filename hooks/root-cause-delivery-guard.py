@@ -75,7 +75,10 @@ BUDGET_NAME = "root-cause-delivery"
 CASE_ROOT = Path(".agent") / "delivery-cases"
 SCHEMA_VERSION = 1
 MAX_CAPTURE_BYTES = 12_000
-CAPTURE_TIMEOUT_SEC = 180
+# A measured focused proof has taken 159.32 s, leaving too little scheduling
+# headroom under the former 180 s ceiling. Proof capture remains bounded, but it
+# must not turn a slow passing reproducer into a synthetic rc=124 failure.
+CAPTURE_TIMEOUT_SEC = 900
 ACTIVE_FOR_EDITS = {"PLAN_FROZEN", "IMPLEMENTING"}
 COMPLETE_FOR_STOP = {"VERIFIED", "SEALED", "BLOCKED"}
 VALID_STATUS = {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -91,6 +92,54 @@ try:
 finally:
     guard.subprocess.run = original_run
 results.append(("unsafe frozen argv is blocked before subprocess", code == 2 and "unsafe focused_argv" in message and not called))
+
+# The proof ceiling must leave real focused suites enough headroom. A timeout is
+# still a legitimate red baseline, and a later successful run of the exact same
+# argv must be able to provide the green after-capture.
+timeout_case = planned(safe_argv)
+timeout_case["kind"] = "incident"
+timeout_case["status"] = "INTAKE"
+guard.save_case(safe_path, timeout_case)
+observed_timeout = None
+
+
+def timed_out(*args, **kwargs):  # type: ignore[no-untyped-def]
+    global observed_timeout
+    observed_timeout = kwargs.get("timeout")
+    raise subprocess.TimeoutExpired(args[0], observed_timeout, output="partial-out", stderr="partial-err")
+
+
+guard.subprocess.run = timed_out
+try:
+    code, message = guard.capture(ROOT, "proof-case", "before", safe_argv)
+finally:
+    guard.subprocess.run = original_run
+timed_case, _ = guard.load_case(ROOT, "proof-case")
+results.append((
+    "capture uses the bounded 900 second proof ceiling",
+    observed_timeout == 900 and code == 0 and timed_case["verification"]["before"]["returncode"] == 124,
+))
+
+timed_case["status"] = "IMPLEMENTING"
+guard.save_case(safe_path, timed_case)
+
+
+def succeeded(argv, **kwargs):  # type: ignore[no-untyped-def]
+    return subprocess.CompletedProcess(argv, 0, stdout="green", stderr="")
+
+
+guard.subprocess.run = succeeded
+try:
+    code, message = guard.capture(ROOT, "proof-case", "after", safe_argv)
+finally:
+    guard.subprocess.run = original_run
+timed_case, _ = guard.load_case(ROOT, "proof-case")
+results.append((
+    "a timed-out baseline can be followed by a green exact-argv capture",
+    code == 0
+    and timed_case["verification"]["before"]["returncode"] == 124
+    and timed_case["verification"]["after"]["returncode"] == 0,
+))
 
 failures = [label for label, passed in results if not passed]
 for label, passed in results:
