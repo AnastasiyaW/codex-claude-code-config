@@ -4,6 +4,7 @@ Presence in a config is not behaviour -- that is the failure this whole week kee
 producing. So: run each newly wired hook on a real event, and check every router
 target against the skills each harness can actually read.
 """
+import ast
 import json
 import re
 import subprocess
@@ -14,6 +15,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 HOME = Path.home()
 CFG = HOME / ".claude" / "claude-code-config"
+SOURCE = Path(__file__).resolve().parent.parent
 CLAUDE_CFG = HOME / ".claude" / "settings.json"
 CODEX_CFG = HOME / ".codex" / "hooks.json"
 
@@ -69,10 +71,33 @@ def wired_paths(path):
 def accepted_tools(source):
     """Tools a hook can act on, or None when it declares no gate.
 
+    Complex multi-client hooks may publish a literal ``HARNESS_ACCEPTED_TOOLS``
+    contract.  Prefer that executable declaration over regex inference: looking
+    only at the first branch misclassified the Claude ``Task`` path as dead.
+
     The idiom here is `if tool_name not in (...): return 0`, which ACCEPTS the named
     tools -- the negation is in the rejection, not in the list. Reading that backwards
     inverts the whole report, so the sense is decided by whether the body returns.
     """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        for node in tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not any(isinstance(target, ast.Name) and target.id == "HARNESS_ACCEPTED_TOOLS"
+                       for target in targets):
+                continue
+            try:
+                declared = ast.literal_eval(node.value)
+            except (ValueError, TypeError):
+                break
+            if isinstance(declared, (set, tuple, list)) and all(isinstance(item, str) for item in declared):
+                return set(declared)
+
     match = _GATE.search(source)
     if not match:
         return None
@@ -111,7 +136,16 @@ def _self_test():
     want("gate on == is read as that single tool",
          accepted_tools('if tool_name == "Edit":'), {"Edit"})
     want("no gate declared -> None", accepted_tools("def main(): return 0"), None)
-    gate = accepted_tools((CFG / "hooks" / "dependency-currency-guard.py")
+    want("literal multi-client contract outranks first-branch inference",
+         accepted_tools('HARNESS_ACCEPTED_TOOLS = {"Task", "Agent"}\n'
+                        'if tool_name in {"Agent"}: return handle()\n'
+                        'if tool_name != "Task": return 0'),
+         {"Task", "Agent"})
+    agent_gate = accepted_tools((SOURCE / "hooks" / "agent-skill-contract.py")
+                                .read_text(encoding="utf-8")) or set()
+    want("the real agent contract declares both Claude and Codex boundaries",
+         {"Task", "Agent"}.issubset(agent_gate), True)
+    gate = accepted_tools((SOURCE / "hooks" / "dependency-currency-guard.py")
                           .read_text(encoding="utf-8")) or set()
     want("the real dependency guard reads as Write/Edit/MultiEdit",
          gate, {"Write", "Edit", "MultiEdit"})

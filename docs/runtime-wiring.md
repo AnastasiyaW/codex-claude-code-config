@@ -39,6 +39,7 @@ pass.
 | Handoff completeness | `PreToolUse`, `Stop`, `PreCompact` | `PreToolUse`, `Stop`, `PreCompact` | `test_task_completion_hooks.py` |
 | Handoff to memory continuity | `SessionStart` | `SessionStart` | `test_review_handoff_memory_loop.py` |
 | Correction feedback capture | `Stop` + `SessionStart` backlog signal | `Stop` + `SessionStart` backlog signal | both hook self-tests + live manifest parity |
+| Disk-pressure advisory | shared `SessionStart`; measures only, never deletes | shared `SessionStart`; measures only, never deletes | `hooks/disk-pressure-advisor.py --self-test` + live manifest parity |
 | Claude/Codex continuation contract | `PreToolUse`, `SessionStart` | `PreToolUse`, `SessionStart` | `scripts/test_continuity_contract.py` |
 | Agent-doc freshness | `SessionStart` advisory + `Stop` gate | `SessionStart` advisory + `Stop` gate | hook self-tests |
 | Git source-of-truth setup | `Stop` for long-run projects | `Stop` for long-run projects | `test_lifecycle_hook_contracts.py` |

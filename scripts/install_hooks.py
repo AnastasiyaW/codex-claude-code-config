@@ -30,6 +30,7 @@ Opt-in extras (use --extras):
   - backup-retention-cleanup     Stop          trims old claude-backup branches
   - session-handoff-reminder     Stop          reminds to write handoff
   - session-handoff-check        SessionStart  surfaces recent handoffs
+  - disk-pressure-advisor       SessionStart  reports measured reclaimable artifacts without deleting
   - keyword-skill-router         UserPromptSubmit  suggests matching skills
   - agent-skill-contract         Claude Task + Codex Agent: binds a rendered skill/evidence contract
   - subagent-skill-context       Codex SubagentStart: injects skill/evidence context into every child
@@ -125,6 +126,7 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("session-handoff-reminder.py",  "Stop", None),
     ("session-handoff-check.py",     "SessionStart", None),
     ("handoff-resume-gate.py",       "SessionStart", None),
+    ("disk-pressure-advisor.py",     "SessionStart", None),
     ("keyword-skill-router.py",      "UserPromptSubmit", None),
     ("agent-skill-contract.py",      "PreToolUse", "Task"),
     ("subagent-skill-context.py",    "SubagentStart", None),

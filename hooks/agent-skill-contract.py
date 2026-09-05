@@ -64,6 +64,19 @@ SKILL_OPT_OUT_RE = re.compile(
     r")\b"
 )
 
+# Machine-readable parity contract.  The runtime branches below intentionally
+# differ because Claude calls the boundary ``Task`` while Codex exposes several
+# aliases for ``spawn_agent``.  Keep the complete accepted set literal so the
+# wiring audit does not have to guess control flow from the first comparison.
+HARNESS_ACCEPTED_TOOLS = {
+    "Task",
+    "spawn_agent",
+    "Agent",
+    "collaboration.spawn_agent",
+    "collaboration__spawn_agent",
+}
+CODEX_AGENT_TOOLS = HARNESS_ACCEPTED_TOOLS - {"Task"}
+
 
 @dataclass(frozen=True)
 class TaskContract:
@@ -483,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
     event = read_event()
     tool_name = str(event.get("tool_name") or "")
     hook_event = str(event.get("hook_event_name") or "")
-    if tool_name in {"spawn_agent", "Agent", "collaboration.spawn_agent", "collaboration__spawn_agent"}:
+    if tool_name in CODEX_AGENT_TOOLS:
         if hook_event == "PostToolUse":
             return handle_codex_post(event)
         return handle_codex_pre(event)

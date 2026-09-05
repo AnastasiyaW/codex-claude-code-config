@@ -43,6 +43,8 @@ def main() -> int:
         assert ("agent-skill-contract.py", "PreToolUse", "Agent") in codex_selection
         assert ("agent-skill-contract.py", "PostToolUse", "Agent") in codex_selection
         assert ("agent-skill-contract.py", "PreToolUse", "Task") not in codex_selection
+        assert ("disk-pressure-advisor.py", "SessionStart", None) in claude_selection
+        assert ("disk-pressure-advisor.py", "SessionStart", None) in codex_selection
         assert "skill_contract_state.py" in MODULE.SHARED
         assert (MODULE.REPO_ROOT / "hooks" / "skill_contract_state.py").is_file()
         for name, event in (

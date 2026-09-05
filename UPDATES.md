@@ -28,6 +28,11 @@ Changelog for claude-code-skills. Newest first.
 - Kept progressive disclosure and the smallest sufficient architecture: the
   gate rewards demonstrated task behavior and maintainability, not a large
   `SKILL.md` or unnecessary scripts.
+- Made parity proof itself executable for the dual-client boundary: complex
+  hooks declare their accepted tool names instead of being guessed from the
+  first branch. Also brought the already-live disk-pressure advisory under Git
+  and shared `SessionStart` registration for Claude and Codex; its self-test now
+  proves the canonical sweeper path rather than silently exercising fallback.
 
 ## 2026-09-05 (GPT-6 Astra instruction/skill precedence audit)
 
