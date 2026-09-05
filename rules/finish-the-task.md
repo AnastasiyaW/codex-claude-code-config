@@ -160,9 +160,22 @@ upstream candidates. Inspect each candidate with
 `skills/agent-harness-design/references/agent-skill-install-checklist.md`, including
 its full `SKILL.md`, task-relevant references, scripts, dependencies, permissions,
 provenance, license, and conflicts with the task. If no candidate passes, research
-primary sources and create or update the smallest local skill that fills the routed
-gap. Validate it, record the checklist receipt, and resume the original task. Never
-install or execute an unreviewed third-party skill merely to remove the gap label.
+primary sources and build or update a research-backed, production-quality local
+skill that fills the routed gap. Ground it in real task evidence, record accepted
+and rejected guidance, use progressive disclosure, compare it against a no-skill
+or prior-version baseline on realistic and held-out cases, obtain independent
+fresh-context review, and record an owner, version, source-freshness policy, update
+triggers, and rollback. Quality is measured by task behavior and maintainability,
+not by making the skill large. Validate the complete receipt and resume the original
+task. Never install or execute an unreviewed third-party skill merely to remove the
+gap label.
+For a research-built skill, prose `PASS` is insufficient: preserve per-source
+primary research mapped to exact skill lines and typed case observations from
+which the validator recomputes baseline/candidate and held-out results. Keep a
+fresh reviewer identity distinct from the builder. `GAP_RESOLVED` closes only
+with the bound task digest and separate terminal evidence that the original task
+resumed; research, eval, review, and checklist artifacts cannot be recycled as
+that proof.
 
 ### User work orders: requests are durable work, not chat residue
 

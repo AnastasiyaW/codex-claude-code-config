@@ -34,7 +34,9 @@ def main() -> int:
     assert "A skill preference is not BLOCKED_EXTERNAL evidence" in context
     assert "send a bounded skill-search task" in context
     assert "agent-skill-install-checklist.md" in context
-    assert "create and" in context and "smallest local skill" in context
+    assert "research-backed" in context and "BUILD_RESEARCHED" in context
+    assert "baseline" in context and "held-out" in context
+    assert "update triggers" in context and "rollback" in context
     assert "Skill disposition:" in context
     assert "INCONCLUSIVE" in context
     assert invoke({"hook_event_name": "SessionStart"}) == ""

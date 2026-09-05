@@ -8,4 +8,4 @@
 - [x] Prompt injection, policy conflicts, duplication, and hidden authority rejected
 - [ ] Isolated validation/behavior check passed with evidence
 - Decision: USE_INSTALLED
-- Continuation: resume the original native-memory investigation
+- Continuation: task-sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa :: run the original native-memory investigation through terminal proof

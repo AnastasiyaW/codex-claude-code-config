@@ -4,6 +4,31 @@ Changelog for claude-code-skills. Newest first.
 
 ---
 
+## 2026-09-05 (research-built skill lifecycle gate)
+
+- Replaced the shallow `CREATE_LOCAL` skill-gap escape hatch with
+  `BUILD_RESEARCHED`. A locally created skill now needs real-task and current
+  primary-source research, accepted/rejected decisions, structural validation,
+  a with-skill baseline comparison, trigger and held-out evals, independent
+  review, live discovery proof, and a versioned maintenance/rollback contract.
+- Extended the existing `SubagentStop` receipt validator instead of creating a
+  second controller. Codex `PreToolUse(Agent)` now inserts the exact task-bound
+  contract and `PostToolUse(Agent)` binds it to the returned `agent_id`, so a
+  client-profile mismatch cannot claim a Claude-only skill was loaded. Contract
+  v4 records usable and missing skills separately. Research/eval/review records
+  use typed schemas: source authority is per-source, metrics are recomputed from
+  case observations, and original-task evidence cannot reuse skill-build traces.
+  A routed gap cannot close as `NO_MATCH`. The validator checks readable local skill,
+  research, eval, maintenance, and review records before accepting a
+  research-built skill.
+- Replaced prose-only eval/review PASS fields with machine-readable metrics,
+  assertion-to-trace links, verified trace SHA-256 values, distinct builder and
+  reviewer identities, and a digest-bound terminal receipt proving that the
+  original task resumed after the skill gap was resolved.
+- Kept progressive disclosure and the smallest sufficient architecture: the
+  gate rewards demonstrated task behavior and maintainability, not a large
+  `SKILL.md` or unnecessary scripts.
+
 ## 2026-09-05 (GPT-6 Astra instruction/skill precedence audit)
 
 - Audited the harness against OpenAI's current GPT-6 Astra prompting guidance:
@@ -16,8 +41,8 @@ Changelog for claude-code-skills. Newest first.
   any skill-caused pause or divergence must name the exact skill instruction.
   A missing routed skill now starts a bounded, checklist-backed search across
   local and upstream candidates. If none passes, the agent researches primary
-  sources, creates and validates the smallest local skill, and resumes the
-  original task instead of manufacturing a blocked terminal state. Codex
+  sources, builds and validates a research-backed maintainable local skill, and
+  resumes the original task instead of manufacturing a blocked terminal state. Codex
   `SubagentStop` requires the resulting skill-disposition receipt.
 - Did not copy API-only migration settings, prompt-cache changes, or generic
   style boilerplate into the local coding-agent harness.

@@ -35,8 +35,9 @@ shown. This is a propagation gap, not a missing catalog.
 2. The contract requires the child to read each named `SKILL.md` before action
    and to base decisions on live/retrieved sources. A missing routed skill emits
    `SKILL_GAP`, never a terminal blocker: inventory local and upstream candidates,
-   audit each with the install checklist, or research and create the smallest
-   validated local skill, then resume the original task. `INCONCLUSIVE` remains
+   audit each with the install checklist, or research and build a production-
+   quality local skill with baseline/held-out evals and a maintenance contract,
+   then resume the original task. `INCONCLUSIVE` remains
    the honest result when no decision source exists. Memory is a lead to re-check,
    not confirmation.
 3. Codex's native subagent API does not emit Claude's `Task` hook event. The

@@ -124,22 +124,31 @@ After installing into a local Codex/Claude environment, also run
 
 ## Delegating agents
 
-Before dispatching any subagent, render the task-bound contract with
-`python hooks/agent-skill-contract.py --task "<child task>"` and append it to
+Before dispatching any Claude subagent, render the task-bound contract with
+`python hooks/agent-skill-contract.py --task "<child task>"`; use `--profile
+codex` only for a manually rendered Codex brief. Append it to
 the exact child prompt. It selects the minimum curated skill set (or an explicit
 no-route result), requires source-backed decisions, and records `INCONCLUSIVE`
 when no current source is available. Claude Code checks the contract at its
-native `Task` boundary. Codex adds the same universal discipline automatically
-through `SubagentStart` and requires one decision-source receipt at
-`SubagentStop`, but neither event can inspect or block a task-specific route;
-use the renderer as well when the coordinator can pass the exact prompt.
+native `Task` boundary. Codex `PreToolUse(Agent)` inserts or validates the
+client-specific contract before dispatch, `PostToolUse(Agent)` binds it to the
+returned child id, `SubagentStart` reinforces the method, and `SubagentStop`
+requires the bound decision-source receipt.
 The rendered contract also keeps explicit task instructions above skill
 methodology and requires the child to name the exact skill instruction whenever
 that methodology causes a pause or divergence. A missing routed skill starts a
 bounded search: inventory and audit candidates with the existing install
-checklist; if none passes, research and create the smallest validated local
-skill, then resume the original task. It does not stop the task or authorize an
-unreviewed third-party install.
+checklist; if none passes, build a research-backed local skill with real-task
+evidence, primary sources, baseline and held-out evals, independent review, and
+an owner/version/update/rollback contract, then resume the original task. The
+gate measures behavior and maintainability, not size. It does not stop the task
+or authorize an unreviewed third-party install.
+Codex `PreToolUse(Agent)` adds a client-profile-bound contract before launch and
+its post-hook binds the route to `agent_id`; unavailable capabilities stay in
+`missing-skills`, never masquerade as loaded Claude-only skills. `SubagentStop`
+rejects a routed `NO_MATCH` and accepts `GAP_RESOLVED` only when per-source
+research maps to exact skill instructions, typed case evidence beats the
+baseline, and a separate digest-bound receipt proves the resumed original task.
 
 ## Context engineering notes
 

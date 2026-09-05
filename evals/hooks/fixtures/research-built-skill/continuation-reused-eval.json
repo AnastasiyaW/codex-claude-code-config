@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "terminal_state": "PASS",
+  "traces": [
+    {
+      "id": "recycled-eval",
+      "path": "eval-trace.json",
+      "sha256": "591adb1e3063ca35b49e243067eb3177c14c531dc2c7eacd1608d6d4de211086"
+    }
+  ],
+  "outcomes": [
+    {"id": "claimed-original-task", "case_ids": ["candidate-1"]}
+  ]
+}

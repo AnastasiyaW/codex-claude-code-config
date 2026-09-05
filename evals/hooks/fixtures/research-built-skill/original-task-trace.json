@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "kind": "original-task-execution",
+  "task_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "producer": {
+    "command": ["python", "scripts/test_agent_skill_contract.py"],
+    "exit_code": 0
+  },
+  "cases": [
+    {"id": "original-outcome", "cohort": "outcome", "observations": [{"id": "terminal", "operator": "eq", "expected": "PASS", "actual": "PASS"}]}
+  ]
+}

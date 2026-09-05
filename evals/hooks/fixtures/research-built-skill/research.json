@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "sources": [
+    {
+      "id": "agent-skills-best-practices",
+      "url": "https://agentskills.io/skill-creation/best-practices",
+      "title": "Skill creation best practices",
+      "publisher": "Agent Skills",
+      "language": "en",
+      "authority": "primary",
+      "published_or_updated": "not-stated",
+      "accessed": "2026-09-05"
+    },
+    {
+      "id": "agent-skills-evaluation",
+      "url": "https://agentskills.io/skill-creation/evaluating-skills",
+      "title": "Evaluating skills",
+      "publisher": "Agent Skills",
+      "language": "en",
+      "authority": "primary",
+      "published_or_updated": "not-stated",
+      "accessed": "2026-09-05"
+    }
+  ],
+  "local_evidence": [
+    {
+      "id": "native-lifetime-failure",
+      "path": "local-evidence.txt",
+      "sha256": "ab5367958e6e02d6a5821436df18d391fe4ef218e614142ddbf30a21a0b610fb",
+      "observation": "Generic guidance missed the observed affinity and final-event-loop failure seam."
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "causal-reproducer-first",
+      "decision": "accepted",
+      "source_ids": ["agent-skills-best-practices", "agent-skills-evaluation"],
+      "local_evidence_ids": ["native-lifetime-failure"],
+      "rationale": "The repeated local failure needs a causal reproducer before ownership changes.",
+      "skill_line": 10,
+      "exact_instruction": "Use current code and a causal reproducer before changing ownership."
+    },
+    {
+      "id": "unrelated-style-expansion",
+      "decision": "rejected",
+      "source_ids": ["agent-skills-best-practices"],
+      "local_evidence_ids": ["native-lifetime-failure"],
+      "rationale": "Unrelated style guidance does not repair the observed lifetime seam and would dilute retrieval."
+    }
+  ]
+}

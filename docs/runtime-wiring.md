@@ -44,7 +44,7 @@ pass.
 | Git source-of-truth setup | `Stop` for long-run projects | `Stop` for long-run projects | `test_lifecycle_hook_contracts.py` |
 | File transfer continuity | `PreToolUse` + `PostToolUse` + `Stop` | `PreToolUse` + `PostToolUse` + `Stop` | `scripts/test_transfer_contract.py` |
 | Skills availability | `~/.codex/skills` + shared `~/.agents/skills` | `~/.claude/skills` | `sync_skills_to_codex.py --check --also-claude --also-agents` and `skills-lock.json` |
-| Routed subagent skill assignment | `SubagentStart` injects universal selection discipline; `SubagentStop` requires one source-shaped decision receipt | coordinator renders a task-bound contract before delegation; `PreToolUse(Task)` denies a child brief without one complete contract | `scripts/test_subagent_skill_context.py`, `scripts/test_subagent_evidence_receipt.py`, `scripts/test_agent_skill_contract.py`; live client events for activation |
+| Routed subagent skill assignment | `PreToolUse(Agent)` inserts/validates a task-bound contract, `PostToolUse(Agent)` binds it to `agent_id`, `SubagentStart` reinforces the protocol, and `SubagentStop` checks the bound disposition | coordinator renders a task-bound contract before delegation; `PreToolUse(Task)` denies a child brief without one complete contract | `scripts/test_subagent_skill_context.py`, `scripts/test_subagent_evidence_receipt.py`, `scripts/test_agent_skill_contract.py`; live client events for activation |
 | Skills survive a machine/account move | active skill directory | `~/.claude/skills` | `recover_skill_trees.py --report` |
 | Optional RTK output compression | instruction-level (`AGENTS.md`) | native `PreToolUse` hook | `scripts/test_rtk_integration.py` plus pinned binary verification |
 
@@ -133,32 +133,36 @@ There are two deliberately separate routing layers:
    advisory. It catches only high-confidence phrases and prints a suggestion;
    it does not inject a skill and must not become a second copy of the whole
    semantic catalog.
-3. `hooks/agent-skill-contract.py` closes the Claude delegation seam. Before dispatch,
+3. `hooks/agent-skill-contract.py` closes both delegation seams. Before dispatch,
    a coordinator runs its `--task` renderer, which reuses the curated router to
-   select one primary skill or the explicitly required set. The result is bound
+   select one primary skill or the explicitly required set for the receiving
+   `claude` or `codex` profile. The result is bound
    to the exact child prompt, carries the evidence-required decision rule, keeps
    task instructions above skill methodology, requires exact attribution when a
    skill causes a pause or divergence, and turns a missing routed skill into a
    checklist-backed search/review/create/continue branch. An explicit task-level
-   skill opt-out produces `user-opt-out`; ordinary no-match produces a distinct
-   no-route result. Claude Code enforces
-   that a complete contract crosses its native `Task` boundary. Codex's
-   collaboration API is not a Claude `Task` event: the renderer is available
-   for coordinator integration, but no automatic Codex enforcement is claimed
-   until that integration exists. For Codex, the supported `SubagentStart` event
-   has no parent-task prompt and cannot stop a launch; instead
-   `hooks/subagent-skill-context.py` injects the minimum-skill, source-required
-   decision discipline, the same task-over-skill precedence, and the missing-skill
-   resolution branch into every child. The authority-changing `user-opt-out`
+   skill opt-out produces `user-opt-out`; an unavailable routed capability is a
+   `skill-gap` with `missing-skills`, while ordinary no-match is a distinct
+   no-route result. Claude Code enforces that a complete contract crosses its
+   native `Task` boundary. Codex exposes `spawn_agent` to `PreToolUse` and
+   `PostToolUse` through matcher alias `Agent`: the pre-hook automatically
+   inserts or validates the contract, and the post-hook binds its route to the
+   returned `agent_id`. `hooks/subagent-skill-context.py` then reinforces the
+   source-required decision discipline, the same task-over-skill precedence,
+   and the missing-skill resolution branch inside every child. The
+   authority-changing `user-opt-out`
    route is recognized only as a leading top-level directive, never inside a
    quote, fenced/indented literal, or later payload. Meanwhile,
    `hooks/subagent-evidence-receipt.py` asks the child to repair a missing
-   structured skill-disposition/basis/evidence receipt once before accepting its result. This
-   validates a source-shaped receipt (current command/path/URL, or an exact
-   `user request:` constraint), not the truth or freshness of a cited URL or
-   command; a parent or task-specific validator still owns that proof. This is
-   automatic context and receipt enforcement, not a false claim that Codex can
-   validate a task-specific route at launch.
+   route/disposition/basis/evidence receipt once before accepting its result.
+   `NO_MATCH` cannot close a route that named required or missing skills. A
+   research-built skill additionally needs per-source research mappings,
+   numerical baseline/candidate suites recomputed from typed case observations,
+   distinct author/reviewer ids and a digest-bound, evidence-disjoint terminal
+   receipt proving the original task resumed. The hook
+   validates this observable structure, not the truth of an external source or
+   the human reality behind identity strings; a parent or task-specific
+   validator still owns those semantic checks.
 
 A skill the loader cannot read is absent no matter how correct the routing is.
 After a machine or account move, verify the catalog itself before trusting either

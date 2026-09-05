@@ -31,7 +31,7 @@ Opt-in extras (use --extras):
   - session-handoff-reminder     Stop          reminds to write handoff
   - session-handoff-check        SessionStart  surfaces recent handoffs
   - keyword-skill-router         UserPromptSubmit  suggests matching skills
-  - agent-skill-contract         Claude PreToolUse(Task): validates a rendered skill/evidence contract
+  - agent-skill-contract         Claude Task + Codex Agent: binds a rendered skill/evidence contract
   - subagent-skill-context       Codex SubagentStart: injects skill/evidence context into every child
   - subagent-evidence-receipt    Codex SubagentStop: requires a decision-source receipt
   - task-inbox-show              SessionStart  surfaces .claude/task-inbox/ pending tasks
@@ -154,15 +154,18 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("shared-branch-guard.py", "PreToolUse", "Bash|PowerShell"),
 ]
 
-# Claude Code exposes a Task hook event; Codex desktop's native delegation API
-# does not. Registering that matcher in Codex would create a silent dead
-# control. Codex instead has SubagentStart, which can inject context but cannot
-# inspect the parent task or cancel the launch.
+# Claude calls its delegation boundary Task. Codex exposes spawn_agent through
+# the local-function hook path under the matcher alias Agent. Keep the matcher
+# client-specific while sharing the contract implementation.
 CLAUDE_ONLY_EXTRAS = {"agent-skill-contract.py"}
 CODEX_ONLY_EXTRAS = {"subagent-skill-context.py", "subagent-evidence-receipt.py"}
+CODEX_NATIVE_EXTRAS = [
+    ("agent-skill-contract.py", "PreToolUse", "Agent"),
+    ("agent-skill-contract.py", "PostToolUse", "Agent"),
+]
 
-# Shared utility (not a hook itself - but needed by hooks)
-SHARED = ["safety_common.py"]
+# Shared utilities (not hooks themselves, but imported by installed hooks)
+SHARED = ["safety_common.py", "skill_contract_state.py"]
 
 # One local, unpushed implementation used a narrow batch-only name.  Retire its
 # registrations when the generic task guard is installed, while settings.json
@@ -256,7 +259,10 @@ def _selection(args: argparse.Namespace) -> list[tuple[str, str, str | None]]:
     if args.extras:
         selection += EXTRAS
     excluded = CLAUDE_ONLY_EXTRAS if args.codex else CODEX_ONLY_EXTRAS
-    return [entry for entry in selection if entry[0] not in excluded]
+    selected = [entry for entry in selection if entry[0] not in excluded]
+    if args.codex and args.extras:
+        selected += CODEX_NATIVE_EXTRAS
+    return selected
 
 
 def _load_settings(path: Path) -> dict:

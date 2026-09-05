@@ -23,7 +23,11 @@ INTENTIONAL = {
     ("codex", "Stop", "*", "conversation-history-github-sync.py"):
         "Codex keeps its own conversation-history archive; Claude transcripts go elsewhere",
     ("claude", "PreToolUse", "Task", "agent-skill-contract.py"):
-        "Claude exposes Task before launch, so it can bind the exact child prompt to curated skill routing",
+        "Claude names its pre-launch delegation boundary Task; Codex uses Agent",
+    ("codex", "PreToolUse", "Agent", "agent-skill-contract.py"):
+        "Codex names spawn_agent through the local-function matcher alias Agent",
+    ("codex", "PostToolUse", "Agent", "agent-skill-contract.py"):
+        "Codex PostToolUse binds the routed prompt to the returned agent_id",
     ("claude", "SessionStart", "startup|resume|clear|compact", "benjamin-plus-inject.py"):
         "Claude loses injected session context on these lifecycle events; Codex receives the same policy through its native AGENTS context",
     ("codex", "SubagentStart", "*", "subagent-skill-context.py"):

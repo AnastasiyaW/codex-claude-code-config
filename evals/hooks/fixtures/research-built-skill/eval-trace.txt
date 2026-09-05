@@ -1,0 +1,3 @@
+AC1 baseline missed native lifetime ownership; candidate identified the owner and teardown edge.
+AC2 candidate selected the task-specific reference without loading unrelated guidance.
+AC3 positive, near-miss, and held-out routing cases matched their expected dispositions.

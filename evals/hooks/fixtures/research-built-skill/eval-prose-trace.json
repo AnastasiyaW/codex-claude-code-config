@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "skill_name": "native-cpp-memory",
+  "skill_version": "1.0.0",
+  "baseline": {"kind": "no_skill", "passed": 1, "total": 2},
+  "candidate": {"passed": 2, "total": 2},
+  "trigger_positives": {"passed": 2, "total": 2},
+  "near_miss_negatives": {"passed": 2, "total": 2},
+  "held_out": {"passed": 2, "total": 2},
+  "traces": [
+    {"id": "eval-trace", "path": "eval-trace.txt", "sha256": "c677f3d7be045f8c4f69a79e28d01dfd3a42d80b528af517f28fbf9358caea8e"}
+  ],
+  "assertions": [
+    {"id": "AC1", "case_ids": ["candidate-1"]},
+    {"id": "AC2", "case_ids": ["held-out-1"]}
+  ],
+  "result": "PASS"
+}

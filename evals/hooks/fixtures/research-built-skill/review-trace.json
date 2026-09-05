@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "skill-review",
+  "skill_name": "native-cpp-memory",
+  "skill_version": "1.0.0",
+  "producer": {
+    "command": ["codex", "exec", "fresh-context skill review"],
+    "exit_code": 0
+  },
+  "cases": [
+    {"id": "review-ac1", "cohort": "acceptance", "observations": [{"id": "evidence", "operator": "eq", "expected": "mapped", "actual": "mapped"}]},
+    {"id": "review-ac2", "cohort": "acceptance", "observations": [{"id": "baseline", "operator": "eq", "expected": "beaten", "actual": "beaten"}]},
+    {"id": "review-ac3", "cohort": "acceptance", "observations": [{"id": "maintenance", "operator": "eq", "expected": "recorded", "actual": "recorded"}]}
+  ]
+}

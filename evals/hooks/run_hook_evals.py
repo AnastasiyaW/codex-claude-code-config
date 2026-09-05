@@ -16,6 +16,7 @@ Each case in cases.json:
     "stdout_contains": [...],      # for expect=output
     "stdout_not_contains": [...],  # for expect=output
     "files": {"rel/path": "content"},  # sandbox files (cwd = sandbox)
+    "route_state": { ... },          # optional Codex agent route under sandbox HOME
     "command_file": "rel/path"     # optional: file whose content becomes
   }                                #   stdin.tool_input.command
 
@@ -33,6 +34,7 @@ Exit code: 0 = all pass, 1 = failures.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -72,6 +74,22 @@ def run_case(case: dict) -> tuple[bool, str]:
             p.write_text(content, encoding="utf-8")
 
         stdin_obj = case.get("stdin", {})
+        route_state = case.get("route_state")
+        if route_state is not None:
+            session_id = str(stdin_obj.get("session_id") or "")
+            agent_id = str(stdin_obj.get("agent_id") or "")
+            if not session_id or not agent_id:
+                return False, "route_state requires stdin.session_id and stdin.agent_id"
+            session_key = hashlib.sha256(session_id.encode()).hexdigest()
+            agent_key = hashlib.sha256(agent_id.encode()).hexdigest()
+            state_path = (
+                sandbox / ".codex" / "state" / "agent-skill-contracts"
+                / session_key / "agents" / f"{agent_key}.json"
+            )
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps({"state_version": 1, **route_state}), encoding="utf-8"
+            )
         if case.get("command_file"):
             content = (sandbox / case["command_file"]).read_text(encoding="utf-8")
             stdin_obj.setdefault("tool_input", {})["command"] = content

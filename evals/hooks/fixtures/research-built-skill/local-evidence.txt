@@ -1,0 +1,2 @@
+Observed task: diagnose a native C++ lifetime failure after worker-thread shutdown.
+Generic guidance did not identify object affinity or the final event-loop turn.

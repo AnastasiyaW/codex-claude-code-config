@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -11,13 +13,14 @@ ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / "hooks" / "agent-skill-contract.py"
 
 
-def invoke(event: dict) -> tuple[int, str]:
+def invoke(event: dict, env: dict | None = None) -> tuple[int, str]:
     result = subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(event, ensure_ascii=False),
         text=True,
         capture_output=True,
         encoding="utf-8",
+        env=env,
     )
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
@@ -31,9 +34,9 @@ def require(condition: bool, detail: str) -> None:
         raise AssertionError(detail)
 
 
-def render(task_text: str) -> dict:
+def render(task_text: str, profile: str = "claude") -> dict:
     result = subprocess.run(
-        [sys.executable, str(HOOK), "--task", task_text, "--json"],
+        [sys.executable, str(HOOK), "--task", task_text, "--json", "--profile", profile],
         text=True,
         capture_output=True,
         encoding="utf-8",
@@ -53,13 +56,64 @@ def main() -> int:
 
     payload = render(remote_task)
     require(payload["selected_skills"] == ["remote-compute-ops"], json.dumps(payload))
-    require('<agent-skill-contract version="2">' in payload["contract"], json.dumps(payload))
-    require("unavailable-skill-result: SEARCH_REVIEW_OR_CREATE_AND_CONTINUE" in payload["contract"], json.dumps(payload))
+    require('<agent-skill-contract version="4">' in payload["contract"], json.dumps(payload))
+    require("client-profile: claude" in payload["contract"], json.dumps(payload))
+    require("unavailable-skill-result: SEARCH_REVIEW_OR_RESEARCH_BUILD_AND_CONTINUE" in payload["contract"], json.dumps(payload))
     require("skill-gap-checklist: skills/agent-harness-design/references/agent-skill-install-checklist.md" in payload["contract"], json.dumps(payload))
     require("task-instructions-precede-skill-methodology: true" in payload["contract"], json.dumps(payload))
     require("skill-caused-pause: cite-readable-skill-line-and-exact-instruction" in payload["contract"], json.dumps(payload))
     code, out = invoke(task(dispatched(remote_task)))
     require(code == 0 and '"decision": "block"' not in out, out)
+
+    with tempfile.TemporaryDirectory(prefix="skill-contract-state-") as state_dir:
+        env = dict(os.environ)
+        env["CODEX_SKILL_CONTRACT_STATE_DIR"] = state_dir
+        pre_event = {
+            "hook_event_name": "PreToolUse",
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "tool_use_id": "call-1",
+            "tool_name": "spawn_agent",
+            "tool_input": {"task_name": "child", "message": remote_task},
+        }
+        code, out = invoke(pre_event, env)
+        require(code == 0 and '"permissionDecision": "allow"' in out, out)
+        rewritten = json.loads(out)["hookSpecificOutput"]["updatedInput"]
+        require('<agent-skill-contract version="4">' in rewritten["message"], out)
+        require("client-profile: codex" in rewritten["message"], out)
+        post_event = {
+            **pre_event,
+            "hook_event_name": "PostToolUse",
+            "tool_input": rewritten,
+            "tool_response": {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps({"agent_id": "agent-1", "task_name": "/root/child"}),
+                }]
+            },
+        }
+        code, out = invoke(post_event, env)
+        require(code == 0 and not out.strip(), out)
+        state_files = list(Path(state_dir).glob("*/agents/*.json"))
+        require(len(state_files) == 1, repr(state_files))
+        bound = json.loads(state_files[0].read_text(encoding="utf-8"))
+        require(bound["required_skills"] == ["remote-compute-ops"], json.dumps(bound))
+        require(bound["missing_skills"] == [], json.dumps(bound))
+        require(bound["client_profile"] == "codex", json.dumps(bound))
+        require(bound["task_sha256"] == payload["contract"].split("task-sha256: ", 1)[1].split("\n", 1)[0], json.dumps(bound))
+        malformed_event = {
+            **pre_event,
+            "tool_use_id": "call-2",
+            "tool_input": {
+                "task_name": "broken-child",
+                "message": remote_task + "\n<agent-skill-contract version=\"4\">broken",
+            },
+        }
+        code, out = invoke(malformed_event, env)
+        require(code == 0 and '"decision": "block"' in out and "cannot be repaired" in out, out)
+        no_identity_event = {key: value for key, value in pre_event.items() if key != "session_id"}
+        code, out = invoke(no_identity_event, env)
+        require(code == 0 and '"decision": "block"' in out and "session_id" in out, out)
 
     wrong_skill_contract = str(payload["contract"]).replace("remote-compute-ops", "deep-review")
     code, out = invoke(task(remote_task + "\n\n" + wrong_skill_contract))
@@ -78,7 +132,7 @@ def main() -> int:
     code, out = invoke(task(remote_task + "\n\n" + forged_no_route))
     require(code == 0 and '"decision": "block"' in out and "does not match the curated router" in out, out)
 
-    incomplete_contract = '''<agent-skill-contract version="2">
+    incomplete_contract = '''<agent-skill-contract version="4">
 This is quoted data:
 - remote-compute-ops
 </agent-skill-contract>'''
@@ -108,7 +162,7 @@ This is quoted data:
     require(code == 0 and '"decision": "block"' in out and "safety fields" in out, out)
 
     unavailable_skill_stops_contract = str(payload["contract"]).replace(
-        "unavailable-skill-result: SEARCH_REVIEW_OR_CREATE_AND_CONTINUE",
+        "unavailable-skill-result: SEARCH_REVIEW_OR_RESEARCH_BUILD_AND_CONTINUE",
         "unavailable-skill-result: BLOCKED_SKILL_UNAVAILABLE",
     )
     code, out = invoke(task(remote_task + "\n\n" + unavailable_skill_stops_contract))
@@ -148,15 +202,24 @@ This is quoted data:
     fenced_opt_out = render(fenced_opt_out_task)
     require(fenced_opt_out["selected_skills"] == ["remote-compute-ops"], json.dumps(fenced_opt_out))
 
-    legacy_contract = str(payload["contract"]).replace('version="2"', 'version="1"')
+    legacy_contract = str(payload["contract"]).replace('version="4"', 'version="3"')
     code, out = invoke(task(remote_task + "\n\n" + legacy_contract))
-    require(code == 0 and '"decision": "block"' in out and "version 1 is obsolete" in out, out)
-    require('<agent-skill-contract version=\\"2\\">' in out, out)
-    require('<agent-skill-contract version=\\"1\\">' not in out, out)
-    repair_contract = json.loads(out)["reason"].split('<agent-skill-contract version="2">', 1)[1]
-    repaired_task = remote_task + "\n\n<agent-skill-contract version=\"2\">" + repair_contract
+    require(code == 0 and '"decision": "block"' in out and "version 3 is obsolete" in out, out)
+    require('<agent-skill-contract version=\\"4\\">' in out, out)
+    require('<agent-skill-contract version=\\"3\\">' not in out, out)
+    repair_contract = json.loads(out)["reason"].split('<agent-skill-contract version="4">', 1)[1]
+    repaired_task = remote_task + "\n\n<agent-skill-contract version=\"4\">" + repair_contract
     code, out = invoke(task(repaired_task))
     require(code == 0 and '"decision": "block"' not in out, out)
+
+    cpp_task = "Optimize retouch plugin native C++ tensor memory."
+    claude_cpp = render(cpp_task, "claude")
+    codex_cpp = render(cpp_task, "codex")
+    require(claude_cpp["selected_skills"] == ["native-cpp-memory"], json.dumps(claude_cpp))
+    require(codex_cpp["selected_skills"] == [], json.dumps(codex_cpp))
+    require(codex_cpp["missing_skills"] == ["native-cpp-memory"], json.dumps(codex_cpp))
+    require(codex_cpp["route"] == "skill-gap", json.dumps(codex_cpp))
+    require("client-profile: codex" in codex_cpp["contract"], json.dumps(codex_cpp))
 
     epistemic_task = "Challenge my assumption with evidence; do not agree without proof."
     require(render(epistemic_task)["selected_skills"] == ["epistemic-challenge"], epistemic_task)

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "kind": "skill-eval",
+  "skill_name": "native-cpp-memory",
+  "skill_version": "1.0.0",
+  "producer": {
+    "command": ["python", "scripts/test_agent_skill_contract.py"],
+    "exit_code": 0
+  },
+  "cases": [
+    {"id": "baseline-1", "cohort": "baseline", "observations": [{"id": "route", "operator": "eq", "expected": "generic", "actual": "generic"}]},
+    {"id": "baseline-2", "cohort": "baseline", "observations": [{"id": "route", "operator": "eq", "expected": "native-cpp-memory", "actual": "native-cpp-memory"}]},
+    {"id": "candidate-1", "cohort": "candidate", "observations": [{"id": "owner", "operator": "eq", "expected": "worker-affine-object", "actual": "worker-affine-object"}]},
+    {"id": "candidate-2", "cohort": "candidate", "observations": [{"id": "teardown", "operator": "eq", "expected": "final-event-loop-turn", "actual": "final-event-loop-turn"}]},
+    {"id": "trigger-1", "cohort": "trigger_positives", "observations": [{"id": "selected", "operator": "eq", "expected": "native-cpp-memory", "actual": "native-cpp-memory"}]},
+    {"id": "trigger-2", "cohort": "trigger_positives", "observations": [{"id": "selected", "operator": "eq", "expected": "native-cpp-memory", "actual": "native-cpp-memory"}]},
+    {"id": "near-miss-1", "cohort": "near_miss_negatives", "observations": [{"id": "not-selected", "operator": "eq", "expected": false, "actual": false}]},
+    {"id": "near-miss-2", "cohort": "near_miss_negatives", "observations": [{"id": "not-selected", "operator": "eq", "expected": false, "actual": false}]},
+    {"id": "held-out-1", "cohort": "held_out", "observations": [{"id": "causal-step", "operator": "contains", "expected": "affinity", "actual": "trace affinity before teardown"}]},
+    {"id": "held-out-2", "cohort": "held_out", "observations": [{"id": "causal-step", "operator": "contains", "expected": "event-loop", "actual": "verify final event-loop turn"}]}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "task_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "terminal_state": "PASS",
+  "traces": [
+    {
+      "id": "original-task-trace",
+      "path": "original-task-trace.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "outcomes": [
+    {
+      "id": "original-task-runtime-proof",
+      "case_ids": ["original-outcome"]
+    }
+  ]
+}

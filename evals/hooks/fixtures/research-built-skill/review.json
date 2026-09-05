@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "skill_name": "native-cpp-memory",
+  "skill_version": "1.0.0",
+  "author_id": "fixture-builder",
+  "reviewer_id": "fixture-independent-reviewer",
+  "context": "fresh",
+  "traces": [
+    {
+      "id": "review-trace",
+      "path": "review-trace.json",
+      "sha256": "ea8d6dfc168774247f96623a14482d0ebc6efa0af8e41f423c1de74309e4d584"
+    }
+  ],
+  "acceptance_results": [
+    {"id": "AC1", "case_ids": ["review-ac1"]},
+    {"id": "AC2", "case_ids": ["review-ac2"]},
+    {"id": "AC3", "case_ids": ["review-ac3"]}
+  ],
+  "result": "PASS"
+}

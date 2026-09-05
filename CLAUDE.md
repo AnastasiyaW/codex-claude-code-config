@@ -98,6 +98,18 @@ Bad: `"Helps with servers."` -- Good: `"Use when: service hangs, GPU health chec
 
 **Critical validations belong in scripts**, not words. Code is deterministic; language is not.
 
+When no reviewed existing skill covers a routed capability, do not ship a thin
+`SKILL.md` merely to clear the route. Build a research-backed skill from real
+task evidence and current primary sources; record accepted/rejected guidance,
+baseline and held-out behavioral evals, independent review, and an explicit
+owner/version/source-refresh/update/rollback contract. Keep the entry point
+focused through progressive disclosure: quality is coverage and maintainability,
+not file count.
+Research-built skill acceptance uses numerical baseline/candidate suites,
+content-addressed traces, assertion-to-trace links, distinct author/reviewer
+identities, live registration proof, and a task-digest-bound terminal receipt;
+a prose `PASS` or the skill artifact alone does not finish the original task.
+
 ## Agent-Legible Environment -- Foundational Principle (2026-05-16)
 
 Source: Denis Sergeevitch -- "agents-best-practices" skill (MIT, https://github.com/DenisSergeevitch/agents-best-practices), upstream reference file: references/agent-legibility-feedback-loops.md.

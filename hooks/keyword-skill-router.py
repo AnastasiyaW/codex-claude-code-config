@@ -478,6 +478,7 @@ def detect_keywords(user_message: str, *, profile: str = DEFAULT_PROFILE) -> lis
                     matches.append({
                         "unavailable_skill": item["skill"],
                         "profile": profile,
+                        "required": item["required"],
                     })
                     break
                 existing = by_skill.get(item["skill"])
@@ -547,8 +548,9 @@ def main(argv: list[str] | None = None) -> int:
                 "delegation is available; inventory local and curated/upstream candidates, "
                 "audit each candidate with skills/agent-harness-design/references/"
                 "agent-skill-install-checklist.md, and use an accepted candidate. If none "
-                "passes, research primary sources, create and validate the smallest local "
-                "skill that fills the gap, then resume the original task."
+                "passes, build and independently validate a research-backed, maintainable "
+                "local skill with baseline and held-out evals, update triggers, and rollback; "
+                "then resume the original task."
             )
             continue
         if m.get("required"):
