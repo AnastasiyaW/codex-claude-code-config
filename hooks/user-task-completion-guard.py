@@ -98,7 +98,7 @@ REQUEST_WORDS = re.compile(
     r"обсчитай|посчитай|пересчитай|обработай|прогони|отрендери|собери|сравни|"
     r"разверни|развернуть|развертывай|задеплой|деплой|"
     r"оцени|вычисли|calculate|compute|process|render|build|compare|evaluate|"
-    r"fix|check|verify|research|find|add|implement|run|deploy|update|clean|create|move|"
+    r"реализуй|реализовать|fix|check|verify|research|find|add|implement|run|deploy|update|clean|create|move|"
     r"connect|sync|close|finish|continue|install|test)\b",
     re.IGNORECASE | re.UNICODE,
 )
@@ -114,6 +114,14 @@ QUESTION_ONLY = re.compile(
 )
 COLLECTION_WORDS = re.compile(r"\b(?:все|всех|кажд(?:ый|ую|ые|ого|ых)|all|every|each)\b", re.IGNORECASE)
 RECONCILIATION_COMPONENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+SESSION_ID_KEYS = (
+    "session_id",
+    "sessionId",
+    "conversation_id",
+    "conversationId",
+    "thread_id",
+    "threadId",
+)
 
 
 def now_utc() -> str:
@@ -127,18 +135,24 @@ def repo_root(cwd: Path) -> Path | None:
     return None
 
 
-def session_id(event: dict[str, Any]) -> str:
-    for key in ("session_id", "sessionId"):
+def _event_session_id(event: dict[str, Any]) -> str:
+    for key in SESSION_ID_KEYS:
         value = event.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    return ""
+
+
+def session_id(event: dict[str, Any]) -> str:
+    value = _event_session_id(event)
+    if value:
+        return value
     value = os.environ.get("CLAUDE_SESSION_ID", "").strip()
     return value or "unscoped"
 
 
 def _raw_session_id(event: dict[str, Any]) -> str:
-    value = event.get("session_id") or event.get("sessionId") or os.environ.get("CLAUDE_SESSION_ID")
-    return value.strip() if isinstance(value, str) else ""
+    return _event_session_id(event) or os.environ.get("CLAUDE_SESSION_ID", "").strip()
 
 
 def _turn_id(event: dict[str, Any]) -> str:
@@ -300,7 +314,7 @@ def transcript_provenance(event: dict[str, Any]) -> dict[str, Any]:
     for row in reverse_jsonl_rows(Path(transcript_text)):
         if row.get("type") != "user":
             continue
-        row_session = str(row.get("sessionId") or row.get("session_id") or "").strip()
+        row_session = _event_session_id(row)
         if expected_session and row_session != expected_session:
             continue
         if prompt_digest(transcript_message_text(row)) != wanted:
@@ -446,6 +460,42 @@ def task_requests(root: Path, session: str | None = None) -> list[dict[str, Any]
         if session is None or request.get("session_id") == session:
             requests.append(request)
     return requests
+
+
+def request_next_action(root: Path, request: dict[str, Any]) -> str:
+    """Return the durable next action, falling back to the original request."""
+    action = ""
+    try:
+        state = load_json(state_path(root, nonempty(request.get("task_id"), "request task_id")))
+        value = state.get("next_action")
+        if isinstance(value, str):
+            action = value.strip()
+    except ValueError:
+        pass
+    if not action:
+        action = str(request.get("prompt") or "").strip()
+    action = " ".join(action.split())
+    return action[:499] + "…" if len(action) > 500 else action
+
+
+def unfinished_requests(root: Path, session: str | None = None) -> list[tuple[dict[str, Any], str]]:
+    unfinished: list[tuple[dict[str, Any], str]] = []
+    for request in task_requests(root, session):
+        outcome, detail = assess_task(root, request)
+        if outcome == "INCOMPLETE":
+            unfinished.append((request, detail))
+    return unfinished
+
+
+def format_owned_work(root: Path, requests: list[tuple[dict[str, Any], str]]) -> str:
+    rows = []
+    for request, detail in requests[:4]:
+        rows.append(
+            f"{request['task_id']}: {detail}. NEXT OWNED ACTION: {request_next_action(root, request)}"
+        )
+    if len(requests) > 4:
+        rows.append(f"+{len(requests) - 4} more unfinished tasks owned by this session")
+    return "\n- ".join(rows)
 
 
 def evidence_file(task_dir: Path, value: Any, label: str) -> Path:
@@ -771,7 +821,11 @@ def assess_task(root: Path, request: dict[str, Any]) -> tuple[str, str]:
             return "INCOMPLETE", f"state status is {status}; write the result and its local receipt"
         if status not in TERMINAL_STATUSES:
             raise ValueError(f"unknown task status {status!r}")
-        if request.get("requires_inventory"):
+        # ``requires_inventory`` means an inventory is mandatory. It never means
+        # that an explicitly supplied item contract may be ignored. Otherwise a
+        # parent COMPLETE/BLOCKED_EXTERNAL can silently hide a child that is still
+        # PENDING or RUNNING after review.
+        if request.get("requires_inventory") or "items" in state:
             outcome, detail = assess_items(path.parent, state)
             if outcome == "INCOMPLETE":
                 return outcome, detail
@@ -823,23 +877,40 @@ def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
     prompt = event_prompt(event)
     if prompt and machine_prompt_reason(event, prompt):
         return 0
-    _, actionable = classify_prompt(prompt)
-    if not prompt or not actionable:
+    if not prompt:
         return 0
     root = repo_root(cwd or Path.cwd())
     if root is None:
         return 0
-    request = record_task(root, event, prompt)
-    task_id = request["task_id"]
-    relative = task_root(root, task_id).relative_to(root).as_posix()
-    inventory = " This request names a complete set: fill state.json.items from the real inventory." if request["requires_inventory"] else ""
+    _, actionable = classify_prompt(prompt)
+    recorded = None
+    if actionable:
+        recorded = record_task(root, event, prompt)
+    owned = unfinished_requests(root, session_id(event))
+    if recorded is None and not owned:
+        return 0
+    clauses: list[str] = []
+    if recorded is not None:
+        task_id = recorded["task_id"]
+        relative = task_root(root, task_id).relative_to(root).as_posix()
+        inventory = (
+            " This request names a complete set: fill state.json.items from the real inventory."
+            if recorded["requires_inventory"] else ""
+        )
+        clauses.append(
+            f"Recorded {task_id} at {relative}.{inventory}"
+        )
+    if owned:
+        clauses.append(
+            "Unfinished work owned by this same session:\n- " + format_owned_work(root, owned)
+        )
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
-                f"[user-task] Recorded {task_id} at {relative}. Continue this user task until state.json is "
+                "[user-task] " + " ".join(clauses) + " Continue this user task until state.json is "
                 "COMPLETE with a result and real evidence, or BLOCKED_EXTERNAL with a measured blocker, "
-                f"named recheck, and evidence.{inventory} Do not replace work with a prose promise."
+                "named recheck, and evidence. Do not replace work with a prose promise."
             ),
         },
     }, ensure_ascii=False))
@@ -887,11 +958,16 @@ def session_start(event: dict[str, Any], cwd: Path | None = None) -> int:
     root = repo_root(cwd or Path.cwd())
     if root is None:
         return 0
-    open_tasks: list[str] = []
-    for request in task_requests(root):
-        outcome, _ = assess_task(root, request)
-        if outcome == "INCOMPLETE":
-            open_tasks.append(str(request["task_id"]))
+    all_open = unfinished_requests(root)
+    raw_session = _raw_session_id(event)
+    owned = unfinished_requests(root, session_id(event)) if raw_session else []
+    if owned:
+        print(
+            "[user-task] Unfinished work owned by this session:\n- "
+            + format_owned_work(root, owned)
+        )
+        return 0
+    open_tasks = [str(request["task_id"]) for request, _ in all_open]
     if open_tasks:
         visible = ", ".join(open_tasks[:8])
         more = f" (+{len(open_tasks) - 8} more)" if len(open_tasks) > 8 else ""

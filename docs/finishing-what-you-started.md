@@ -89,3 +89,38 @@ there is no turn to re-block, only a file write to refuse.
 - **Whether the work was actually done.** The gate proves the handoff *mentions* the
   ticket. Mentioning is not finishing — the next disguise, if this holds, will be a
   mention that says nothing. The pattern above predicts it.
+
+## 2026-09-05: the terminal parent hid unfinished children
+
+A later trace audit found the predicted next form. One Codex implementation turn stated
+the concrete deliverable, performed inspection and delegated a review, then ended without
+an edit or terminal receipt. Separate Claude turns looked equally quiet in the archive but
+were still running long blocking calls. The distinction matters: conversation silence is
+not itself failure; environment state and receipts decide it.
+
+Three deterministic seams explained the real escape:
+
+1. Codex `thread_id` / `conversation_id` aliases were not normalized by the user-task
+   guard, so prompt capture and Stop could address `unscoped` or different owners.
+2. `state.json.items` was validated only when the original prompt happened to match the
+   collection-word classifier. A later review could add `RUNNING` implementation work,
+   while a parent `COMPLETE` or `BLOCKED_EXTERNAL` still closed.
+3. A same-thread follow-up or SessionStart named only task ids, not the durable
+   `next_action`, so recovery supplied an index rather than an executable continuation.
+
+The correction stays inside the existing controller: normalize every supported stable
+identity alias; treat a supplied item list as authoritative regardless of prompt class;
+and re-inject the exact owned next action on same-thread recovery. This follows the
+artifact/state approach in Anthropic's [effective long-running-agent
+harness](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents),
+the feedback-return loop in its [long-running application harness
+design](https://www.anthropic.com/engineering/harness-design-long-running-apps), and
+OpenAI's trace-to-targeted-eval loop in [Building self-improving tax agents with
+Codex](https://openai.com/index/building-self-improving-tax-agents-with-codex/).
+
+Two tempting additions were rejected. Another prose instruction cannot repair a missing
+state transition, and a second loop controller would split ownership. Automatic retry of
+a host-level model-capacity failure was also not invented as a hook event: no supported
+Codex failure event was found. The durable same-thread task now survives that interruption
+and is reattached at the next supported prompt/start event; retry while the host cannot run
+the model remains a host/scheduler responsibility.

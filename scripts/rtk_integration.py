@@ -96,8 +96,10 @@ def verify_archive(archive: Path) -> dict[str, str]:
 
 
 def hook_command(binary: Path) -> str:
-    """Return a settings.json command that works on Windows and POSIX."""
-    args = [str(binary.expanduser().resolve()), "hook", "claude"]
+    """Return a settings command accepted by Claude's shell on Windows/POSIX."""
+    resolved = binary.expanduser().resolve()
+    executable = resolved.as_posix() if os.name == "nt" else str(resolved)
+    args = [executable, "hook", "claude"]
     if os.name == "nt":
         return subprocess.list2cmdline(args)
     return shlex.join(args)
@@ -124,6 +126,12 @@ def merge_hook(settings: dict[str, Any], binary: Path) -> bool:
         for hook in entry.get("hooks", []):
             if hook.get("command") == command:
                 return False
+            existing = str(hook.get("command") or "").lower()
+            if "rtk.exe" in existing and "hook claude" in existing:
+                entry["matcher"] = HOOK_MATCHER
+                hook["command"] = command
+                hook["statusMessage"] = HOOK_STATUS
+                return True
     pre_tool_use.append(build_hook_entry(binary))
     return True
 

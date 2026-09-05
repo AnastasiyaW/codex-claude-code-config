@@ -8,6 +8,9 @@ Git source-of-truth checks, tests, or full-output verification.
 
 Use RTK `v0.43.0` when its executable passes the pinned SHA-256 check. Wire its
 native `hook claude` processor into Claude Code for `Bash` and `PowerShell`.
+On Windows the generated hook command deliberately uses a `C:/...` executable
+path: Claude invokes the command through a shell, where bare backslashes are
+escape characters and can collapse the path into a nonexistent file name.
 Codex uses the upstream-supported instruction-level integration (`AGENTS.md`);
 there is no transparent Codex command-rewrite hook in the upstream integration.
 

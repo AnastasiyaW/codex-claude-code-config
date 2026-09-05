@@ -36,6 +36,7 @@ pass.
 | Dependency supply-chain guards | `PreToolUse` on manifest edits and install commands | `PreToolUse` on manifest edits and install commands | `scripts/test_dependency_provenance_guard.py` + both guard self-tests + `scripts/dependency-alternatives.py --self-test` |
 | Test scope and overload routing | `Stop` | `Stop` | `scripts/test_test_strategy.py` + `scripts/test_high_risk_review_gate.py` + `scripts/test_harness_load_advisor.py` |
 | Measured outward facts | `Stop` | `Stop` | `scripts/test_task_completion_hooks.py` (hash claim red/green fixtures) |
+| Durable user-task completion | `UserPromptSubmit`, `SessionStart`, `Stop` with stable thread/conversation identity | `UserPromptSubmit`, `SessionStart`, `Stop` with stable session identity | `hooks/tests/test_user_task_completion_guard.py` plus live manifest parity |
 | Handoff completeness | `PreToolUse`, `Stop`, `PreCompact` | `PreToolUse`, `Stop`, `PreCompact` | `test_task_completion_hooks.py` |
 | Handoff to memory continuity | `SessionStart` | `SessionStart` | `test_review_handoff_memory_loop.py` |
 | Correction feedback capture | `Stop` + `SessionStart` backlog signal | `Stop` + `SessionStart` backlog signal | both hook self-tests + live manifest parity |

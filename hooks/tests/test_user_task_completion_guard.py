@@ -49,6 +49,12 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
             self.assertEqual(guard.stop(event, self.root), 0)
         return json.loads(output.getvalue()) if output.getvalue().strip() else None
 
+    def invoke_stop_event(self, event: dict, root: Path | None = None) -> dict | None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(guard.stop(event, root or self.root), 0)
+        return json.loads(output.getvalue()) if output.getvalue().strip() else None
+
     def request(self) -> dict:
         requests = list((self.root / ".agent" / "user-tasks").glob("*/request.json"))
         self.assertEqual(len(requests), 1)
@@ -161,6 +167,43 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.assertEqual(request["kind"], "request")
         self.assertFalse(request["requires_inventory"])
         self.assertEqual(self.invoke_stop()["decision"], "block")
+
+    def test_codex_session_aliases_bind_the_request_and_stop_to_the_same_thread(self) -> None:
+        for key in ("thread_id", "threadId", "conversation_id", "conversationId"):
+            with self.subTest(key=key):
+                root = self.root / key
+                (root / ".git").mkdir(parents=True)
+                prompt = f"исправь дефект для {key}"
+                value = f"stable-{key}"
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(guard.user_prompt({"prompt": prompt, key: value}, root), 0)
+                requests = list((root / ".agent" / "user-tasks").glob("*/request.json"))
+                self.assertEqual(len(requests), 1)
+                request = json.loads(requests[0].read_text(encoding="utf-8"))
+                self.assertEqual(request["session_id"], value)
+                blocked = self.invoke_stop_event({key: value}, root)
+                self.assertEqual(blocked and blocked.get("decision"), "block")
+                self.assertIn(request["task_id"], blocked["reason"])
+
+    def test_follow_up_in_same_codex_thread_resurfaces_the_unfinished_owned_action(self) -> None:
+        first = self.invoke_prompt({
+            "prompt": "сделай второй кликабельный вариант и сохрани первый",
+            "thread_id": "codex-thread-a",
+        })
+        self.assertIsNotNone(first)
+        request = self.request()
+
+        follow_up = self.invoke_prompt({
+            "prompt": "что с задачей?",
+            "thread_id": "codex-thread-a",
+        })
+
+        self.assertIsNotNone(follow_up)
+        context = follow_up["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(request["task_id"], context)
+        self.assertIn("сделай второй кликабельный вариант", context)
+        self.assertEqual(len(list((self.root / ".agent" / "user-tasks").glob("*/request.json"))), 1)
 
     def test_question_does_not_create_or_block_a_task(self) -> None:
         self.assertEqual(guard.classify_prompt("почему завис компьютер?"), ("note", False))
@@ -307,6 +350,37 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         blocked = self.invoke_stop()
         self.assertEqual(blocked and blocked.get("decision"), "block")
         self.assertIn("1/2 collection items terminal", blocked["reason"])
+
+    def test_supplied_items_are_authoritative_even_for_a_non_collection_prompt(self) -> None:
+        self.invoke_prompt()
+        first = self.receipt("evidence/review.txt")
+        parent = self.receipt("evidence/parent.txt")
+        self.write_state(
+            status="BLOCKED_EXTERNAL",
+            evidence=[parent],
+            blocker="later deployment is unavailable",
+            recheck="after deployment access returns",
+            items=[
+                {"item_id": "review", "status": "PASS", "evidence": [first]},
+                {"item_id": "implementation", "status": "RUNNING"},
+            ],
+        )
+
+        blocked = self.invoke_stop()
+
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("1/2 collection items terminal", blocked["reason"])
+
+        second = self.receipt("evidence/implementation.txt")
+        self.write_state(
+            status="COMPLETE",
+            result="review findings implemented and verified",
+            items=[
+                {"item_id": "review", "status": "PASS", "evidence": [first]},
+                {"item_id": "implementation", "status": "PASS", "evidence": [second]},
+            ],
+        )
+        self.assertIsNone(self.invoke_stop())
 
     def test_collection_reports_all_schema_defects_in_one_stop(self) -> None:
         self.invoke_prompt({"prompt": "проверь все элементы", "session_id": "session-a"})
@@ -514,6 +588,18 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             self.assertEqual(guard.session_start({}, self.root), 0)
         self.assertIn("Open durable user tasks", output.getvalue())
+
+    def test_session_start_names_the_owned_next_action_for_the_same_codex_thread(self) -> None:
+        self.invoke_prompt({
+            "prompt": "реализуй исправление после ревью",
+            "thread_id": "codex-thread-a",
+        })
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(guard.session_start({"thread_id": "codex-thread-a"}, self.root), 0)
+        message = output.getvalue()
+        self.assertIn("NEXT OWNED ACTION", message)
+        self.assertIn("реализуй исправление после ревью", message)
 
 
 if __name__ == "__main__":
