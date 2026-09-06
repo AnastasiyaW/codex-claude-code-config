@@ -9,7 +9,7 @@ Extract the REAL value from a product before writing a single line of video/pres
 
 ## Why This Exists
 
-Most product videos fail because they skip analysis. They grab text from a landing page and lay it over animations. The result: "We have feature A, B, C. Try us." - nobody watches past 3 seconds.
+A feature list alone may not explain why the product matters to this audience. Product analysis connects capabilities to a relevant, supportable customer outcome; it does not guarantee engagement.
 
 This skill forces you to find what actually matters: the enemy, the transformation, the mechanism, and the emotional hook. Everything else flows from these.
 
@@ -26,7 +26,14 @@ This skill forces you to find what actually matters: the enemy, the transformati
 **From reviews/testimonials (if available):**
 1. Find testimonials on the site itself
 2. Check App Store / Product Hunt / G2 / Trustpilot / Reddit mentions
-3. Extract VERBATIM customer phrases - their words always beat your words
+3. Extract relevant VERBATIM customer phrases with their source, author/context, and date. Do not turn a paraphrase or invented phrase into a customer quotation.
+
+**Evidence travels with the brief:** For each factual number, capability, comparison,
+customer name, or testimonial, retain the source URL/file and relevant scope/date.
+Separate verified observations, attributed vendor claims, and hypotheses. Examples
+below illustrate a structure, not facts about the current product. If evidence is
+missing, use `[needs data]`, omit the claim, or write a clearly labelled hypothesis;
+continue the useful brief without inventing proof to fill a field.
 
 ### Step 2: The "So What?" Test
 
@@ -83,9 +90,9 @@ GOOD: "Pixel-level neural retouching that preserves original resolution and DPI,
 The mechanism answers: "Why should I believe this works?"]
 
 ## Proof Points
-1. [Hard number/stat: "2x faster", "10,000 customers", "$2M saved"]
-2. [Social proof: specific companies/people who use it]
-3. [Comparison: "vs [alternative], we [specific advantage]"]
+1. [Measured result, if available: source + metric + sample/context + date; retain limitations]
+2. [Social proof, if available: source + actual person/company + attributed experience]
+3. [Comparison, if available: source + versions/conditions + supported specific advantage]
 4. [If no hard data available: mark as [needs data] and suggest what to measure]
 
 ## Emotional Hooks (rank top 3)
@@ -105,7 +112,7 @@ Pick the strongest emotional transitions for this specific product:
 ### Pain phrases (how they describe the problem):
 - "[verbatim from reviews/testimonials]"
 - "[verbatim]" 
-- [If no reviews found: write 3 plausible pain phrases based on the enemy, mark as [inferred]]
+- [If no reviews found: optional hypotheses labelled [inferred, not a customer quote]; do not attribute them to a person or use them as testimonials]
 
 ### Desire phrases (how they describe the dream state):
 - "[verbatim]"
@@ -148,8 +155,8 @@ Run these checks before using the brief:
 - [ ] Enemy is specific enough to make someone say "that's me"
 - [ ] Transformation includes FEELINGS, not just features
 - [ ] Mechanism explains HOW, not just "AI-powered"
-- [ ] At least one proof point has a hard number
-- [ ] Customer language uses real or realistic phrases, not marketing speak
+- [ ] Every factual proof point is source-bound; absent numbers remain absent or `[needs data]`
+- [ ] Actual quotes retain provenance; inferred language is separate and never represented as testimony
 - [ ] No more than 3 target audience segments (focus!)
 - [ ] At least 2 video angles suggested with different hooks
 
@@ -159,7 +166,7 @@ Run these checks before using the brief:
 |---|---|---|
 | Feature listing | "We have X, Y, Z" - nobody cares about features | Use "So What?" test to find real values |
 | Jargon | "Leveraging proprietary algorithms" | Use customer words, test: would a friend say this? |
-| Vague enemy | "Current solutions are inadequate" | Inadequate HOW? Add numbers, time, frustration |
+| Vague enemy | "Current solutions are inadequate" | Explain the observed problem; add numbers only when supported |
 | Missing mechanism | "Better results" | HOW better? What's the secret sauce? |
 | No tension | No enemy = flat content | The enemy must be REAL and FELT |
 | Generic emotions | "Save time" | Time for WHAT? "Get home before kid's bedtime" |
@@ -193,4 +200,14 @@ Customer: Jobs + Pains + Gains ←→ Product: Products + Pain Relievers + Gain 
 - If you can't find the enemy, the product might not have a clear positioning - flag this
 - Brief should take 10-15 minutes of real analysis. 2-minute briefs are too shallow
 - Update the brief as you learn more during content creation
-- The brief is the SOURCE OF TRUTH for all subsequent work (video, ads, slides)
+- The brief carries evidence into subsequent work (video, ads, slides); it does not outrank the underlying source or turn a hypothesis into a fact.
+
+## Troubleshooting
+
+- No numeric result or testimonial: continue with supported capabilities and explicit unknowns; do not manufacture a metric or speaker to pass the checklist.
+- A later source contradicts the brief: correct the affected claim and downstream copy, retaining the source and scope of the correction.
+
+## Source basis
+
+- [Strategyzer: test value-proposition assumptions](https://www.strategyzer.com/library/roadmap-to-test-your-value-proposition) — customer jobs, pains, gains, and benefits are hypotheses to test, not facts supplied by the framework.
+- [FTC: advertisement endorsements](https://www.ftc.gov/news-events/topics/truth-advertising/advertisement-endorsements) — testimony is not a substitute for supporting a claim. This supports claim provenance; it is not a universal legal-compliance verdict.

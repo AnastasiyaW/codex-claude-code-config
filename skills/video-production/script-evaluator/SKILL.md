@@ -7,6 +7,16 @@ description: "Evaluate video scripts and presentations for flatness, tension, an
 
 Review a video script, presentation, or rendered scene code and identify exactly WHY it's boring and HOW to fix it. Works on scripts, storyboards, and Remotion/code-based video scenes.
 
+## Preserve facts before scoring style
+
+Check claims against the supplied brief and its sources. Keep factual numbers,
+comparisons, product capabilities, and customer quotations tied to their evidence
+and limitations. The examples below are illustrative, not reusable product facts.
+Never invent a statistic, customer, testimonial, or guarantee to raise a score.
+Without evidence, use a supported qualitative example or flag the exact claim as
+unverified while continuing the rest of the review. A creative score is a heuristic,
+not a measured engagement prediction, factual approval, or authority to publish.
+
 ## Evaluation: 6 Dimensions (score each 1-10)
 
 ### 1. TENSION - Does the viewer feel something?
@@ -17,7 +27,7 @@ Review a video script, presentation, or rendered scene code and identify exactly
 | 4-6 | Problem mentioned but vague ("saves time"). Some contrast but generic |
 | 7-10 | Specific visceral enemy. Clear before→after. Viewer thinks "that's me!" |
 
-**Fix:** Name the specific pain. Use customer language. Show the "before" state - make it ugly. Add a number to every claim.
+**Fix:** Name the specific, observed pain. Use attributed customer language or clearly identified paraphrases. Show the "before" state without exaggerating it; add a number only when its source supports the claim.
 
 ### 2. SPECIFICITY - Is it concrete or vague?
 
@@ -29,7 +39,7 @@ Review a video script, presentation, or rendered scene code and identify exactly
 | "AI-powered" | What does the AI DO? "Detects and removes 12 types of artifacts" |
 | "Trusted by thousands" | WHO? "Used by 500+ jewelry studios including [name]" |
 
-**Rule:** Replace every adjective with a number or example.
+**Rule:** Prefer a supported concrete example over a vague adjective. Numbers are optional; retain scope and uncertainty rather than forcing numerical specificity.
 
 ### 3. EMOTIONAL ARC - Does it go somewhere?
 
@@ -49,7 +59,7 @@ Review a video script, presentation, or rendered scene code and identify exactly
 | 4-6 | Has information but doesn't create urgency or curiosity |
 | 7-10 | First frame has surprising information. Creates curiosity gap. Uses customer language. MUST see next scene |
 
-**Fix:** The hook is your ad for your ad. Read the first 3 seconds aloud. If it sounds like a corporate intro, rewrite. Try: stat, question, bold claim, customer quote, visual shock.
+**Fix:** The hook is your ad for your ad. Read the first 3 seconds aloud. If it sounds like a corporate intro, try a relevant question, supported fact, attributed customer quote, or clear visual contrast. A stronger hook must not strengthen a claim beyond its evidence.
 
 ### 5. CUSTOMER VOICE - Does it sound human?
 
@@ -59,7 +69,7 @@ Review a video script, presentation, or rendered scene code and identify exactly
 | 4-6 | Reasonable language but still "written by marketing" feeling |
 | 7-10 | Actual customer phrases. Sounds like describing to a friend. Simple, direct, concrete |
 
-**Fix:** Find 3 customer reviews. Copy their EXACT words. Replace marketing copy with their language.
+**Fix:** Use relevant available customer reviews with source, attribution, date/context, and faithful wording. No fixed quote quota. If no reviews are available, use plain explanatory copy; never fabricate or present inferred language as a testimonial.
 
 ### 6. VISUAL VARIETY - Is it visually dynamic?
 
@@ -84,7 +94,7 @@ VISUAL VARIETY: _/10
 TOTAL:          _/60
 
 VERDICT:
-  50-60: Ship it
+  50-60: Strong on this creative rubric; check factual and task acceptance separately
   40-49: Good, minor tweaks needed  
   30-39: Needs work on weakest dimensions
   20-29: Major rewrite - go back to Product Brief
@@ -106,7 +116,7 @@ VERDICT:
 ### 3. "Generic Superlatives"
 **Symptom:** "The best solution." "Revolutionary technology." "World-class results."
 **Why flat:** Every product says this. These words carry zero information.
-**Fix:** Replace with specifics. "4x faster" beats "Revolutionary speed" every time.
+**Fix:** Replace with supported specifics. A measured speed comparison needs its source and conditions; otherwise explain the actual workflow improvement without a made-up multiplier.
 
 ### 4. "Missing Middle"
 **Symptom:** Good hook, good CTA, flat middle that walks through features.
@@ -134,6 +144,15 @@ Also useful for comparing versions:
 ## Gotchas
 
 - A high total with one dimension at 2 = video still feels broken. Fix the weakest link first.
-- Tension is #1 predictor of engagement. Always fix this first.
-- Don't over-optimize "interesting" at expense of clarity. Confusing > flat, but clear + engaging > both.
+- Choose the weakest relevant dimension from the brief and observed evidence; tension is not a universally established top predictor of engagement.
+- Don't optimize "interesting" at the expense of truth or clarity. A confusing or exaggerated script is not an improvement.
 - This evaluator works on: scripts, storyboards, Remotion TSX code, and even finished videos (describe what you see).
+
+## Troubleshooting
+
+- High creative score but unsupported claim: keep the score separate, identify the exact unsupported claim, and revise or remove that claim before calling the content ready for its requested use.
+- No testimonials or numeric proof: do not penalize truthful copy into fabrication; evaluate supported examples and the intended audience instead.
+
+## Source basis
+
+- [FTC: advertisement endorsements](https://www.ftc.gov/news-events/topics/truth-advertising/advertisement-endorsements) — a testimonial cannot supply experience or substantiation that does not exist. Applied here as an evidence-preservation rule, not a legal-compliance certification.
