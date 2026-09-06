@@ -276,6 +276,7 @@ def build_map(root, budget_tokens=1024, max_files=0, include_signature=True, top
             scored.append((score, f, ln, name, sig))
     scored.sort(key=lambda x: x[0], reverse=True)
 
+    extracted_total = len(scored)
     if top:
         scored = scored[:top]
 
@@ -295,6 +296,9 @@ def build_map(root, budget_tokens=1024, max_files=0, include_signature=True, top
     return {
         "root": root,
         "files_scanned": len(files),
+        "symbols_extracted_total": extracted_total,
+        "symbols_ranked_after_top": len(scored),
+        # Compatibility: this older key has always counted the post-top set.
         "symbols_total": len(scored),
         "symbols_emitted": len(selected),
         "budget_tokens": budget_tokens,
@@ -306,7 +310,9 @@ def render_text(result):
     lines = [
         f"# Repo map: {result['root']}",
         f"# {result['files_scanned']} files scanned, "
-        f"{result['symbols_emitted']}/{result['symbols_total']} symbols "
+        f"{result['symbols_emitted']} emitted / "
+        f"{result['symbols_ranked_after_top']} after --top / "
+        f"{result['symbols_extracted_total']} extracted symbols "
         f"(~{result['approx_tokens_used']} tokens, budget {result['budget_tokens']})",
         "",
     ]

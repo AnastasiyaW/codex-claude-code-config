@@ -1,6 +1,6 @@
 ---
 name: repo-map
-description: Ranked symbol map of a codebase within a token budget — a compact "what matters in this repo" before reading files. Use when starting work in an unfamiliar/large codebase, before a refactor or deep-review fan-out, when you need JIT context instead of dumping whole files, or asked "give me a map of this repo / where are the important functions / what's the structure". Zero-dependency (stdlib only); faithful reimplementation of Aider's repo-map (tree-sitter+PageRank → ranked tags). Do NOT use to find correctness/security defects in a change or to audit a diff; use deep-review for that (this only ranks and lists symbols, it does not evaluate code quality).
+description: Ranked symbol map of a codebase within a token budget — a compact "what matters in this repo" before reading files. Use when starting work in an unfamiliar/large codebase, before a refactor or deep-review fan-out, when you need JIT context instead of dumping whole files, or asked "give me a map of this repo / where are the important functions / what's the structure". Zero-dependency (stdlib only); Aider-inspired regex extraction and PageRank ranking, not a tree-sitter parser. Do NOT use to find correctness/security defects in a change or to audit a diff; use deep-review for that (this only ranks and lists symbols, it does not evaluate code quality).
 ---
 
 # repo-map
@@ -34,6 +34,12 @@ python scripts/repo_map.py [ROOT] [--budget-tokens N] [--top N] [--json] [--no-s
 - `--top N` — hard cap on symbols before the budget applies.
 - `--json` — machine-readable output (for piping into a workflow / another agent).
 - `--no-signature` — emit `path:line: name` instead of the full signature line.
+
+JSON distinguishes `symbols_extracted_total` (before `--top`),
+`symbols_ranked_after_top` (after that cap), and `symbols_emitted` (after the
+token budget). The legacy `symbols_total` key retains its post-`--top` meaning
+for compatibility. None is a semantic coverage guarantee: extraction is regex-based
+and `--max-files` can limit input. Never diagnose parser coverage from a capped map.
 
 ### Typical recipes
 
@@ -86,6 +92,7 @@ alphabetically.
 |---|---|---|
 | `0 files scanned` | ROOT has no recognized source extensions, or all gitignored | Check `git ls-files`; point ROOT at the source subdir |
 | A key function is missing | Regex didn't match its signature style | Lower `--budget-tokens` pressure (raise budget) or accept the limitation; verify by `grep` |
+| `--top 12` appears to find only 12 definitions | Post-cap count confused with extraction | Inspect `symbols_extracted_total`; remove caps before investigating actual extraction misses |
 | Map dominated by one vendored file | A `vendor/`/generated tree got scanned (non-git mode) | Run inside the git repo, or point ROOT at hand-written source |
 | Wrong/old map | File moved; map is a point-in-time snapshot | Re-run — it's cheap and stateless |
 

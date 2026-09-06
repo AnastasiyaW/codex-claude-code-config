@@ -80,7 +80,7 @@ ROUTES = [
             "references/retouch-native.md",
         ],
         "required": True,
-        "profiles": ["claude"],
+        "profiles": ["claude", "codex"],
     },
     # Retouch security / ethical hacking / release hardening
     {
@@ -96,7 +96,7 @@ ROUTES = [
             "references/sources.md",
         ],
         "required": True,
-        "profiles": ["claude"],
+        "profiles": ["claude", "codex"],
     },
     # ComfyUI driven through MCP / comfy-cli (agent-orchestrated graphs)
     {
@@ -136,7 +136,7 @@ ROUTES = [
             "references/advanced-cpp.md",
         ],
         "required": True,
-        "profiles": ["claude"],
+        "profiles": ["claude", "codex"],
     },
     # Clean architecture guardrails — keep this as an advisory rule, not a
     # skill route. The old target (clean-architecture) is not installed in the

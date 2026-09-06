@@ -56,13 +56,14 @@ CASES = [
 ]
 
 PROFILE_CASES = [
-    ("shared", "Optimize retouch plugin native C++ tensor memory", "SKILL_GAP: native-cpp-memory", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("shared", "Optimize retouch plugin native C++ tensor memory", "REQUIRED: Use skill native-cpp-memory", "SKILL_GAP"),
     ("codex", "why error investigate this", "SKILL_GAP: investigate", "BLOCKED_SKILL_UNAVAILABLE"),
     ("claude", "why error investigate this", "/investigate", "SKILL_GAP"),
-    ("codex", "Optimize retouch plugin native C++ tensor memory", "SKILL_GAP: native-cpp-memory", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("codex", "Optimize retouch plugin native C++ tensor memory", "REQUIRED: Use skill native-cpp-memory", "SKILL_GAP"),
     ("claude", "Optimize retouch plugin native C++ tensor memory", "REQUIRED: Use skill native-cpp-memory", "SKILL_GAP"),
-    ("codex", "Security audit the retouch Photoshop plugin before release", "SKILL_GAP: retouch-security-audit", "BLOCKED_SKILL_UNAVAILABLE"),
+    ("codex", "Security audit the retouch Photoshop plugin before release", "REQUIRED: Use skill retouch-security-audit", "SKILL_GAP"),
     ("claude", "Security audit the retouch Photoshop plugin before release", "REQUIRED: Use skill retouch-security-audit", "SKILL_GAP"),
+    ("codex", "Security audit a generic web application before release", "/deep-review", "retouch-security-audit"),
     ("codex", "проверь SEO сайта и sitemap", "SKILL_GAP: claude-seo:seo", "BLOCKED_SKILL_UNAVAILABLE"),
     ("claude", "проверь SEO сайта и sitemap", "/claude-seo:seo", "SKILL_GAP"),
 ]

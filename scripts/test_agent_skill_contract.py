@@ -216,10 +216,23 @@ This is quoted data:
     claude_cpp = render(cpp_task, "claude")
     codex_cpp = render(cpp_task, "codex")
     require(claude_cpp["selected_skills"] == ["native-cpp-memory"], json.dumps(claude_cpp))
-    require(codex_cpp["selected_skills"] == [], json.dumps(codex_cpp))
-    require(codex_cpp["missing_skills"] == ["native-cpp-memory"], json.dumps(codex_cpp))
-    require(codex_cpp["route"] == "skill-gap", json.dumps(codex_cpp))
+    require(codex_cpp["selected_skills"] == ["native-cpp-memory"], json.dumps(codex_cpp))
+    require(codex_cpp["missing_skills"] == [], json.dumps(codex_cpp))
+    require(codex_cpp["route"] == "curated", json.dumps(codex_cpp))
     require("client-profile: codex" in codex_cpp["contract"], json.dumps(codex_cpp))
+
+    retouch_security_task = "Security audit the retouch Photoshop plugin before release."
+    claude_retouch_security = render(retouch_security_task, "claude")
+    codex_retouch_security = render(retouch_security_task, "codex")
+    require(claude_retouch_security["selected_skills"] == ["retouch-security-audit", "native-cpp-memory"], json.dumps(claude_retouch_security))
+    require(codex_retouch_security["selected_skills"] == ["retouch-security-audit", "native-cpp-memory"], json.dumps(codex_retouch_security))
+    require(codex_retouch_security["missing_skills"] == [], json.dumps(codex_retouch_security))
+    require(codex_retouch_security["route"] == "curated", json.dumps(codex_retouch_security))
+
+    generic_security_task = "Security audit a generic web application before release."
+    generic_security = render(generic_security_task, "codex")
+    require(generic_security["selected_skills"] == ["deep-review"], json.dumps(generic_security))
+    require(generic_security["missing_skills"] == [], json.dumps(generic_security))
 
     epistemic_task = "Challenge my assumption with evidence; do not agree without proof."
     require(render(epistemic_task)["selected_skills"] == ["epistemic-challenge"], epistemic_task)
