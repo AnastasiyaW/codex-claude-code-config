@@ -1,12 +1,12 @@
 ---
 name: harness-audit
 description: Score a project's agent harness across 5 subsystems (Instructions / State / Verification / Scope / Lifecycle), identify the bottleneck, and produce a prioritized improvement plan. Use when assessing if a project is ready to graduate to [LONG-RUN] status, when an agent keeps failing despite good models, or when adopting our stack on a new codebase. Do NOT use to design or build a new harness from scratch — this only scores an existing one; for greenfield harness/agent architecture use harness-design (or agent-harness-design).
-when_to_use: |
-  Trigger on phrases like: "audit my harness", "evaluate my agent setup", "score my CLAUDE.md", "is my project ready for long-run", "5-subsystem assessment", "what's missing from my project setup", "/harness-audit". Run proactively when joining an unfamiliar codebase that has agent artifacts (CLAUDE.md, .claude/, AGENTS.md) but obvious gaps. Skip for single-file scripts and pure exploration.
 license: MIT
 ---
 
 # Harness Audit
+
+Trigger on phrases like: "audit my harness", "evaluate my agent setup", "score my CLAUDE.md", "is my project ready for long-run", "5-subsystem assessment", "what's missing from my project setup", "/harness-audit". Run proactively when joining an unfamiliar codebase that has agent artifacts (CLAUDE.md, .claude/, AGENTS.md) but obvious gaps. Skip for single-file scripts and pure exploration.
 
 Score a project's agent harness across five subsystems and tell the user which evidenced bottleneck to address first. Distinguish an artifact's presence from demonstrated behavior; never present metadata alone as runtime proof.
 
@@ -40,7 +40,12 @@ Priority improvement (only when the user asks for recommendations):
 - Record an execution receipt for the existing test command   ↗ Verification evidence
 ```
 
-The skill does **not** make changes. It produces the scorecard. The user decides whether to apply recommendations.
+For an **audit-only** request, this skill produces the scorecard without making
+changes. If the user also requested correction or implementation, the scorecard
+is an intermediate result: return the confirmed findings to the owning task and
+execute its necessary, authorized reversible fixes, verification and delivery.
+Do not stop at a report or assign agent-owned fixes back to the user. Preserve
+the original acceptance criteria and real external/irreversible boundaries.
 
 ---
 
@@ -101,7 +106,7 @@ Tie-breaker (multiple subsystems at same low score): pick the one whose improvem
 
 ### Phase 4 — Prioritized Improvement Plan
 
-Only if the user requests recommendations, propose the smallest number of independently shippable actions that address the evidenced bottleneck. For each, name the expected evidence and a local template/example if one actually fits. Do not invent effort, score gains, or a fixed number of steps; do not expand the requested audit into implementation.
+Only if the user requests recommendations, propose the smallest number of independently shippable actions that address the evidenced bottleneck. For each, name the expected evidence and a local template/example if one actually fits. Do not invent effort, score gains, or a fixed number of steps. Do not expand an audit-only request into implementation; when implementation was already requested, continue that owning task after the audit instead of requesting the same authorization again.
 
 ---
 
@@ -124,7 +129,7 @@ Keep the entire output under 50 lines. The user is scanning for next steps, not 
 - **Not a code review** — does not look at source code quality
 - **Not a security audit** — does not check for vulnerabilities (use `/security-review` instead)
 - **Not a broad test runner** — does not manufacture a green result from configuration. It may inspect a current CI/test receipt, or run one user-authorized, task-relevant probe when runtime evidence is part of the requested audit
-- **Not a fix tool** — produces recommendations only, user applies them
+- **Not a standalone implementation methodology** — an audit-only request ends with its findings; an audit inside an already authorized repair returns control to that repair, not to user homework
 - **Not for short-lived work without a durable handoff need** — state why the audit is disproportionate instead of applying arbitrary feature/session thresholds
 
 ---
