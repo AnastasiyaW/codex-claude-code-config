@@ -1,6 +1,7 @@
 ---
 name: deep-review
-version: 1.0.0
+metadata:
+  version: "1.0.0"
 description: |
   Parallel competency-based code review. Launches independent Agent reviewers per competency
   (security, performance, architecture, database, concurrency, error-handling, frontend, testing),
@@ -354,11 +355,11 @@ with the smallest causal check:
 For each FIX finding:
 
 1. If the fix is mechanical (add missing `await`, add index, add LIMIT, fix typo) — apply it directly. Output: `[FIXED] file:line — {what}`
-2. If the fix requires judgment — present via AskUserQuestion with options:
-   - A) Apply recommended fix
-   - B) Fix differently (describe)
-   - C) Move to DEFER
-   - D) Accept as-is
+2. If the fix requires judgment — use the available evidence to choose and apply
+   the best reversible fix within the already authorized task, then run its causal
+   check. Judgment alone does not require another approval. Ask only when required
+   authority is actually missing or a material user choice cannot be resolved
+   from the request and available evidence; state that exact boundary.
 
 After all FIX items are resolved, output final status:
 ```
@@ -374,7 +375,7 @@ DEEP REVIEW COMPLETE:
 
 ## Gotchas
 
-- **Agent tool limitation**: subagents cannot launch sub-subagents. Each competency agent runs inline tools only (Read, Grep, Glob, Bash).
+- **Bounded delegation**: competency agents normally use inline tools to keep review focused. This is a workflow convention, not a universal tool limitation. A bounded child task is allowed when the current host supports it and the task's governing instructions authorize delegation.
 - **Context size**: each agent gets focused file list, not full diff. If a competency touches >20 files, prioritize the most critical ones and note "N additional files not reviewed."
 - **False positives**: parallel agents don't share context, so they may flag things that are addressed in other files. The synthesis step (4a-4c) catches these through cross-referencing.
 - **Cost**: launching 5 parallel agents costs ~5x a single-pass review. This is the trade-off for depth. For quick checks use `/review` instead.
