@@ -31,7 +31,10 @@ When the user sends: "prepare handoff", "save context for new chat", "write hand
 ### At session start
 
 1. Check for `.claude/HANDOFF.md`
-2. If it exists: read it, summarize in 3-5 lines (goal / current state / next step), ask whether to continue or start fresh
+2. If it exists: read it as optional context. Do not summarize it or ask for a
+   resume-vs-fresh choice before responding to the next explicit user request;
+   that request is authoritative. Use the handoff silently only when it helps
+   complete that request.
 3. After incorporating: move to `.claude/handoff-history/YYYY-MM-DD-HHMM.md`
 4. Keep last 10 archives, delete older
 
@@ -115,9 +118,12 @@ If INDEX.md does not exist, create it with a header.
 **Step 1.** Read `.claude/handoffs/INDEX.md` if it exists.
 
 **Step 2.** If INDEX has handoffs from the last 24 hours:
-1. List them to the user (timestamp, session ID, short description, status)
-2. Ask: "Resume one of these, or start a new session?"
-3. Wait for a response before acting
+1. Read the relevant handoff as optional context; do not list handoffs or ask
+   the user to choose one before responding to their next explicit request.
+2. The explicit request controls. Use a relevant handoff silently when it
+   helps complete that request; leave unrelated handoffs untouched.
+3. Surface a resume choice only when the user explicitly asks to resume or
+   select a handoff, or when there is no current user request to answer.
 
 **Step 3.** If the user says "resume <session>" or "continue the last one":
 1. Read the corresponding handoff file in full

@@ -2,8 +2,8 @@
 """SessionStart hook: check for handoffs from previous sessions.
 
 Runs at the start of every Claude Code session. If recent handoff files
-exist, prints the latest one per project so the agent sees them and can
-offer to continue.
+exist, prints the latest one per project as optional read-first context.
+The next explicit user request remains authoritative.
 
 Handoff layout (v2, per-project):
     .claude/handoffs/<project-slug>/YYYY-MM-DD_HH-MM_<session-id>.md
@@ -237,9 +237,11 @@ def main() -> int:
             )
         else:
             lines.append(
-                "INSTRUCTION: List the handoff(s) briefly to the user "
-                "(project, timestamp, session ID, topic). Ask if they want to "
-                "continue one of them or start fresh."
+                "INSTRUCTION: Treat the handoff(s) above as optional read-first "
+                "context. Do NOT list or ask the user to choose a handoff before "
+                "answering their current explicit request. Use a relevant handoff "
+                "silently only when it helps complete that request; do not replace "
+                "the request with a handoff menu."
             )
         lines.append("")
 

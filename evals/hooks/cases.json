@@ -236,5 +236,16 @@
    },
    "expect": "output",
    "stdout_contains": ["[proj-a]", "[proj-b]", "Goal: beta work"],
-   "stdout_not_contains": []}
+   "stdout_not_contains": []},
+
+  {"id": "startup handoff is optional context, never a mandatory menu",
+   "hook": "session-handoff-check.py",
+   "stdin": {"source": "startup"},
+   "files": {
+     ".claude/handoffs/release007/2099-01-01_10-00_aaaaaaaa.md": "# Release 007\nGoal: stale handoff context\n",
+     ".claude/handoffs/INDEX.md": "# Handoffs Index\n"
+   },
+   "expect": "output",
+   "stdout_contains": ["SESSION HANDOFF(S)", "Goal: stale handoff context", "optional read-first context", "current explicit request"],
+   "stdout_not_contains": ["List the handoff(s) briefly to the user", "Ask if they want to continue one of them or start fresh"]}
 ]
