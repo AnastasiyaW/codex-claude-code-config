@@ -3,17 +3,18 @@ name: plan-swarm-review
 description: |
   Iterative plan review using multisampling + focused decomposition.
   Launches parallel independent agents to find issues that single-pass
-  review misses. 4 escalating rounds: broad -> multisample -> focused ->
-  focused+multisample. Use when: "swarm review", "review plan thoroughly",
+  review misses. Up to four bounded rounds: broad, multisample, focused,
+  focused-plus-multisample. Use when: "swarm review", "review plan thoroughly",
   "multisample review", "deep plan review", "plan swarming", "stress test
-  the plan", or before implementing any plan >500 lines or with >3
-  interacting components. Also use proactively when a large plan is about
-  to be implemented — catch issues before code, not after. Do NOT use to
+  the plan", or when evidenced cross-component risk warrants deeper plan review.
+  Size alone does not require a swarm or another review round. Do NOT use to
   design a multi-agent harness or Generator-Evaluator architecture from scratch;
-  use harness-design for that. Do NOT use to review already-written code/diffs;
-  use deep-review for that (this reviews plans, not implementations).
-user-invocable: true
-model: opus
+  use harness-design for that. Ordinary code/diff review routes to deep-review;
+  use this skill's code mode only when the user explicitly requests a swarm
+  security/bug review of code.
+metadata:
+  user-invocable: true
+  upstream-model-hint: opus
 allowed-tools:
   - Read
   - Grep
@@ -28,6 +29,17 @@ allowed-tools:
 # Plan Swarm Review
 
 Iterative plan hardening through multisampling and focused decomposition.
+
+## Scope and task ownership
+
+The user's current task and selected model govern this review. Audit-only is
+read-only unless changes are requested. In an already authorized implementation
+or repair task, apply confirmed in-scope reversible fixes and run their focused
+causal checks; do not ask again merely because a review round found the problem.
+An optional deeper review does not block those fixes or the original milestone.
+Stop expanding review when the current acceptance criteria are sufficiently
+proved, then return to the owning task. Preserve actual external, deletion, and
+irreversible boundaries. The four rounds are a bounded menu, not a required loop.
 
 **Core insight**: a single agent misses issues due to attention budget limits.
 Multiple independent agents reading the same document find different problems
@@ -49,9 +61,9 @@ Research backing:
 This skill works in two modes:
 
 **Plan mode** (default): review design docs, specs, ADRs, RFCs before implementation.
-**Code mode**: review code files for bugs and vulnerabilities. Activated when user
-passes code files instead of a plan, or says "review code", "find vulnerabilities",
-"security audit". In code mode, aspects shift from plan-oriented (contracts,
+**Code mode**: review code files for bugs and vulnerabilities when the user
+explicitly requests a swarm code review. Merely supplying a diff or asking for
+ordinary code review routes to `deep-review`. In code mode, aspects shift from plan-oriented (contracts,
 completeness) to code-oriented (injection, auth bypass, race conditions, memory).
 
 ---
@@ -126,12 +138,15 @@ Do NOT pad with praise. Only problems.
 
 ### After Round 1
 
-Collect findings. If **0 findings** → plan is clean, congratulate user, stop.
+Collect findings. If **0 findings** → finish this review scope and return to the
+owning task; this is not proof that an implementation milestone is finished.
 
 If findings exist:
 1. Present findings to user grouped by severity
-2. Ask: "Apply these fixes and continue to Round 2 (multisampling)?"
-3. If user approves fixes → apply them to the plan document
+2. If fixes are already authorized, apply the confirmed scoped corrections and
+   run their focused checks. Otherwise report them within the audit-only request.
+3. Consider Round 2 only for a remaining concrete risk or an explicit depth request;
+   do not bundle permission for optional review with already authorized fixes.
 4. If user says stop → stop
 
 ---
@@ -189,9 +204,12 @@ Review the ENTIRE document through your specific lens.
    perspective catches. Flag these as UNIQUE CATCH, do not discard.
 3. **Synthesize**: produce merged report. Separate consensus vs unique catches.
 4. Present to user with round report format (see Output Format below).
-5. Ask: "Apply fixes and continue to Round 3 (focused review)?"
+5. Apply already authorized scoped fixes; use Round 3 only for a concrete unresolved
+   risk or an explicit depth request, not as a condition for continuing implementation.
 
-**Stop criteria**: if Round 2 found 0 high + <=2 medium → STOP. Plan is solid.
+**Review stop criteria**: no unresolved finding affecting current acceptance or
+safety. A severity count is not proof: two material medium findings still need
+resolution. End this review branch without abandoning the owning task.
 
 ---
 
@@ -270,7 +288,8 @@ If clean — output: "NO_FINDINGS — {ASPECT_NAME} review clean."
 
 Same dedup + synthesis. Present focused report.
 
-**Stop criteria**: 0 high + <=2 medium → STOP. Otherwise ask about Round 4.
+Use the same acceptance-bound review stop criteria. Optional Round 4 is a separate
+depth decision; already authorized fixes and delivery do not wait for it.
 
 ---
 
@@ -350,7 +369,8 @@ After the last round (wherever the process stops):
 ```
 
 Verdicts:
-- **HARDENED** — all high fixed, <=3 medium remaining → safe to implement
+- **HARDENED** — no unresolved acceptance-critical finding in the reviewed scope;
+  this is not a blanket safety or runtime certification
 - **IMPROVED** — significant issues found and fixed, some medium deferred
 - **NEEDS_REWORK** — structural issues remain, plan needs major revision
 
@@ -363,15 +383,23 @@ Verdicts:
 - **Plan mutations between rounds**: after applying fixes, the plan changes.
   Each new round MUST read the UPDATED plan, not the original.
   Reference the file path, not inline text, so agents always read current version.
-- **Subagent depth**: Agent tool subagents cannot launch sub-subagents.
-  Each reviewer runs Read/Grep/Glob inline. This is fine for plan review
-  (the plan is typically 1-3 files).
+- **Subagent depth**: use the actual host's supported delegation limits. For this
+  workflow, reviewers inspect their assigned scope directly rather than silently
+  expanding the coordinator's agreed review budget.
 - **Diminishing returns**: Round 4 typically finds 1-3 medium issues.
   If Round 3 found 0 high, skip Round 4.
 - **False positives**: multisampling creates duplicates. The dedup step (after
   each round) is critical — don't count the same issue from 3 agents as 3 issues.
-- **Not for code review**: this skill reviews PLANS. For code review use
-  /deep-review (competency-based parallel code review).
+- **Routing**: ordinary code/diff review uses /deep-review. This skill's code mode
+  is for an explicitly requested swarm security/bug review, not automatic expansion.
+
+## Troubleshooting
+
+- A review finds a fix but the user already asked for implementation: keep ownership,
+  apply the scoped reversible correction and its causal check, then continue the
+  original task. Do not turn an optional next round into a permission blocker.
+- Review keeps generating unrelated improvements: bind each proposed round and
+  finding to current acceptance or an evidenced material risk; omit optional polish.
 
 ## When to use this vs other review skills
 
@@ -384,6 +412,6 @@ Verdicts:
 | **Thorough plan hardening before implementation** | **/plan-swarm-review** (plan mode) |
 | **Plan with many interacting components** | **/plan-swarm-review** (plan mode) |
 | **High-stakes plan (infra, security, payments)** | **/plan-swarm-review** (plan mode) |
-| **Security audit of a module/codebase** | **/plan-swarm-review** (code mode) |
-| **Pre-release vulnerability hunt** | **/plan-swarm-review** (code mode) |
-| **Bug hunt when "something is wrong but tests pass"** | **/plan-swarm-review** (code mode) |
+| **Explicit swarm security audit of a module/codebase** | **/plan-swarm-review** (code mode) |
+| **Explicit swarm pre-release vulnerability hunt** | **/plan-swarm-review** (code mode) |
+| **Ordinary bug hunt or code review** | **/deep-review** |
