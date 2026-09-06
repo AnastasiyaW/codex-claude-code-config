@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-06T15:59:45+00:00",
+  "generated_at": "2026-09-06T16:20:51+00:00",
   "skill_count": 57,
-  "aggregate_hash": "sha256:a08999015fcb1fa6b697d4cc2c5471a0584fd8c052326683b84042976cd7d9d9",
+  "aggregate_hash": "sha256:38710dc391b4f3baf155642efff758f0c92734afe5a812fcda046a9c4fe76b7d",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -68,16 +68,16 @@
       ]
     },
     "ai-ml/flux2-klein-prompting": {
-      "content_hash": "sha256:4590b466e6978ab2b94490744918bd71cc89c4dae651a12db837a804ab81fb81",
-      "size_bytes": 11687,
+      "content_hash": "sha256:8611b9d1f4af729fe654b7150a085ceff89b51c46dbcb25dbefd55fe49f4af21",
+      "size_bytes": 12675,
       "file_count": 1,
       "files": [
         "SKILL.md"
       ]
     },
     "ai-ml/flux2-lora-training": {
-      "content_hash": "sha256:1741a55f60dfe78f23d71847ef3ee7faa7c57a5db397f83ccc9288c7ef6f3065",
-      "size_bytes": 22942,
+      "content_hash": "sha256:5d06ff9064a49673d022106d44b7ca51062685631d78b065f838691efac42514",
+      "size_bytes": 23006,
       "file_count": 1,
       "files": [
         "SKILL.md"
@@ -110,8 +110,8 @@
       ]
     },
     "ai-ml/vlm-segmentation": {
-      "content_hash": "sha256:19b4a662cd54901f9bcfbec03c975e333a63ccf679d63cfd8fbb2ea1a71af1c2",
-      "size_bytes": 35254,
+      "content_hash": "sha256:50757fb1c2b084bd358ef8c4500bc8a240035f6c218932bc5fbb7d0d4df21b5b",
+      "size_bytes": 35058,
       "file_count": 4,
       "files": [
         "SKILL.md",
@@ -330,8 +330,8 @@
       ]
     },
     "development/distill-feedback": {
-      "content_hash": "sha256:9eeaf50a6b1cbf71f91e5ba3b408e49d1adfe7c83672294a36e0ea69d2478d0e",
-      "size_bytes": 13498,
+      "content_hash": "sha256:e385d8edc5ad531286a74fee4121d7930989c5674680c289bfdb99ac48ae7311",
+      "size_bytes": 14682,
       "file_count": 2,
       "files": [
         "SKILL.md",
@@ -429,15 +429,16 @@
       ]
     },
     "development/workflow-orchestration": {
-      "content_hash": "sha256:4a6df9b50f3e8df5e159c5a48a9a5d6712ec11441f26e4959d3524c78fefec39",
-      "size_bytes": 60330,
-      "file_count": 6,
+      "content_hash": "sha256:50e176a912ada7a3bf9e511d7a360af900269f40b6d88169e0decfa17670606c",
+      "size_bytes": 71692,
+      "file_count": 7,
       "files": [
         "SKILL.md",
         "references/lessons-and-gaps.md",
         "references/orchestration-patterns.md",
         "references/research-findings-2026-05-30.md",
         "references/workflow-template.js",
+        "scripts/test_accounting.mjs",
         "scripts/validate.mjs"
       ]
     },
@@ -544,8 +545,8 @@
       ]
     },
     "operational/deepseek-provider-contract": {
-      "content_hash": "sha256:b0063d82b764281425f61e810ed0215260968e21644a641b1584073cb34aaf5f",
-      "size_bytes": 8616,
+      "content_hash": "sha256:98d0ac3a9a823749d027c7e0e2f19735334f0ae9ebfe1ab4a35d6cecc5481a86",
+      "size_bytes": 10184,
       "file_count": 3,
       "files": [
         "SKILL.md",
@@ -554,8 +555,8 @@
       ]
     },
     "operational/desktop-sessions-discovery": {
-      "content_hash": "sha256:9bce354da0ba04cc7777b64563ed4eba33eb5cc30636a94bb03ce5eb6fd1e1d8",
-      "size_bytes": 47030,
+      "content_hash": "sha256:4955c6445db101dbfe845e9206cd3b3540fb08f25bc5abe7d43d7d024e189d0c",
+      "size_bytes": 48136,
       "file_count": 5,
       "files": [
         "SKILL.md",

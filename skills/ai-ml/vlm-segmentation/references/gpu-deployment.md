@@ -1,5 +1,14 @@
 # GPU Деплой: Два Инстанса SAM3 на H100
 
+> **Scope and evidence boundary (2026-09-06):** this is a historical
+> configuration example, not a safe default or a host-change runbook. Before
+> acting, inspect the actual GPU/driver/MIG layout, active owners, model revision
+> and workload objective; preserve the current layout and obtain explicit
+> operational authority for any MIG, MPS, Docker, service or package mutation.
+> H100 profiles, throughput, VRAM and model APIs must be re-measured on the
+> target stack. Synthetic benchmark inputs prove neither segmentation quality
+> nor retouch workflow acceptance.
+
 ## Ключевой вывод
 
 "Оба по 100% GPU одновременно" — физически невозможно. Ресурсы делятся.

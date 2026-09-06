@@ -7,7 +7,10 @@ description: Discover, search, and selectively restore Claude desktop app sessio
 
 Claude desktop app (Mac/Windows native) stores sessions per `<accountId>/<orgId>/`. When you switch accounts, old sessions become invisible in UI — they remain on disk but `LocalSessionManager.loadSessions()` only reads the active accountId folder.
 
-This is GitHub issue [#48511](https://github.com/anthropics/claude-code/issues/48511), open since April 2026 with no Anthropic fix. Issue [#26452](https://github.com/anthropics/claude-code/issues/26452) has 40 comments documenting the same loss.
+Related reports: [#48511](https://github.com/anthropics/claude-code/issues/48511) was opened
+2026-04-15 and is closed as not planned; [#26452](https://github.com/anthropics/claude-code/issues/26452)
+was opened 2026-02-18 and remains open as checked 2026-09-06. These are version-specific user
+reports, not proof that the installed build has the same cause or that a fix does not exist.
 
 This skill is a community workaround. Use at your own risk — see Caveats.
 
@@ -15,8 +18,8 @@ This skill is a community workaround. Use at your own risk — see Caveats.
 
 | Install type | Path |
 |---|---|
-| **Win32 .exe install** (recommended) | `%APPDATA%\Claude\claude-code-sessions\<acct>\<org>\local_<sid>.json` |
-| **Windows MSIX (Microsoft Store)** | `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude-code-sessions\<acct>\<org>\` — see issue [#48362](https://github.com/anthropics/claude-code/issues/48362) (atomic-rename bug breaks this entirely) |
+| **Win32 .exe install** | `%APPDATA%\Claude\claude-code-sessions\<acct>\<org>\local_<sid>.json` |
+| **Windows MSIX (Microsoft Store)** | `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude-code-sessions\<acct>\<org>\` — issue [#48362](https://github.com/anthropics/claude-code/issues/48362) reports an atomic-rename failure in a specific environment; verify the current local error before attributing a missing session to it. |
 | **macOS** | `~/Library/Application Support/Claude/claude-code-sessions/<acct>/<org>/local_<sid>.json` |
 | Legacy (pre-Feb 2026) | same path, but folder name was `local-agent-mode-sessions/` |
 
@@ -65,7 +68,10 @@ Produces a self-contained HTML registry with:
 - **"RESTORED" badge** for sessions already migrated (read from `~/.claude/desktop-migrations.jsonl`)
 - Includes BOTH `claude-code-sessions/` (current) AND `local-agent-mode-sessions/` (legacy pre-Feb 2026)
 
-Use when: user wants to browse the archive visually before deciding what to restore. After clicking Restore, paste the copied command in chat with Claude (it knows the next step) or run it directly in terminal.
+Use when the user wants to browse the archive visually. When the user has already selected
+and authorized a specific restore, the agent performs the scoped dry-run, backup/copy and
+verification itself through available approved tools; do not assign clipboard/terminal work
+to the user. A generated restore command is an input to inspect, not authorization by itself.
 
 ### 2. Inventory — full picture (text)
 
@@ -104,25 +110,37 @@ Behaviour:
 5. Append to `~/.claude/desktop-migrations.jsonl` audit log
 6. Source kept as backup, never deleted
 
-After restore: **restart Claude desktop app** to see session in UI.
+After a verified copy, inspect the current app's documented reload/restart requirement and
+active work before restarting. File parity alone does not prove a session is visible or resumable.
+The default target-account detection is an mtime heuristic: inspect the signed-in destination
+and use explicit `--to` for an authorized restore; never treat newest mtime as account authority.
 
 ## Caveats and risks
 
 ### v2.1.9+ regression (issue [#18645](https://github.com/anthropics/claude-code/issues/18645))
-Anthropic added validation that blocks sessions "not originally created on the current machine". Cross-account migration on the SAME machine appears to work as of April 2026, but cross-machine copies are broken. Anthropic likely tightens validation further in upcoming releases.
+Historical reports described machine-origin validation. Same-machine success or cross-machine
+failure from those builds does not establish current compatibility. Check the installed version,
+actual storage and error before using this workaround; do not predict future validation changes.
 
-### VM bundle architecture coming (issue [#54428](https://github.com/anthropics/claude-code/issues/54428))
-Next desktop architecture moves storage to `vm_bundles/claudevm.bundle/sessiondata.img` (disk-image format). When released, file-copy migration of `local_*.json` may stop working entirely. This toolkit has finite shelf life.
+### Reported disk-image layout (issue [#54428](https://github.com/anthropics/claude-code/issues/54428))
+The linked historical report describes a disk-image storage variant. Discover the installed
+layout first; these scripts only support the enumerated JSON layouts. Do not manipulate disk
+images or infer an announced roadmap from an issue. An unsupported layout is a measured limit.
 
-### MSIX install fatal bug (issue [#48362](https://github.com/anthropics/claude-code/issues/48362))
-If you installed Claude desktop from Microsoft Store, `fs.rename('.tmp', '.json')` fails with EXDEV inside MSIX sandbox — sessions never persist at all. Switch to Win32 .exe install.
+### Reported MSIX rename failure (issue [#48362](https://github.com/anthropics/claude-code/issues/48362))
+The issue reports EXDEV during atomic rename in a specific MSIX environment. Check current
+package version, path and observed error before attributing missing history to it. Do not switch
+installation channels or claim all Store sessions fail based on that historical report.
 
 ### Mass merge wrecks UI usability
 With 700+ sessions in one accountId, the app's session list becomes unreadable. Prefer selective restore one-at-a-time when you actually need a specific thread.
 
 ## Recommended long-term
 
-Drift serious work into Claude Code CLI. CLI sessions live in `~/.claude/projects/<slug>/<UUID>.jsonl`, are account-agnostic, stable storage, open JSONL format, survive desktop app reorgs. Use desktop app for quick UI but not for long-running projects.
+Preserve the project's canonical transcript archive and durable task/handoff state regardless
+of UI choice. CLI and desktop have different persistence/restore contracts; neither is a
+substitute for verified backups. Choose a runtime from the required capabilities and observed
+behavior, not a universal recommendation to move serious work away from desktop.
 
 ## Files
 
@@ -138,13 +156,13 @@ All four scripts detect platform via `sys.platform` and pick the right path auto
 - **Storage path**: `~/Library/Application Support/Claude/claude-code-sessions/<acct>/<org>/local_<sid>.json`
 - **Legacy path**: `~/Library/Application Support/Claude/local-agent-mode-sessions/<acct>/<org>/local_<sid>.json`
 - **HTML auto-open**: uses `open <html>` (system default browser)
-- **No MSIX issue**: macOS .dmg install is the only distribution channel; no atomic-rename bug
+- **Different packaging**: the Windows MSIX report does not establish macOS behavior; verify the installed macOS build and observed error independently.
 - **Spotlight bonus**: `mdfind -onlyin ~/Library/Application\ Support/Claude/ "<query>"` works on session JSONs (indexes content), faster than `find` for one-off lookups
 - **Reveal in Finder** after restore: `open -R ~/Library/Application\ Support/Claude/claude-code-sessions/<acct>/<org>/local_<sid>.json`
 
 ## License
 
-Public domain. This is a community workaround for an Anthropic bug; share freely.
+Public domain. This is a community session-file discovery and recovery tool; its usefulness depends on the verified local layout and failure, not a universal product-bug diagnosis.
 
 ## See also
 

@@ -1,6 +1,6 @@
 ---
 name: workflow-orchestration
-description: "Написание и запуск Claude Code dynamic workflows (детерминированный JS-оркестратор субагентов, research preview 2026-05-28). Use when пишешь или запускаешь workflow, видишь keyword workflow в запросе, нужен fan-out на десятки-сотни агентов, codebase-wide аудит/миграция, cross-checked research, competency-review, batch-обработка списка элементов через стадии. Покрывает: примитивы phase/agent/parallel/pipeline/workflow, pipeline vs parallel, schema, budget, resume, quality-паттерны (adversarial verify, judge panel, loop-until-dry), и наши добавки к платформе (retry-обёртка, error policy, .runs observability, eval-harness, billing-дисциплина). Триггеры: workflow, воркфлоу, оркестратор, fan-out, ultracode, deep-research, 1000 агентов, детерминированный скрипт агентов. Do NOT use to design the agent/Generator-Evaluator architecture itself (use harness-design) or for a single one-shot subagent/review where no deterministic multi-stage script is needed; this writes the JS orchestrator, it is not for ad-hoc one-off agent calls."
+description: "Написание и запуск Claude Code dynamic workflows (JS-оркестратор субагентов). Use when пишешь или запускаешь workflow, видишь keyword workflow в запросе, нужен fan-out на десятки-сотни агентов, codebase-wide аудит/миграция, cross-checked research, competency-review, batch-обработка списка элементов через стадии. Покрывает: примитивы phase/agent/parallel/pipeline/workflow, pipeline vs parallel, schema, budget, resume, quality-паттерны (adversarial verify, judge panel, loop-until-dry), и наши добавки к платформе (accounting, bounded retry, error policy, .runs observability, eval-harness, billing-дисциплина). Триггеры: workflow, воркфлоу, оркестратор, fan-out, ultracode, deep-research, 1000 агентов, детерминированный скрипт агентов. Do NOT use to design the agent/Generator-Evaluator architecture itself (use harness-design) or for a single one-shot subagent/review where no deterministic multi-stage script is needed; this writes the JS orchestrator, it is not for ad-hoc one-off agent calls."
 metadata:
   version: "1.0.0"
   source: "code.claude.com/docs/en/workflows + Workflow tool spec + deksden lessons (4 оркестратора)"
@@ -9,13 +9,18 @@ metadata:
 
 # Workflow Orchestration
 
-Claude Code **dynamic workflows** - детерминированный JS-скрипт, который оркестрирует
+Claude Code **dynamic workflows** - JS-скрипт, который оркестрирует
 недетерминированных субагентов. Скрипт = «рельсы» (loop, branching, промежуточные
 результаты в переменных); агенты = «поезда». Надёжность даёт код вокруг агентов, а не
-агенты сами. Research preview с 2026-05-28, требует Claude Code v2.1.154+.
+агенты сами. Сейчас они generally available; нужен Claude Code v2.1.154+.
 
 Этот skill - наш свод поверх официального API: что платформа уже даёт, и что мы
-добавляем сами (5 gaps, выявленных практиком с 4 своими оркестраторами).
+добавляем сами для задач, где нужна доказуемая полнота batch-результата.
+
+**Текущая опора (проверено 2026-09-06):** [официальная документация](https://code.claude.com/docs/en/workflows),
+[официальный разбор](https://claude.com/blog/a-harness-for-every-task-dynamic-workflows-in-claude-code)
+и [официальный cookbook](https://platform.claude.com/cookbook/claude-agent-sdk-08-dynamic-workflows).
+Дата обновления docs/cookbook на странице не указана; blog датирован 2026-06-02.
 
 ## Когда workflow, а когда нет
 
@@ -31,14 +36,14 @@ Claude Code **dynamic workflows** - детерминированный JS-скр
 повторяемая оркестрация как читаемый скрипт; нужен repeatable quality-паттерн
 (агенты adversarially проверяют находки друг друга перед тем как их вернуть).
 
-**3-условный тест (все три ОДНОВРЕМЕННО, иначе custom subagent эффективнее):** (1) задача
-больше одного контекстного окна; (2) стратегия разбиения заранее НЕ известна; (3) качество
-важнее токен-экономики. Известный фиксированный флоу + нужна cost-предсказуемость → бери
-subagent, не workflow.
+**Практический тест:** бери workflow, когда работа больше контекста одного агента или один
+и тот же шаг надо повторить по множеству независимых элементов, а orchestration полезно
+сохранить и повторить. Для 1--3 одноразовых делегаций бери subagent. Это не правило «все
+три условия», а выбор масштаба и повторяемости.
 
 **НЕ бери workflow когда:** хватает 1-3 субагентов на ход (бери subagent); задача -
-следование инструкции (skill); нужен интерактивный sign-off в середине (workflow не
-принимает user input в середине - каждый этап с sign-off = свой workflow).
+следование инструкции (skill); нужен интерактивный sign-off в середине (кроме permission
+prompts, run не принимает mid-run input; каждый этап с sign-off = свой workflow).
 
 **Opt-in обязателен.** Workflow tool вызывается только когда user явно дал согласие
 (keyword `workflow`/`workflows` в запросе, ultracode on, или прямая просьба). Иначе -
@@ -64,15 +69,18 @@ log('сообщение пользователю')
 
 - **`agent(prompt, opts?)`** → без `schema` возвращает финальный текст (string); со `schema`
   (JSON Schema) форсит StructuredOutput tool и возвращает **валидированный объект** (модель
-  ретраит при mismatch); `null` если user скипнул агента. opts: `label`, `phase` (явная
+  ретраит при mismatch); `null`, если агент остановлен в ходе run или случилась невосстановимая
+  API-ошибка. opts: `label`, `phase` (явная
   группа - юзать внутри parallel/pipeline, не глобальный phase()), `model` (опускать -
   наследует модель сессии; ставить только когда уверен), `isolation:'worktree'` (дорого -
   только когда агенты параллельно мутируют файлы), `agentType` ('Explore', 'code-reviewer'...).
-- **`parallel(thunks)`** - массив **функций** `()=>Promise`, барьер. Упавший thunk → `null`
-  (не реджект). Всегда `.filter(Boolean)` перед использованием.
+- **`parallel(thunks)`** - массив **функций** `()=>Promise`, барьер. Результат агента может
+  быть `null`. `.filter(Boolean)` допустим только для представления уже учтённых результатов;
+  для явного batch сначала свяжи каждый `null` с исходным item и верни его как pending.
 - **`pipeline(items, ...stages)`** - каждый item независимо через все стадии, БЕЗ барьера
-  между ними (item 2 на стадии 3, item 4 ещё на стадии 1). Стадия = `(prev, item, idx)=>...`.
-  Стадия бросает → item = `null`, остальные стадии скип. **Дефолт для многостадийной работы.**
+  между ними (item 2 на стадии 3, item 4 ещё на стадии 1). Если стадия даёт `null`, следующие
+  могут быть пропущены; после pipeline восстанавливай состояние по исходному item. **Дефолт
+  для многостадийной работы.**
 - **`budget`** `{total: number|null, spent(), remaining()}` - токен-таргет хода. `total`
   null если не задан. Хард-потолок: при достижении `agent()` бросает.
 - **`args`** - значение, переданное в Workflow, дословно (для параметризованных команд).
@@ -88,17 +96,23 @@ log('сообщение пользователю')
    Read, Write). Скрипт лишь координирует и передаёт данные через переменные.
 4. **schema для всего, что обрабатываешь кодом.** Текст парсить нельзя надёжно - schema
    даёт валидированный объект + авто-ретрай.
-5. **`.filter(Boolean)`** после каждого `parallel()` и после `pipeline()` (упавшие = null).
+5. **Явный batch не теряет identity.** Не фильтруй `null` до ledger: `finder:<input>` /
+   `verify:<finding>` /
+   `card:<finding>` / `sample:<input>` / `judge:<input>` / `card-audit` остаётся pending.
+   Card audit доказывает one-to-one set equality (count, distinct IDs, membership), не только
+   count. `COMPLETE` только когда полный set доказан; иначе верни `INCOMPLETE` и named pending.
 6. **meta - pure literal.** Любая вычисляемая часть = parse error.
-7. **Субагенты всегда в `acceptEdits`** и наследуют твой tool allowlist. Перед запуском на
-   боевом репо это надо понимать: правки файлов авто-одобряются.
+7. **Permission mode не фиксирован skill-ом.** Subagents применяют permission rules сессии;
+   agent permission prompts могут приостановить run. До long run подготовь нужный allowlist,
+   но не заявляй `acceptEdits` или автоодобрение без проверки текущего режима.
 
-## Лимиты рантайма (точные, reverse-eng — детали в `references/research-findings-2026-05-30.md`)
+## Подтверждённые текущие limits
 
-1000 `agent()` lifetime (`WorkflowAgentCapError`) · concurrency `min(16, max(2, cores−2))` ·
-скрипт ≤512 KB · per-agent stall 180s (override опцией `stallMs`, до 5 retry) · nesting 1
-уровень · **`agent()` cache key = (schema, model, isolation, agentType)** — смена любого =
-повторный запуск этого вызова при resume.
+До 16 concurrent agents (меньше на CPU-limited host) · до 4,096 items в одном `parallel()`
+или `pipeline()` · 1,000 agents total на run. Dynamic workflows требуют Claude Code v2.1.154+;
+bundled `/workflow-authoring` для редактирования saved script требует v2.1.248+. Остальные
+числа из старого community research не используй как current contract: см.
+`references/research-findings-2026-05-30.md` только как исторические заметки.
 
 ## Quality-паттерны (повышают доверие к результату)
 
@@ -145,8 +159,9 @@ error policy для логических ошибок, файловую observab
 шаблон в [references/workflow-template.js](references/workflow-template.js).
 
 Кратко:
-- **`withRetry(fn, n)`** - обёртка вокруг `agent()`: при `null`/throw повторить до n раз,
-  варьируя label по попытке. Платформенный ретрай - только на schema-mismatch.
+- **`withRetry(fn, n)`** - ретрай только явно пойманного throw в ограниченном бюджете; `null`
+  не ретраить вслепую, поскольку он означает остановку или unrecoverable API error. Сохрани
+  исходную identity как pending. Платформенный ретрай - только на schema-mismatch.
 - **`.runs/` workspace** - агенты пишут артефакты (карточки находок, промежуточные JSON) в
   `.runs/<flow>-<runId>/` через Write; `runId` приходит из `args` (в скрипте нет `Date.now`).
   Это durable observability сверх `/workflows` UI и `agent-<id>.jsonl` журналов.
@@ -183,8 +198,14 @@ Workflow спавнит до 1000 агентов; расход кратный. �
 1. Opt-in от user есть? (keyword / ultracode / прямая просьба)
 2. Нужные агентам команды (ssh/rclone/git) - в tool allowlist? (иначе промпт в середине)
 3. `node --check` скрипта прошёл (L1)? meta - pure literal?
-4. Размер оценён, billing обсуждён если >10 агентов?
-5. Долгий прогон → промежуточное пишется в `.runs/` (resume только в той же сессии)?
+4. Размер оценён, billing обсуждён если расход существенный?
+5. Явный batch имеет ledger pending/completed и `COMPLETE` возможен только после card-audit?
+6. Долгий прогон → промежуточное пишется в `.runs/` (resume только в той же сессии)?
+
+## Если workflow недоступен
+
+Не объявляй исходную работу заблокированной. Выполни её доступными авторизованными средствами
+в текущей сессии; workflow остаётся необязательной формой оркестрации, а не условием результата.
 
 ## Связь с нашими правилами
 

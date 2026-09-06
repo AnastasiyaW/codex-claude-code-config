@@ -1,8 +1,13 @@
 # Lessons & Gaps - что платформа не даёт, и как мы это закрываем
 
+**Current-source check (accessed 2026-09-06):** [Claude Code workflows docs](https://code.claude.com/docs/en/workflows),
+[Anthropic workflow article](https://claude.com/blog/a-harness-for-every-task-dynamic-workflows-in-claude-code),
+and [Agent SDK cookbook](https://platform.claude.com/cookbook/claude-agent-sdk-08-dynamic-workflows).
+Docs and cookbook do not show an update date; the article is dated 2026-06-02.
+
 Источник анализа: практик с 4 собственными оркестраторами (агентные флоу → ai-kod комбайн
 с DSL/трейсами → dd-flow для кодинга → гибрид на vanilla codex). Его lessons learned по
-тому, чего НЕ хватает в Anthropic dynamic workflows на момент research preview (2026-05-28),
+тому, чего НЕ хватало Anthropic dynamic workflows во время initial preview (2026-05-28),
 и наши решения конвенциями.
 
 Сначала разделим: **что уже закрыто платформой** (не дублировать), и **что valid gap**.
@@ -18,18 +23,21 @@
 | quality-паттерны | adversarial verify / judge panel / loop-until-dry задокументированы в спеке инструмента |
 | resume | journaling по `agent()` вызовам, resume в той же сессии (кэш-хит на неизменённый префикс) |
 
-## Gap 1 - retry при падении/`null` агента (не schema-mismatch)
+## Gap 1 - retry при контролируемом throw, не при `null`
 
-Платформенный ретрай только на невалидный schema. Если агент бросил, упёрся в budget, или
-вернул `null` (user скипнул) - это твоя забота. В `parallel`/`pipeline` упавший = `null`.
+Платформенный ретрай только на невалидный schema. `agent()` возвращает `null`, когда агент
+остановлен mid-run или случилась unrecoverable API error. Это не подтверждает, что повтор
+безопасен или желателен: не ретраить `null` вслепую. Сохрани identity input как pending;
+контролируемый `throw` можно повторить в ограниченном бюджете.
 
 ```js
-// Обёртка: повторить до n раз при null/throw, варьируя label по попытке (вместо random).
+// Обёртка: повторить до n раз только при throw, варьируя label по попытке.
 async function withRetry(makeAgent, n = 2, baseLabel = 'task') {
   for (let attempt = 0; attempt <= n; attempt++) {
     try {
-      const r = await makeAgent(attempt)        // makeAgent(attempt) → agent(prompt, {label:`${baseLabel}#${attempt}`, ...})
-      if (r != null) return r
+      const r = await makeAgent(attempt)
+      if (r == null) return null
+      return r
     } catch (e) {
       if (attempt === n) { log(`${baseLabel}: исчерпаны ретраи (${e?.message ?? e})`); return null }
     }
@@ -43,7 +51,8 @@ const results = (await parallel(
     (att) => agent(promptFor(it), { label: `scan:${it.id}#${att}`, schema: S, phase: 'Scan' }),
     2, `scan:${it.id}`
   ))
-)).filter(Boolean)
+))
+// Сопоставь results[index] с items[index]; null -> pending `finder:${items[index].id}`.
 ```
 
 Не ретраить бесконечно: ретрай жжёт токены кратно (см. billing). 2 ретрая - разумный дефолт.
@@ -55,16 +64,25 @@ const results = (await parallel(
 `Math.random()`, разнообразие даёт сам стохастический агент + чуть разный промпт.
 
 ```js
-async function multisample(makePrompt, n = 3, judge = null, label = 'sample') {
-  const samples = (await parallel(
-    Array.from({ length: n }, (_, i) => () =>
-      agent(makePrompt(i), { label: `${label}#${i}`, schema: SAMPLE_SCHEMA }))
-  )).filter(Boolean)
-  if (!samples.length) return null
-  if (!judge) return majorityVote(samples)        // твоя чистая функция голосования
-  const scored = await parallel(samples.map((s, i) => () =>
-    agent(judge(s), { label: `judge:${label}#${i}`, schema: SCORE_SCHEMA })))
-  return pickBest(samples, scored.filter(Boolean))
+async function multisample(makePrompt, { n = 3, judge = null, label = 'sample', schema, scoreSchema } = {}) {
+  const inputIds = Array.from({ length: n }, (_, index) => `${label}#${index}`)
+  const raw = await parallel(inputIds.map((inputId, index) => () =>
+    agent(makePrompt(index), { label: `sample:${inputId}`, schema })))
+  const pending = []
+  const samples = []
+  raw.forEach((result, index) => {
+    if (result == null) pending.push(`sample:${inputIds[index]}`)
+    else samples.push({ inputId: inputIds[index], result })
+  })
+  if (pending.length || !judge) return { status: pending.length ? 'INCOMPLETE' : 'COMPLETE', pending, samples }
+  const rawScores = await parallel(samples.map((sample) => () =>
+    agent(judge(sample.result), { label: `judge:${sample.inputId}`, schema: scoreSchema })))
+  const scores = []
+  rawScores.forEach((result, index) => {
+    if (result == null) pending.push(`judge:${samples[index].inputId}`)
+    else scores.push({ inputId: samples[index].inputId, result })
+  })
+  return { status: pending.length ? 'INCOMPLETE' : 'COMPLETE', pending, samples, scores }
 }
 ```
 
@@ -87,6 +105,10 @@ const judged = await pipeline(findings,
     if (v.confidence < 0.5) return { ...f, status: 'low-confidence' }  // логическая неуверенность → не в confirmed
     return { ...f, status: v.real ? 'confirmed' : 'rejected' }
   })
+const resolved = judged.map((result, index) => result == null
+  ? { ...findings[index], status: 'verify-failed' }
+  : result)
+const unresolved = resolved.filter((f) => f.status === 'verify-failed' || f.status === 'low-confidence')
 ```
 
 ## Gap 4 - файловая observability с карточками (`.runs/`)
@@ -111,8 +133,16 @@ const judged = await pipeline(findings,
 const audit = await agent(
   `Сосчитай файлы в .runs/${args.runId}/findings/ и верни их число и список id.`,
   { schema: { type:'object', properties:{ count:{type:'number'}, ids:{type:'array',items:{type:'string'}} }, required:['count','ids'] } })
-if (audit && audit.count !== confirmed.length)
-  log(`⚠️ карточек ${audit.count}, подтверждённых находок ${confirmed.length} - рассинхрон`)
+const expectedIds = new Set(confirmed.map((f) => f.id))
+const auditedIds = new Set((audit && audit.ids) || [])
+const idsMatch = audit && audit.ids.length === expectedIds.size &&
+  auditedIds.size === expectedIds.size &&
+  [...expectedIds].every((id) => auditedIds.has(id))
+if (!audit || audit.count !== confirmed.length || !idsMatch)
+  pending.add('card-audit')
+// Повтор id (например, [f1, f1] вместо [f1, f2]) также оставляет `card-audit` pending.
+// card agent -> null также оставляет pending `card:<finding-id>`.
+// COMPLETE допустим только при пустом pending; иначе верни INCOMPLETE + named pending.
 ```
 
 Это реализация принципа «verify behavior independently» (имя ≠ поведение): не верим, что
@@ -197,7 +227,7 @@ API. Наш `scripts/validate.mjs` ловит это до запуска (FAIL �
 
 - ❌ `parallel` там, где нужен `pipeline` - барьер ждёт самого медленного, простаивают быстрые.
 - ❌ Парсить текст агента регэкспом вместо `schema`.
-- ❌ Забыть `.filter(Boolean)` → `null` ломает следующую стадию.
+- ❌ Отфильтровать `null` до ledger → теряется input identity и ложный COMPLETE.
 - ❌ `Date.now()`/`Math.random()` в скрипте → бросает, ломает resume.
 - ❌ Бесконечный retry/loop без `budget`-гарда → 1000-агентный потолок, спалённый лимит.
 - ❌ Dedup в loop-until-dry против `confirmed` вместо `seen` → не сходится.

@@ -8,24 +8,34 @@ import sys
 from pathlib import Path
 
 
-def messages_from(path: Path) -> list[dict]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    messages = payload.get("messages") if isinstance(payload, dict) else payload
+def fixture_from_payload(payload: object) -> tuple[list[dict], bool]:
+    if not isinstance(payload, dict):
+        raise ValueError("fixture must be an object with messages and outbound_request.tools")
+    messages = payload.get("messages")
     if not isinstance(messages, list) or not all(isinstance(item, dict) for item in messages):
-        raise ValueError("fixture must be a JSON message array or an object with a messages array")
-    return messages
+        raise ValueError("fixture messages must be an array of objects")
+    outbound_request = payload.get("outbound_request")
+    if not isinstance(outbound_request, dict) or "tools" not in outbound_request:
+        raise ValueError("fixture must declare outbound_request.tools")
+    return messages, bool(outbound_request["tools"])
 
 
-def validate(messages: list[dict]) -> list[str]:
+def fixture_from(path: Path) -> tuple[list[dict], bool]:
+    return fixture_from_payload(json.loads(path.read_text(encoding="utf-8")))
+
+
+def validate(messages: list[dict], *, outbound_tools: bool) -> list[str]:
     errors: list[str] = []
     known_calls: set[str] = set()
-    tool_reasoning_required = False
     for index, message in enumerate(messages):
         role = message.get("role")
-        if role == "assistant" and message.get("tool_calls"):
+        if role == "assistant":
             reasoning = message.get("reasoning_content")
-            if not isinstance(reasoning, str) or not reasoning.strip():
-                errors.append(f"messages[{index}]: tool-call assistant message lacks reasoning_content")
+            if (outbound_tools or message.get("tool_calls")) and (
+                not isinstance(reasoning, str) or not reasoning.strip()
+            ):
+                errors.append(f"messages[{index}]: assistant message lacks reasoning_content")
+        if role == "assistant" and message.get("tool_calls"):
             calls = message.get("tool_calls")
             if not isinstance(calls, list):
                 errors.append(f"messages[{index}]: tool_calls must be an array")
@@ -35,17 +45,12 @@ def validate(messages: list[dict]) -> list[str]:
                         known_calls.add(call["id"])
                     else:
                         errors.append(f"messages[{index}]: tool call lacks string id")
-            tool_reasoning_required = True
         elif role == "tool":
             call_id = message.get("tool_call_id")
             if not isinstance(call_id, str) or not call_id:
                 errors.append(f"messages[{index}]: tool result lacks tool_call_id")
             elif call_id not in known_calls:
                 errors.append(f"messages[{index}]: tool_call_id does not match an earlier assistant call")
-        elif role == "user" and tool_reasoning_required:
-            # The earlier assistant record is still present in this fixture; that is
-            # the observable local proof that the next request will retain it.
-            tool_reasoning_required = False
     return errors
 
 
@@ -54,7 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("fixture", type=Path, help="redacted JSON history fixture")
     args = parser.parse_args(argv)
     try:
-        errors = validate(messages_from(args.fixture))
+        messages, outbound_tools = fixture_from(args.fixture)
+        errors = validate(messages, outbound_tools=outbound_tools)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"[deepseek-history] INVALID: {exc}")
         return 2

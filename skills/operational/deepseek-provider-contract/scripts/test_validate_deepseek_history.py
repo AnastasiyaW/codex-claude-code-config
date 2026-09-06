@@ -20,18 +20,30 @@ class DeepSeekHistoryTests(unittest.TestCase):
             {"role": "tool", "tool_call_id": "call-1", "content": "sunny"},
             {"role": "user", "content": "and tomorrow?"},
         ]
-        self.assertEqual(MODULE.validate(messages), [])
+        self.assertEqual(MODULE.validate(messages, outbound_tools=True), [])
 
     def test_tool_history_requires_reasoning(self) -> None:
-        errors = MODULE.validate([{"role": "assistant", "tool_calls": [{"id": "call-1"}]}])
+        errors = MODULE.validate([{"role": "assistant", "tool_calls": [{"id": "call-1"}]}], outbound_tools=True)
         self.assertIn("lacks reasoning_content", errors[0])
 
     def test_tool_result_must_name_prior_call(self) -> None:
-        errors = MODULE.validate([{"role": "tool", "content": "sunny"}])
+        errors = MODULE.validate([{"role": "tool", "content": "sunny"}], outbound_tools=False)
         self.assertIn("lacks tool_call_id", errors[0])
 
     def test_non_tool_history_is_valid_without_reasoning(self) -> None:
-        self.assertEqual(MODULE.validate([{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]), [])
+        self.assertEqual(MODULE.validate([{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}], outbound_tools=False), [])
+
+    def test_tools_bearing_request_requires_reasoning_for_all_prior_assistant_turns(self) -> None:
+        errors = MODULE.validate([
+            {"role": "assistant", "reasoning_content": "first", "tool_calls": [{"id": "call-1"}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": "sunny"},
+            {"role": "assistant", "content": "final answer"},
+        ], outbound_tools=True)
+        self.assertIn("messages[2]: assistant message lacks reasoning_content", errors)
+
+    def test_fixture_must_declare_outbound_tools(self) -> None:
+        with self.assertRaisesRegex(ValueError, "outbound_request.tools"):
+            MODULE.fixture_from_payload({"messages": []})
 
 
 if __name__ == "__main__":

@@ -44,12 +44,14 @@ const VERDICT = {
   required: ['real', 'confidence'],
 }
 
-// ── Gap 1: retry при null/throw (платформа ретраит только schema-mismatch) ───
+// ── Gap 1: retry только контролируемого throw; null сохраняет pending identity ──
 async function withRetry(makeAgent, n = 2, baseLabel = 'task') {
   for (let attempt = 0; attempt <= n; attempt++) {
     try {
       const r = await makeAgent(attempt)
-      if (r != null) return r
+      // null = stop или unrecoverable API error: не знаем, что безопасно повторять.
+      if (r == null) return null
+      return r
     } catch (e) {
       if (attempt === n) {
         log(`${baseLabel}: исчерпаны ретраи (${e && e.message ? e.message : e})`)
@@ -73,6 +75,30 @@ function majority(items, keyFn) {
   return { value: best, votes: bestN, total: items.length }
 }
 
+// ── Gap 2: каждый sample/judge сохраняет identity; null не теряется ──────────
+async function multisample(makePrompt, { n = 3, judge = null, label = 'sample', schema, scoreSchema } = {}) {
+  const inputIds = Array.from({ length: n }, (_, index) => `${label}#${index}`)
+  const raw = await parallel(inputIds.map((inputId, index) => () =>
+    agent(makePrompt(index), { label: `sample:${inputId}`, schema })))
+  const pending = []
+  const samples = []
+  raw.forEach((result, index) => {
+    if (result == null) pending.push(`sample:${inputIds[index]}`)
+    else samples.push({ inputId: inputIds[index], result })
+  })
+  if (pending.length || !judge) return {
+    status: pending.length ? 'INCOMPLETE' : 'COMPLETE', pending, samples,
+  }
+  const rawScores = await parallel(samples.map((sample) => () =>
+    agent(judge(sample.result), { label: `judge:${sample.inputId}`, schema: scoreSchema })))
+  const scores = []
+  rawScores.forEach((result, index) => {
+    if (result == null) pending.push(`judge:${samples[index].inputId}`)
+    else scores.push({ inputId: samples[index].inputId, result })
+  })
+  return { status: pending.length ? 'INCOMPLETE' : 'COMPLETE', pending, samples, scores }
+}
+
 // ── runId из args (в скрипте нет доступа к часам) — штампует main-loop перед запуском ─
 const runId = (args && args.runId) || 'run-unstamped'
 const target = (args && args.target) || 'src/'
@@ -84,7 +110,8 @@ const FINDERS = [
   { key: 'logic', lens: 'логические ошибки, граничные случаи' },
   { key: 'perf', lens: 'неэффективности, N+1, лишние аллокации' },
 ]
-const found = (await parallel(
+const pending = new Set()
+const finderResults = await parallel(
   FINDERS.map((f) => () =>
     withRetry(
       (att) =>
@@ -97,9 +124,14 @@ const found = (await parallel(
       `find:${f.key}`,
     ),
   ),
-))
-  .filter(Boolean)
-  .flatMap((r) => r.findings)
+)
+const found = finderResults.flatMap((result, index) => {
+  if (result == null) {
+    pending.add(`finder:${FINDERS[index].key}`)
+    return []
+  }
+  return result.findings
+})
 
 log(`найдено сырых находок: ${found.length}`)
 
@@ -113,7 +145,7 @@ const unique = found.filter((f) => {
 })
 
 // ── Phase Verify — pipeline (БЕЗ барьера): каждая находка верифицируется ──────
-//    + Gap 3 error policy: low-confidence не попадает в confirmed, но не теряется
+//    + null после pipeline восстанавливаем по исходному item: stage 2 может не запуститься.
 const judged = await pipeline(
   unique,
   (f) =>
@@ -128,12 +160,17 @@ const judged = await pipeline(
     return { ...f, status: v.real ? 'confirmed' : 'rejected', reason: v.reason }
   },
 )
-const confirmed = judged.filter(Boolean).filter((f) => f.status === 'confirmed')
+const resolved = judged.map((result, index) => result == null
+  ? { ...unique[index], status: 'verify-failed' }
+  : result)
+const unresolved = resolved.filter((f) => f.status === 'verify-failed' || f.status === 'low-confidence')
+for (const finding of unresolved) pending.add(`verify:${finding.id}`)
+const confirmed = resolved.filter((f) => f.status === 'confirmed')
 log(`подтверждено: ${confirmed.length} / ${unique.length}`)
 
 // ── Phase Report — Gap 4: агент оформляет карточку на каждый косяк в .runs/ ───
 phase('Report')
-await parallel(
+const cardResults = await parallel(
   confirmed.map((f) => () =>
     agent(
       `Оформи карточку находки в .runs/${runId}/findings/${f.id}.md: ` +
@@ -143,26 +180,43 @@ await parallel(
     ),
   ),
 )
+cardResults.forEach((result, index) => {
+  if (result == null) pending.add(`card:${confirmed[index].id}`)
+})
 
-// Независимая проверка (имя ≠ поведение): считаем карточки, не доверяем «оформил»
+// Независимая проверка: count и IDs, иначе card success не доказывает нужную карточку.
 const audit = await agent(
-  `Сосчитай .md файлы в .runs/${runId}/findings/ и верни их число.`,
+  `Сосчитай .md файлы в .runs/${runId}/findings/ и верни число и IDs карточек.`,
   {
     label: 'audit:cards',
     phase: 'Report',
-    schema: { type: 'object', properties: { count: { type: 'number' } }, required: ['count'] },
+    schema: {
+      type: 'object',
+      properties: { count: { type: 'number' }, ids: { type: 'array', items: { type: 'string' } } },
+      required: ['count', 'ids'],
+    },
   },
 )
-if (audit && audit.count !== confirmed.length) {
-  log(`⚠️ рассинхрон: карточек ${audit.count}, подтверждённых ${confirmed.length}`)
+const expectedCardIds = new Set(confirmed.map((f) => f.id))
+const auditedCardIds = new Set((audit && audit.ids) || [])
+const idsMatch = audit && audit.ids.length === expectedCardIds.size &&
+  auditedCardIds.size === expectedCardIds.size &&
+  [...expectedCardIds].every((id) => auditedCardIds.has(id))
+if (!audit || audit.count !== confirmed.length || !idsMatch) {
+  pending.add('card-audit')
+  log(`⚠️ audit карточек неполный или не совпадает с confirmed`)
 }
 
-// Финальная сводка возвращается в контекст Claude (только она, не промежуточное)
+// COMPLETE разрешён лишь при полном учёте; иначе caller получает конкретный список для resume.
+const pendingList = [...pending]
 return {
   runId,
+  status: pendingList.length ? 'INCOMPLETE' : 'COMPLETE',
+  pending: pendingList,
   raw: found.length,
   unique: unique.length,
   confirmed: confirmed.length,
-  lowConfidence: judged.filter(Boolean).filter((f) => f.status === 'low-confidence').length,
+  lowConfidence: resolved.filter((f) => f.status === 'low-confidence').length,
   findings: confirmed,
+  unresolved,
 }

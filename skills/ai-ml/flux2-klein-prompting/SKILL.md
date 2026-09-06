@@ -17,8 +17,10 @@ description: >
 
 ## Core principle: prose, not tags
 
-Official BFL prompting guide requires **connected prose**, not keyword lists.
-Write: who/what is in the image, where, in what style, materials/light/camera, and — for editing — what must remain unchanged.
+BFL guidance favors a concrete natural-language description over an ambiguous
+bag of tags. State who/what is in the image, where, style, materials/light/camera
+and — for editing — the properties to preserve. Prompt shape is a starting
+point, not a quality guarantee; assess the result against the requested edit.
 
 ---
 
@@ -27,9 +29,9 @@ Write: who/what is in the image, where, in what style, materials/light/camera, a
 | Axis | Options | Notes |
 |---|---|---|
 | Size | 4B / 9B | 9B better for complex instructions; 4B fastest |
-| Mode | Distilled / Base | Distilled = 4 steps, CFG≈1.0; Base = 50 steps, CFG≈4.0 |
+| Mode | Distilled / Base | Use the exact model-card or serving API settings; step/CFG values are implementation-specific |
 | License | 4B Apache-2.0 / 9B Non-Commercial | Check before commercial use |
-| Task | T2I / Edit (I2I) / Multi-reference | Edit requires `input_image`; up to 4 ref images via API |
+| Task | T2I / Edit (I2I) / Multi-reference | The current BFL image-editing guide documents up to 8 references via API (10 in playground); re-check the selected endpoint schema before use |
 
 **9B uses Qwen3 8B text embedder** → solid multilingual support (Russian works natively).
 
@@ -71,7 +73,9 @@ Write: who/what is in the image, where, in what style, materials/light/camera, a
 "Возьми персонажа из image 2 и помести рядом с объектом из image 1."
 ```
 
-**Distilled for previews, Base for finals**
+Choose distilled or base only after the task’s quality/latency requirement and
+the exact model card are known; neither is an automatic “preview” or “final”
+mode.
 
 ---
 
@@ -137,24 +141,27 @@ UI‑мокап мобильного приложения [тематика]. 3 
 ## API parameters
 
 ### Recommended defaults (from official BFL HF Spaces)
-| Mode | Steps | guidance_scale | Use for |
-|---|---|---|---|
-| Distilled | 4 | ~1.0 | Fast previews, interactive |
-| Base | 50 | ~4.0 | Final renders, detail/diversity |
+| Mode | Settings | Use for |
+|---|---|---|
+| Distilled / Base | Read the exact checkpoint or API reference | Choose from the requested fidelity, latency and cost constraints |
 
 ### BFL API constraints (klein endpoints)
-- `steps` / `guidance` not exposed in klein API (unlike flex) — control via prompt + seed + resolution
-- Input: min 64×64, max 4MP (2048×2048), recommended ≤2MP
-- Output always multiple of 16; input auto-resized to ×16
-- Up to 4 reference images via API
-- Result is a signed URL valid **10 minutes** — download immediately
+- Endpoint fields, size limits, reference-image count and result-URL lifetime
+  are API-version facts. Read the current endpoint reference before constructing
+  a request; do not infer them from a local pipeline or another FLUX endpoint.
 
 ### Available API fields (klein)
-`prompt`, `input_image`, `input_image_2..4`, `seed`, `width`, `height`, `safety_tolerance`, `output_format`, `webhook`
+Do not maintain a local fixed field list. Copy the request schema from the
+current BFL API reference for the selected endpoint; multi-reference capacity,
+endpoint names and optional fields change independently of this skill.
 
 ---
 
 ## Python: BFL API (async polling)
+
+Illustrative request shape only: copy the current selected-endpoint example from
+BFL before use. This snippet does not establish that its endpoint or fields are
+currently supported.
 
 ```python
 import os, time, requests
@@ -188,6 +195,9 @@ while True:
 ```
 
 ## Python: local Diffusers
+
+Illustrative pipeline shape only. The shown step/guidance values are not a
+recommended default; verify the installed pipeline and selected model card.
 
 ```python
 import torch
@@ -224,7 +234,7 @@ edited = pipe(
 | Problem | Cause | Fix |
 |---|---|---|
 | Garbled text / glyphs | Text not quoted explicitly | Exact string in quotes; say "no other text" |
-| Blurry / artifacts | Distilled 4-step compromise | Switch to Base (50 steps) for finals |
+| Blurry / artifacts | Selected configuration may be too aggressive for the task | Compare a small, pinned parameter change on the accepted visual criteria; do not assume a universal step count or mode |
 | Style drift in edit | Missing preservation clause | Always add "Сохрани: свет/лицо/композицию" |
 | Multi-reference "soup" | Overloaded prompt + conflicting refs | Simplify text; use "image 1 / image 2" indexing |
 | Wrong resolution | Input not multiple of 16 | Pre-resize input to ×16, ≤4MP |
@@ -234,11 +244,13 @@ edited = pipe(
 ## Iteration workflow
 
 1. Write scene in prose (one paragraph)
-2. Quick preview → Distilled 4 steps
-3. Fix seed, pick 1–2 best directions
-4. Refine prompt: add specifics, quote text, remove filler adjectives
-5. Edit iterations: one change per step, always state what to preserve
-6. Switch to Base (50 steps) once composition is stable
+2. Create a controlled candidate using parameters supported by the selected
+   checkpoint or API, and record them with the output.
+3. Fix seed when the runner supports it; pick 1–2 directions against the task's
+   actual criteria.
+4. Refine prompt: add specifics, quote text, remove filler adjectives.
+5. Edit iterations: one change per step, state what must be preserved, and keep
+   only variants that pass the requested fidelity checks.
 
 ---
 

@@ -57,9 +57,13 @@ outputs = generator("https://...", points_per_batch=64)
 - CLIP backbone + box heads; zero-shot text-conditioned detection
 - Несколько текст-классов одновременно
 
-**YOLO-World** (GPL-3.0, коммерческая лицензия — отдельно)
+**YOLO-World** (GPL-3.0 by default; upstream says commercial usage is supported)
 - Real-time open-vocab OD; RepVL-PAN + region-text contrastive loss
 - 35.4 AP @ 52 FPS на V100 (LVIS); экспорт TFLite/INT8
+
+For a product, apply GPL-v3 terms or obtain separate terms only if the intended
+distribution/policy needs an alternative; involve legal review for that choice.
+Source: https://github.com/AILab-CVC/YOLO-World (Licence section).
 
 ---
 

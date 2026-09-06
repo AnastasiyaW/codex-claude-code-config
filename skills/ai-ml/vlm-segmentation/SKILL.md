@@ -1,19 +1,6 @@
 ---
-name: vlm-segmentation-engineering
-description: >
-  Экспертный скилл по прикладной инженерии VLM, сегментационных моделей и диффузионных архитектур
-  для GPU-деплоя. Используй ВСЕГДА когда речь идёт о: SAM2, SAM3, Florence-2, LLaVA, Grounding DINO,
-  OWLv2, YOLO-World, EdgeTAM — выбор модели, интеграция, pipeline, код; диффузионных моделях —
-  UNet/DiT/Flow/Flux, schedulers, LoRA, AMP, ZeRO/FSDP, text encoders (CLIP/Qwen), VAE, CFG;
-  GPU-деплое — MIG, MPS, torch.compile, TorchAO, Triton, memory optimization, два инстанса на H100;
-  open-vocab сегментации и phrase grounding; part-level labeling и instance masks из текстового промпта;
-  замене/fusion текст-энкодеров; fine-tune/LoRA/DreamBooth диффузионных моделей.
-  Триггеры: SAM, Florence, LLaVA, Grounding DINO, YOLO-World, diffusion, UNet, DiT, Flux, LoRA,
-  scheduler, guidance_scale, VAE, CLIP embeddings, Qwen embedder, MIG, MPS, TorchAO, Triton inference,
-  сегментация по тексту, instance masks, open-vocab detection, text-conditioned segmentation.
-  Do NOT use for pure diffusion-only work without a VLM/segmentation component — general
-  diffusion architecture/inference -> diffusion-engineering, FLUX.2 Klein prompting ->
-  flux2-klein-prompting, FLUX.2 Klein / Qwen-Edit LoRA training -> flux2-lora-training.
+name: vlm-segmentation
+description: Choose and evaluate VLM or segmentation pipelines, including text-conditioned detection, masks, part labels, model-license constraints, and measured GPU deployment choices. Use when a task has a VLM or segmentation component; route pure diffusion prompting, training, or serving to its specialized skill.
 ---
 
 # VLM + Segmentation + Diffusion Engineering
@@ -34,7 +21,7 @@ description: >
 
 ## Быстрые ответы без чтения reference-файлов
 
-### Рекомендованный pipeline "фраза → маски" (дефолт)
+### Candidate pipeline "фраза → маски"
 ```
 1. SAM3 PCS (текстовый концепт) → instance masks + boxes + scores
    ИЛИ
@@ -43,7 +30,7 @@ description: >
 2. Part-labeling: отдельный классификатор по ROI + фиксированный словарь
 ```
 
-### Рекомендованный pipeline "диффузия" (дефолт)
+### Candidate diffusion pipeline
 ```
 1. Backbone: UNet (просто) или DiT/Flow (масштабирование)
 2. Latent diffusion (VAE → латенты → денойзер → VAE decode)
@@ -52,11 +39,11 @@ description: >
 5. Memory: AMP (BF16) → checkpointing → ZeRO/FSDP при масштабе
 ```
 
-### Два инстанса SAM3 на H100 (дефолт)
+### Two SAM3 instances on H100 (only after host inspection)
 ```
-MIG (рекомендовано) → аппаратная изоляция, QoS гарантирована
-sudo nvidia-smi mig -cgi 4g.40gb,3g.40gb -C
-CUDA_VISIBLE_DEVICES=<MIG-UUID> python worker.py
+MIG can provide hardware partitioning where the inspected GPU, driver, current
+MIG layout and workload support it. It changes host GPU configuration: preserve
+the current layout and obtain explicit operational approval before any change.
 
 MPS (fallback) → кооперативный шеринг, без строгой изоляции
 ```
@@ -68,8 +55,8 @@ MPS (fallback) → кооперативный шеринг, без строго�
 | Модель | Параметры | Лицензия | Главная сильная сторона |
 |--------|-----------|----------|------------------------|
 | SAM3 | 848M | SAM License (gated) | Open-vocab сегментация по тексту, все инстансы |
-| SAM2.1-large | 224M | Apache-2.0 | Видео-трекинг, интерактивная сегментация, 39.5 FPS A100 |
-| SAM2.1-tiny | 39M | Apache-2.0 | Быстрый, 91.2 FPS A100 |
+| SAM2.1-large | model-card specific | Apache-2.0 | Видео-трекинг, интерактивная сегментация; reproduce any FPS on the target stack |
+| SAM2.1-tiny | model-card specific | Apache-2.0 | Lightweight variant; reproduce any FPS on the target stack |
 | Florence-2-large | 770M | MIT | Унифицированные задачи через task prompt |
 | EdgeTAM | ~SAM2-tiny | Apache-2.0 | 16 FPS на iPhone 15 Pro Max, CoreML |
 | Grounding DINO | — | Apache-2.0 | Text-conditioned detection, boxes |
@@ -80,7 +67,12 @@ MPS (fallback) → кооперативный шеринг, без строго�
 ## Критические предупреждения
 
 - **SAM3**: gated access на HF, кастомная SAM License — проверь перед продакшном
-- **YOLO-World**: GPL-3.0 в репо — для коммерции нужна отдельная лицензия
+- **YOLO-World**: upstream states GPL-3.0 and supports commercial usage. GPL
+  obligations apply by default; obtain a separate commercial licence only when
+  the intended distribution or policy requires terms outside GPL, with legal
+  review for the specific product.
 - **Замена text encoder**: не plug-and-play, нужен projection + переобучение cross-attention
 - **MIG vs MPS**: только MIG даёт аппаратную изоляцию VRAM/SM; MPS — кооперативный шеринг
-- **Русский язык в промптах**: для Grounding DINO / OWLv2 / YOLO-World надёжнее EN + маппинг на RU
+- For non-English prompts, compare the target model’s supported languages on a
+  representative evaluation set; do not silently translate or claim a universal
+  English advantage.

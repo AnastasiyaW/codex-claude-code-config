@@ -1,21 +1,19 @@
 ---
 name: flux2-lora-training
-description: >
-  Comprehensive reference for training LoRAs on FLUX.2 Klein 9B and Qwen Image Edit 2511 models.
-  Use this skill whenever the user asks about: training LoRAs for flux2/flux 2 klein/qwen-image-edit,
-  before/after edit LoRAs (head swap, face swap, image editing), inpainting LoRAs, training at larger
-  resolutions, latent space expansion, VAE fine-tuning, multi-reference training (2 input images → 1 output),
-  dataset preparation for edit models, zero_cond_t, ai-toolkit/SimpleTuner/DiffSynth configs, BFS head swap
-  LoRA methodology, Qwen Edit architecture, consistency mode, dual encoding, FuseAnyPart, ACE++, maximum
-  training resolution, или любые вопросы об обучении диффузионных моделей. ВСЕГДА используй этот скилл.
-  Do NOT use for writing FLUX.2 Klein generation/edit prompts at inference time (use flux2-klein-prompting),
-  nor for general non-training diffusion architecture/inference/memory work (use diffusion-engineering);
-  this skill is about LoRA/VAE training, not prompting or serving.
-user-invocable: true
-model: sonnet
+description: Plan or review LoRA and edit-training work specifically for FLUX.2 Klein or Qwen-Image-Edit, including paired datasets, trainer-version contracts, and held-out fidelity checks. Do not use for generic Stable Diffusion/DiT training, prompt authoring, or model serving; route those tasks to their specialized skill.
 ---
 
 # FLUX.2 Klein 9B — LoRA Training Reference
+
+## Evidence boundary
+
+This file is a route to evaluate a training plan, not a tested recipe. Model
+cards establish model identity and license; trainer repositories establish only
+the behavior of their pinned version. Numeric settings and BFS notes below are
+historical local experiment candidates unless an exact source is linked. Before
+training, record the model revision, trainer commit, dataset contract, hardware,
+and a small held-out acceptance set. Do not promote a historical score, memory
+estimate, slot order, or private result into a universal default.
 
 ## Архитектура моделей
 
@@ -25,7 +23,7 @@ model: sonnet
 |---------|---------|---------|---------|---------|
 | Blocks | 32 (8+24) | 25 (5+20) | 60 (MM-DiT) | 56 (8+48) |
 | Embedding dim | 12,288 | 7,680 | — | 15,360 |
-| VAE latent channels | **128** | 128 | 16 (стандарт) | **16** |
+| VAE latent channels | **32** (128 packed features) | 32 (128 packed features) | verify the exact revision | **16** |
 | Text encoder | Qwen3 (bundled) | Qwen3 | Qwen2.5-VL (7B) | Mistral-Small-3.1 |
 | Guidance embeddings | **НЕТ** | НЕТ | — | Есть |
 | Total params | 9B | 4B | **20B DiT + 7B VL** | 12B |
@@ -36,7 +34,9 @@ model: sonnet
 
 **Text encoder Klein:** Qwen3 (встроен в 9B), выходы из слоёв 9, 18, 27.
 
-**Guidance embeddings в Klein отсутствуют** — `flux_guidance_mode`/`flux_guidance_value` — no-ops.
+Do not assume a trainer’s `flux_guidance_*` fields are no-ops or active from
+their names. Verify their behavior against the pinned trainer release and the
+selected model before relying on them.
 
 **Для LoRA тренировки: base модель** `FLUX.2-klein-base-9B`, не distilled 4-step.
 
@@ -53,7 +53,9 @@ model: sonnet
                                 ↓ оба пути сходятся в MMDiT
 ```
 
-Это даёт модели одновременно **понимание** содержимого (VL) и **воспроизводимость** деталей (VAE). Поэтому identity drift у Qwen Edit ниже, чем у Klein при тех же rank — модель буквально "видит" что на референсе через VLM.
+This is an architectural interpretation, not a measured cross-model guarantee.
+Assess identity preservation on the task’s held-out images rather than claiming
+that one model drifts less at an equal LoRA rank.
 
 **Consistency Mode** (`qe2511_consis_alpha`) — результат I2I reconstruction training objective: модель дообучена реконструировать входное изображение без изменений. Это выравнивает VL и DiT latent spaces, делая консервативные правки более точными. Триггер `restore image details` активирует этот bias.
 
@@ -86,19 +88,30 @@ dataset/
 
 **Критично:** имена файлов должны совпадать между папками (`0001.png ↔ 0001.png ↔ 0001.txt`).
 
-**Известный баг в ai-toolkit** (issue #536, исправлен в PR #629): `folder_path` и `control_path_1` были перепутаны — модель учила трансформацию в обратную сторону. Обновись до актуальной версии.
+Do not infer `folder_path`/`control_path_1` semantics from issue #536 or PR
+#629. The primary records do not establish a reversed-path bug: #536 was
+closed as not planned, while #629 fixes Flux2 training that ignored a *single*
+control image. Pin the trainer commit and run a small non-production fixture
+that proves which input becomes which control/target before a training job.
+Sources: https://github.com/ostris/ai-toolkit/issues/536 and
+https://github.com/ostris/ai-toolkit/pull/629
 
 **Порядок входных изображений важен.** Для BFS Head Swap:
 - V1–V2: `[face, body]`
 - **V3+: `[body, face]`** — инвертирование порядка дало значительный прирост качества
 
-**Размер датасета:** для узких edit LoRA (head swap, relighting): **100–300 пар, качество > количество.** BFS эволюционировал 628 → 138 → 76 → 300+ высококачественных пар, подобранных по тону кожи.
+**Historical BFS observation:** the recorded dataset counts are not a minimum or
+maximum for another edit. Start from a representative, consented dataset and
+use held-out fidelity/attribute checks to decide whether more diversity or
+cleaner pairs are needed.
 
 ### zero_cond_t — ключевой параметр
 
 `zero_cond_t` трактует control images как чистые референсы при t=0, пока основное изображение следует нормальному diffusion schedule. Предотвращает identity drift.
 
-**Должен быть включён и при тренировке, И при инференсе.** Для Qwen 2511 это особенно критично.
+Use it only when the pinned trainer and inference implementation document the
+field; then keep train/inference conditioning consistent and verify it on a
+held-out edit. It is not a universal Qwen-Image-Edit switch.
 
 ### Trigger word
 
@@ -383,7 +396,7 @@ dataset/
 
 | Проблема | Причина | Решение |
 |---------|---------|---------|
-| Модель учит трансформацию в обратную сторону | Баг в ai-toolkit PR#536 — перепутаны control/target | Обновить ai-toolkit |
+| Модель учит трансформацию в обратную сторону | Семантика control/target не подтверждена для закреплённой версии trainer | Зафиксировать commit и проверить малым control/target fixture до training job |
 | LyCORIS создаёт 0 модулей | Key mismatch с Klein architecture | Использовать стандартный LoRA format |
 | SimpleTuner зависает на RTX 5090 | Issue #2477 | Fallback на H200 |
 | Деградация likeness при >1024px | Прямой jump на высокое разрешение | Curriculum: 256→512→1024→1536 |

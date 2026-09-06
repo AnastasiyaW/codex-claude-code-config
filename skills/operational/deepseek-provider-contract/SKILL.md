@@ -1,6 +1,6 @@
 ---
 name: deepseek-provider-contract
-description: Validate a proposed DeepSeek API integration before any key or project context is sent: check thinking-mode tool-call history, strict-schema assumptions, bounded output, and provider data boundaries. Use when integrating DeepSeek, adding DeepSeek tool calls or streaming, debugging DeepSeek 400 after a tool call, or evaluating a DeepSeek harness/MCP. Do NOT use for a generic model comparison, ordinary local coding, or to send a repository transcript to a provider by default.
+description: "Validate a proposed DeepSeek API integration before any key or project context is sent: check thinking-mode tool-call history, strict-schema assumptions, bounded output, and provider data boundaries. Use when integrating DeepSeek, adding DeepSeek tool calls or streaming, debugging DeepSeek 400 after a tool call, or evaluating a DeepSeek harness/MCP. Do NOT use for a generic model comparison, ordinary local coding, or to send a repository transcript to a provider by default."
 ---
 
 # DeepSeek Provider Contract
@@ -16,7 +16,11 @@ candidate, not a trusted route.
    that provider and scope.
 2. Freeze the provider model, endpoint, request budget, and fallback in the
    integration plan. Do not inherit defaults from a community wrapper.
-3. Save a redacted request-history fixture and run:
+3. Save a redacted request-history fixture that explicitly declares whether the
+   **outbound** request carries tools, then run:
+
+   The fixture shape is `{"outbound_request":{"tools":[...]},"messages":[...]}`;
+   use `"tools": []` only for an outbound tools-free request.
 
    ```text
    python skills/operational/deepseek-provider-contract/scripts/validate_deepseek_history.py fixture.json
@@ -34,8 +38,10 @@ candidate, not a trusted route.
   message, including `reasoning_content` and `tool_calls`. Do not rebuild a
   reduced assistant message from `content` alone.
 - Each tool result has the exact prior `tool_call_id`.
-- If a later user turn follows an assistant tool call, retain that assistant
-  `reasoning_content`; DeepSeek documents this as mandatory.
+- While a request carries `tools`, retain the documented `reasoning_content`
+  from prior assistant turns in its history. Do not reduce this to only the
+  most recent tool-call turn; check the current provider documentation because
+  model and endpoint semantics change.
 - Use strict schema only with the beta endpoint and only after validating the
   supported JSON Schema subset. Never call a schema "strict" merely because it
   looks valid locally.
@@ -55,11 +61,14 @@ Otherwise keep this skill and the fixture only; do not install a global MCP.
 
 ## Gotchas
 
-- `reasoning_content` may be omitted between ordinary user turns without tools,
-  but not after a tool call in thinking mode.
+- For a tools-bearing request, the current DeepSeek documentation requires the
+  prior assistant `reasoning_content`; a tools-free request has different
+  context semantics. Treat the offline validator as a narrow fixture check,
+  not a substitute for the live API contract.
 - A response can say cache-hit while quality or latency still changes; measure
   those separately.
-- A history normalizer that strips `reasoning_content` can make the next tool
+- A history normalizer that strips `reasoning_content` can make the next
+  tools-bearing request
   request fail with HTTP 400 even if the first request succeeded.
 - Model names, limits, pricing, and beta semantics are provider facts: re-check
   the official documentation at the integration date.
