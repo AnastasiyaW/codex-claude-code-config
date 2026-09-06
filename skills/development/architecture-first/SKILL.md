@@ -1,21 +1,15 @@
 ---
 name: architecture-first
 description: >
-  Decide the shape BEFORE the first file, and keep the boundaries honest afterwards:
-  what the modules are, which way dependencies point, where state is owned, and what
-  each module is allowed to know. Merges the layering rules (dependency rule, SOLID,
-  component cohesion, Humble Object, entities vs use cases, frameworks-and-DB-as-details)
-  with domain boundaries (ubiquitous language, bounded contexts, aggregates, domain
-  events, repositories). Use when starting a project, service, site, API or new
-  subsystem; when adding a feature that does not obviously belong to an existing module;
-  when asked "where should this live", "how do we structure this", "what are the
-  modules"; when writing an ARCHITECTURE.md or an ADR; when a dependency points the
-  wrong way or a circular import appears. Do NOT use for a one-file script or a
-  throwaway experiment, for a bug fix inside an existing seam, for word-level naming and
-  function shape (use code-complexity), for splitting a module that is ALREADY too large
-  (use refactoring-safely), or for capacity, storage and scaling decisions (use
-  system-and-data-design). This decides where code LIVES; it is not a licence to add
-  layers the project has not earned.
+  Decide module boundaries before the first file: what modules exist, which way
+  dependencies point, who owns state, and what each module may know. Use when starting
+  a project, service, site, API, or subsystem; adding a feature with no obvious home;
+  resolving a circular import or inverted framework dependency; or writing an
+  ARCHITECTURE.md or ADR. Do not use for a one-file script, throwaway experiment, bug
+  fix inside an established seam, naming/function-shape cleanup (use code-complexity),
+  an existing oversized module (use refactoring-safely), or capacity/data scaling
+  decisions (use system-and-data-design). This defines earned boundaries; it does not
+  license speculative layers.
 ---
 
 # Architecture first — the shape before the first file

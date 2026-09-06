@@ -1,6 +1,6 @@
 ---
 name: workflow-orchestration
-description: "Написание и запуск Claude Code dynamic workflows (JS-оркестратор субагентов). Use when пишешь или запускаешь workflow, видишь keyword workflow в запросе, нужен fan-out на десятки-сотни агентов, codebase-wide аудит/миграция, cross-checked research, competency-review, batch-обработка списка элементов через стадии. Покрывает: примитивы phase/agent/parallel/pipeline/workflow, pipeline vs parallel, schema, budget, resume, quality-паттерны (adversarial verify, judge panel, loop-until-dry), и наши добавки к платформе (accounting, bounded retry, error policy, .runs observability, eval-harness, billing-дисциплина). Триггеры: workflow, воркфлоу, оркестратор, fan-out, ultracode, deep-research, 1000 агентов, детерминированный скрипт агентов. Do NOT use to design the agent/Generator-Evaluator architecture itself (use harness-design) or for a single one-shot subagent/review where no deterministic multi-stage script is needed; this writes the JS orchestrator, it is not for ad-hoc one-off agent calls."
+description: "Написание и запуск Claude Code dynamic workflows (JS-оркестратор субагентов). Use when user просит workflow своими словами или включает ultracode, нужен fan-out на десятки-сотни агентов, codebase-wide аудит/миграция, cross-checked research, competency-review, batch-обработка списка элементов через стадии. Покрывает: примитивы phase/agent/parallel/pipeline/workflow, pipeline vs parallel, schema, budget, resume, quality-паттерны (adversarial verify, judge panel, loop-until-dry), и наши добавки к платформе (accounting, bounded retry, error policy, .runs observability, eval-harness, billing-дисциплина). Триггеры: явная просьба «use/run a workflow» или «запусти воркфлоу», оркестратор, fan-out, ultracode, deep-research, 1000 агентов, скрипт агентов. Do NOT use to design the agent/Generator-Evaluator architecture itself (use harness-design) or for a single one-shot subagent/review where no deterministic multi-stage script is needed; this writes the JS orchestrator, it is not for ad-hoc one-off agent calls."
 metadata:
   version: "1.0.0"
   source: "code.claude.com/docs/en/workflows + Workflow tool spec + deksden lessons (4 оркестратора)"
@@ -12,7 +12,8 @@ metadata:
 Claude Code **dynamic workflows** - JS-скрипт, который оркестрирует
 недетерминированных субагентов. Скрипт = «рельсы» (loop, branching, промежуточные
 результаты в переменных); агенты = «поезда». Надёжность даёт код вокруг агентов, а не
-агенты сами. Сейчас они generally available; нужен Claude Code v2.1.154+.
+агенты сами. Доступность зависит от плана, текущей конфигурации и runtime: на Pro
+включи Dynamic workflows в `/config`; перед запуском проверь доступность в текущей сессии.
 
 Этот skill - наш свод поверх официального API: что платформа уже даёт, и что мы
 добавляем сами для задач, где нужна доказуемая полнота batch-результата.
@@ -45,9 +46,11 @@ Claude Code **dynamic workflows** - JS-скрипт, который оркест
 следование инструкции (skill); нужен интерактивный sign-off в середине (кроме permission
 prompts, run не принимает mid-run input; каждый этап с sign-off = свой workflow).
 
-**Opt-in обязателен.** Workflow tool вызывается только когда user явно дал согласие
-(keyword `workflow`/`workflows` в запросе, ultracode on, или прямая просьба). Иначе -
-обычные субагенты. Это и наше правило, и поведение платформы.
+**Opt-in обязателен.** Workflow tool вызывается, когда user прямо просит workflow
+своими словами, использует keyword `ultracode`, или в сессии включён Ultracode. После
+v2.1.160 literal `workflow` больше не является trigger keyword (до этой версии он был
+им); обычная явная просьба работает в обеих версиях. Иначе — обычные субагенты. Это и
+наше правило, и поведение платформы.
 
 ## Анатомия (точный API)
 
@@ -109,7 +112,8 @@ log('сообщение пользователю')
 ## Подтверждённые текущие limits
 
 До 16 concurrent agents (меньше на CPU-limited host) · до 4,096 items в одном `parallel()`
-или `pipeline()` · 1,000 agents total на run. Dynamic workflows требуют Claude Code v2.1.154+;
+или `pipeline()` · 1,000 agents total на run. Не используй фиксированный minimum version
+как замену current availability: проверь план, `/config`, runtime и актуальную документацию.
 bundled `/workflow-authoring` для редактирования saved script требует v2.1.248+. Остальные
 числа из старого community research не используй как current contract: см.
 `references/research-findings-2026-05-30.md` только как исторические заметки.
@@ -180,7 +184,9 @@ Workflow спавнит до 1000 агентов; расход кратный. �
 - `budget`-guard в loop-флоу: `while (budget.total && budget.remaining() > 50_000)`. Без
   `budget.total`-гарда `remaining()` = Infinity → цикл до 1000-агентного потолка.
 - На Pro workflows off по дефолту (жжёт быстро) - включается в `/config`.
-- НЕ запускать большой workflow без явного OK user на расход.
+- Перед запуском оцени масштаб и расход; соблюдай текущий permission/plan-approval
+  mode и явные user-ограничения бюджета, если они заданы. Размер сам по себе не
+  создаёт новый consent gate.
 
 ## Наши workflow-команды (`~/.claude/workflows/`)
 
@@ -195,10 +201,12 @@ Workflow спавнит до 1000 агентов; расход кратный. �
 
 ## Чеклист перед запуском workflow
 
-1. Opt-in от user есть? (keyword / ultracode / прямая просьба)
+1. Opt-in от user есть? (явная просьба своими словами / `ultracode` / режим Ultracode;
+   не требуй literal `workflow`)
 2. Нужные агентам команды (ssh/rclone/git) - в tool allowlist? (иначе промпт в середине)
 3. `node --check` скрипта прошёл (L1)? meta - pure literal?
-4. Размер оценён, billing обсуждён если расход существенный?
+4. Размер и расход оценены; текущий permission/plan-approval mode и явные
+   user-ограничения бюджета соблюдены?
 5. Явный batch имеет ledger pending/completed и `COMPLETE` возможен только после card-audit?
 6. Долгий прогон → промежуточное пишется в `.runs/` (resume только в той же сессии)?
 
