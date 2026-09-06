@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-06T16:20:51+00:00",
+  "generated_at": "2026-09-06T17:09:08+00:00",
   "skill_count": 57,
-  "aggregate_hash": "sha256:38710dc391b4f3baf155642efff758f0c92734afe5a812fcda046a9c4fe76b7d",
+  "aggregate_hash": "sha256:7a05b59934f955be289cdca82c3f4f44452e5214201c1e9894263e30638bacfd",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -575,8 +575,8 @@
       ]
     },
     "operational/gemini-delegate": {
-      "content_hash": "sha256:1521879d4ea159733a697eb6ec7c49a3499485c6eec123e8aa46c212b3b06f25",
-      "size_bytes": 9511,
+      "content_hash": "sha256:a98b77e862e96652000cd540f30ac02b88380c63ef5a63ec949f9b33a99c9fc0",
+      "size_bytes": 12505,
       "file_count": 1,
       "files": [
         "SKILL.md"
