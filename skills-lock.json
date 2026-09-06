@@ -1,12 +1,12 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-04T01:36:27+00:00",
+  "generated_at": "2026-09-06T13:11:32+00:00",
   "skill_count": 57,
-  "aggregate_hash": "sha256:d83969a613d7eb32b44e8b4672e611b21892cc6e7af840106bd05a28fdd140fa",
+  "aggregate_hash": "sha256:9339398f80db6ab05b207ca3995d5b24c373a7fd877ff14b5494367ecdb8c5ca",
   "skills": {
     "agent-harness-design": {
-      "content_hash": "sha256:698f850dd8e71ec4dcde9bdaa670c067852e47a67f97dcdcbe72db385e29621a",
-      "size_bytes": 96468,
+      "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
+      "size_bytes": 102569,
       "file_count": 12,
       "files": [
         "SKILL.md",
@@ -54,8 +54,8 @@
       ]
     },
     "ai-ml/diffusion-engineering": {
-      "content_hash": "sha256:04eeac8360a9855d3ebdf690db24f1de6bcf00a2d1f00e111f99387e30f9a369",
-      "size_bytes": 62897,
+      "content_hash": "sha256:2bf6303a4de81397a88b4d1bd2c809d982cb4f231936e812ab277460e7ebc3dc",
+      "size_bytes": 66599,
       "file_count": 7,
       "files": [
         "SKILL.md",
@@ -100,8 +100,8 @@
       ]
     },
     "ai-ml/notebooklm-grounded-research": {
-      "content_hash": "sha256:50d173da9da3b97652c16f27c8b1696d3a395c72a4a97d400afcf915a2db4aa5",
-      "size_bytes": 14948,
+      "content_hash": "sha256:622106528c41c420f0b117c4b9c36c3237fb70e798b5d38f5d7e21829da249d2",
+      "size_bytes": 16483,
       "file_count": 3,
       "files": [
         "SKILL.md",
@@ -129,8 +129,8 @@
       ]
     },
     "architecture/harness-design": {
-      "content_hash": "sha256:f6b193365f611404faa13b989d1319f95566f34e137000781ceaa6fc1442c451",
-      "size_bytes": 11945,
+      "content_hash": "sha256:caa2a24df06bf7a5d039e82585148ecd040074c8adeed0520b3bf88fbd4ad201",
+      "size_bytes": 14347,
       "file_count": 1,
       "files": [
         "SKILL.md"
@@ -313,8 +313,8 @@
       ]
     },
     "development/deep-review": {
-      "content_hash": "sha256:0169daefddd7b5d97139464568fd5dd594830ba53c02caac4e803e6ca78fdc1e",
-      "size_bytes": 16345,
+      "content_hash": "sha256:9860ad9882487425d1e921fb4b7574ff7023b29ca8439da6299b5e8aa88e225a",
+      "size_bytes": 17854,
       "file_count": 1,
       "files": [
         "SKILL.md"
@@ -346,8 +346,8 @@
       ]
     },
     "development/proof-verify": {
-      "content_hash": "sha256:9b0c2fa8cbf354490d515b9d06128256120c67372c84ee289a67e575f06fad3f",
-      "size_bytes": 24825,
+      "content_hash": "sha256:3cf9a8e5aebfb4275952933cb975732fbeeacecf813449fbd40e8b9399edac8b",
+      "size_bytes": 25728,
       "file_count": 4,
       "files": [
         "SKILL.md",
@@ -581,8 +581,8 @@
       ]
     },
     "operational/harness-audit": {
-      "content_hash": "sha256:3435c306f563ca6c035616f572f9fb2fb7f96e633424ade83475f45edae84ed8",
-      "size_bytes": 23048,
+      "content_hash": "sha256:c07cf354fa80db981225d6dd2c6aba6e0a3c287bdf73d37e736727e6aa21b8aa",
+      "size_bytes": 24376,
       "file_count": 3,
       "files": [
         "SKILL.md",

@@ -10,6 +10,7 @@ description: |
   may be too shallow. Complements /review (pre-landing) — this is for deep dives. Do NOT use just to
   orient in an unfamiliar codebase or get a structural symbol overview; use repo-map
   for that (this audits a concrete diff for defects, it is not a navigation map).
+  Review is read-only unless the user explicitly asks to review and fix.
 allowed-tools:
   - Bash
   - Read
@@ -33,16 +34,26 @@ Philosophy: one focused expert per domain > one generalist checking everything.
 ```bash
 BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@refs/remotes/origin/@@' || echo "main")
 echo "BASE: $BASE"
-git fetch origin "$BASE" --quiet 2>/dev/null || true
+BASE_REF=$(git rev-parse --verify --quiet "refs/remotes/origin/$BASE" 2>/dev/null || git rev-parse --verify --quiet "$BASE" 2>/dev/null || true)
+if [ -z "$BASE_REF" ]; then
+  echo "No locally available base ref for $BASE; cannot perform a read-only diff." >&2
+  exit 2
+fi
+echo "BASE_REF: $BASE_REF"
 echo "=== DIFF STATS ==="
-git diff "origin/$BASE" --stat
+git diff "$BASE_REF" --stat
 echo "=== CHANGED FILES ==="
-git diff "origin/$BASE" --name-only
+git diff "$BASE_REF" --name-only
 echo "=== DIFF SIZE ==="
-git diff "origin/$BASE" --shortstat
+git diff "$BASE_REF" --shortstat
 ```
 
-Store the BASE branch name and list of changed files. You'll need them in every subsequent step.
+Store the BASE branch name, resolved local base ref, and list of changed files.
+Report-only review does not run `git fetch`, `pull`, or another command that
+updates Git state. If the accepted task explicitly requires a fresh remote base
+and permits that preparation mutation, run `git fetch origin "$BASE" --quiet`
+without suppressing failure before resolving `BASE_REF`; otherwise state that
+the review used the locally available ref.
 
 If there is no diff, stop: "Nothing to review — no changes against $BASE."
 
@@ -51,6 +62,11 @@ If there is no diff, stop: "Nothing to review — no changes against $BASE."
 ## Step 1: Scoping — select relevant competencies
 
 Based on the changed files, select ONLY the competencies that are relevant. Do NOT run all 8 for a 3-file CSS change.
+
+Default to a review-only task. Enter review-and-fix only when the user clearly
+authorizes both review and implementation (for example, "review and fix"). In
+either mode, the review phase remains read-only; review-and-fix continues with
+the approved remediation in this same task after findings are triaged.
 
 ### Competency selection rules
 
@@ -65,8 +81,9 @@ Based on the changed files, select ONLY the competencies that are relevant. Do N
 | **frontend** | Vue/React components, CSS/Tailwind, composables/hooks, stores, routing, i18n |
 | **testing** | test files changed OR >100 lines of logic changed without test changes |
 
-**Minimum**: always select at least 2 competencies.
-**Maximum**: cap at 5 for diffs under 200 lines. All 8 allowed for 200+ lines.
+Select every materially relevant competency and no others. Diff size is a
+signal to inspect scope, not a reason to add unrelated reviewers. A single
+competency is valid when the changed risk has one material dimension.
 
 Output the selected competencies with a one-line justification each:
 ```
@@ -86,7 +103,7 @@ Selected competencies (4 of 8):
 ## Step 2: Get the diff content
 
 ```bash
-git diff "origin/$BASE"
+git diff "$BASE_REF"
 ```
 
 Read the full diff. You need it to construct focused prompts for each competency agent.
@@ -283,7 +300,7 @@ For each unique finding, assign a triage:
 
 | Triage | Criteria |
 |---|---|
-| **FIX** | CRITICAL or HIGH severity, HIGH confidence, clear fix available. Must fix before merge. |
+| **FIX** | CRITICAL or HIGH severity, HIGH confidence, clear fix available. Must be resolved before merge; review-and-fix may implement it in this task. |
 | **DEFER** | MEDIUM/LOW severity or LOW confidence. Real issue but can be addressed later. Create backlog item. |
 | **ACCEPT** | Intentional trade-off, or finding is incorrect after cross-checking context. Document why it's acceptable. |
 
@@ -324,11 +341,19 @@ DIFF SIZE: {N insertions, M deletions, K files}
 
 ---
 
-## Step 5: Act on FIX findings
+## Step 5: Continue only for explicit review-and-fix
+
+For review-only requests, stop after the synthesis report. Do not edit source,
+format files, alter Git state, install dependencies, or create a patch; report
+which FIX findings must be resolved before merge.
+
+For an explicit review-and-fix request, continue in this same task after the
+read-only synthesis. Preserve the selected scope and verify each remediation
+with the smallest causal check:
 
 For each FIX finding:
 
-1. If the fix is mechanical (add missing `await`, add index, add LIMIT, fix typo) — apply it directly. Output: `[AUTO-FIXED] file:line — {what}`
+1. If the fix is mechanical (add missing `await`, add index, add LIMIT, fix typo) — apply it directly. Output: `[FIXED] file:line — {what}`
 2. If the fix requires judgment — present via AskUserQuestion with options:
    - A) Apply recommended fix
    - B) Fix differently (describe)

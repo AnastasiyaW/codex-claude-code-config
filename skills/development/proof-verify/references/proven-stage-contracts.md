@@ -77,8 +77,11 @@ cryptographic digests and Git object IDs.
 
 Validate structure and downstream consumption with:
 
+Resolve `<proof-verify-skill-dir>` to the directory containing the loaded
+skill rather than assuming a project-relative source checkout:
+
 ```text
-python skills/development/proof-verify/scripts/validate_stage_ledger.py \
+python <proof-verify-skill-dir>/scripts/validate_stage_ledger.py \
   .proof/stage-ledger.json
 ```
 

@@ -19,7 +19,7 @@
 | **LPIPS** | Перцептивное сходство патчей (коррелирует с human preference) | Нужен reference; не подходит для T2I без парных данных |
 | **Human rating** | Прямая оценка людьми | Дорого, медленно, нужна стандартизация |
 
-**Практика:** FID/IS — реализм на датасете; CLIPScore — alignment с промптом; LPIPS — сходство при i2i/editing; human eval — итоговое качество.
+**Выбор по задаче:** FID сравнивает распределения, CLIPScore — соответствие текста и изображения, LPIPS — перцептивную разницу с reference. Ни одна из них сама по себе не доказывает качество ретуши, сохранность личности или отсутствие швов. Зафиксировать набор данных, preprocessing, версии метрик и принятую границу качества до сравнения кандидатов. Размер выборки обосновывать стабильностью оценки и риском решения, не универсальным порогом.
 
 ### Быстрая оценка через torchmetrics
 
@@ -30,7 +30,8 @@ from torchmetrics.multimodal import CLIPScore
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# FID (нужно >=2000 изображений для надёжности)
+# API illustration only: random tensors below are not a quality evaluation.
+# A real FID comparison needs a justified sample size and matched preprocessing.
 fid = FrechetInceptionDistance(feature=2048, normalize=True).to(device)
 
 # Добавляем реальные и сгенерированные изображения
@@ -193,7 +194,7 @@ bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.
 | OOM при обучении | Нет AMP / batch слишком большой | BF16 + grad_accum + checkpointing |
 | OOM при инференсе | Нет оптимизации памяти | attention_slicing + CPU offload |
 | Overfitting при FT | Слишком много шагов / высокий LR | LoRA с меньшим rank; prior preservation loss |
-| Slow dataloader | Мало workers / нет prefetch | num_workers=4; prefetch_factor=2; persistent_workers=True |
+| Slow dataloader | Замер I/O, decode, RAM и GPU idle; baseline `num_workers=0` | A/B числа workers/prefetch на данном runtime; persistence только при workers > 0, проверить отсутствие дублей iterable dataset |
 
 ---
 
@@ -228,10 +229,10 @@ print(info.card_data.license)  # creativeml-openrail-m
 ## 5. Production чеклист
 
 ### Качество
-- [ ] FID измерен на ≥2000 семплов из target distribution
-- [ ] CLIPScore проверен на тестовом наборе промптов
-- [ ] Human rating проведён (≥100 пар, A/B)
-- [ ] «Дневник промптов» (фиксированные промпты + seed) для мониторинга overfitting
+- [ ] Каждая проверка связана с принятым требованием: distribution, prompt alignment, paired fidelity или конкретный дефект; нерелевантные метрики не обязательны
+- [ ] Для edit/ретуши: фиксированные пары и проверки нужных деталей, границ, личности/геометрии/цвета, где это требуется задачей
+- [ ] Объём и протокол A/B/визуальной приёмки обоснованы риском; нет универсального минимума пар или семплов
+- [ ] Фиксированные данные/промпты + seed позволяют сравнение; held-out набор не используется для подбора кандидата
 
 ### Стабильность обучения
 - [ ] AMP (BF16 предпочтительно) включён
@@ -242,7 +243,7 @@ print(info.card_data.license)  # creativeml-openrail-m
 
 ### Данные
 - [ ] Стриминг/шардинг для больших корпусов
-- [ ] DataLoader: `num_workers≥4`, `pin_memory=True`, `persistent_workers=True`
+- [ ] DataLoader измерен на целевой ОС/данных: выбрать workers и pinning по throughput/RAM; `num_workers=0` допустим. При multiprocessing проверить Windows spawn и шардирование iterable dataset; persistence/prefetch требуют подходящего режима
 - [ ] Text embeddings кэшированы (если frozen encoder)
 - [ ] Validation split отделён до начала обучения
 
@@ -266,5 +267,6 @@ print(info.card_data.license)  # creativeml-openrail-m
 - LPIPS: https://arxiv.org/abs/1801.03924
 - torchmetrics FID: https://torchmetrics.readthedocs.io/en/stable/image/frechet_inception_distance.html
 - Diffusers memory optimization: https://huggingface.co/docs/diffusers/en/optimization/memory
+- PyTorch DataLoader (profile, multiprocessing, Windows): https://docs.pytorch.org/docs/2.14/data.html (checked 2026-09-06; use the installed version's docs when implementing)
 - SD v1.5 license: https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5
 - SDXL license: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0

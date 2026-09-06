@@ -1,6 +1,6 @@
 # Per-Subsystem Checklist
 
-Concrete binary checks for each of the five subsystems. Use these to produce a defensible score, not a guess.
+Concrete checks for each of the five subsystems. Record each as `documented`, `demonstrated`, or `unknown`; a file, setting, or field is not proof that its behavior ran.
 
 ---
 
@@ -46,8 +46,8 @@ Concrete binary checks for each of the five subsystems. Use these to produce a d
 ### Soft checks
 
 - [ ] `.claude/chronicles/{slug}.md` exists for the project (only required for `[LONG-RUN]` projects, otherwise skip)
-- [ ] `feature_list.json` has at most **one** feature with `status: "in-progress"` (WIP=1 check)
-- [ ] Features marked `done` have non-empty `evidence` field
+- [ ] If the project deliberately serializes a shared mutable lane, its configured WIP limit is respected; independent or read-only lanes are not penalized for concurrent work
+- [ ] Features marked `done` link to a receipt that is sufficient for their declared acceptance, not merely a non-empty `evidence` field
 - [ ] PROBLEMS.md entries have Status field (OPEN / RESOLVED / WORKAROUND / BLOCKED-ON-X)
 - [ ] Handoffs follow naming convention `YYYY-MM-DD_HH-MM_<sessid>.md`
 
@@ -65,27 +65,26 @@ Concrete binary checks for each of the five subsystems. Use these to produce a d
 
 ### Hard checks
 
-- [ ] `init.sh` exists in project root and is executable
-- [ ] `init.sh` runs **dependency install + L1 (lint/types) + L2 (tests)** at minimum (read the file)
+- [ ] A documented, target-appropriate bootstrap/verification command exists; `init.sh` is one possible convention, not a universal requirement
+- [ ] The documented command covers the checks required by this project; reading the command establishes documentation, not execution
 - [ ] Test runner is configured (`pytest.ini`, `vitest.config`, `Cargo.toml [dev-dependencies]`, etc.)
 - [ ] At least one test exists and is not skipped/disabled
 - [ ] CLAUDE.md mentions the 3-Layer Validation Gate (L1/L2/L3) OR references principle 02 (Proof Loop) OR similar staged verification
 
 ### Soft checks
 
-- [ ] `init.sh` completes in under 3 minutes on fresh clone (target metric)
-- [ ] Tests pass currently (run them — if `init.sh` is documented, sample run it; else: ask user)
-- [ ] CI configuration mirrors `init.sh` (so PRs are gated by the same checks)
-- [ ] Evidence field in feature_list.json references L1/L2/L3 artifacts when `done`
-- [ ] `.proof/` or `.agent/tasks/` directory exists with at least one verified task (Proof Loop adoption)
+- [ ] A current receipt demonstrates that the target-appropriate verification command passed, or the audit labels it `unknown`
+- [ ] CI or equivalent automation runs the same required checks when the project uses CI
+- [ ] Completion records link to acceptance evidence that can be inspected
+- [ ] A durable task/evidence location exists when the project needs cross-session proof
 
 ### Scoring
 
-- **5**: All hard + 4-5 soft. init.sh is fast and complete, tests pass, evidence is concrete.
-- **4**: All hard + 2-3 soft.
-- **3**: Tests exist but no init.sh, or init.sh exists but doesn't cover L1+L2.
-- **2**: Tests are configured but rarely run / mostly skipped. No init.sh.
-- **1**: No tests, no init.sh, "works on my machine" is the verification model.
+- **5**: Required verification is documented and supported by current inspectable receipts, including runtime proof where the acceptance requires it.
+- **4**: Strong receipts cover the primary target; bounded evidence gaps remain.
+- **3**: A verification path is documented but its current outcome or a necessary boundary is unknown.
+- **2**: Configuration exists but no credible current receipt demonstrates it.
+- **1**: No usable verification path, or evidence is actively misleading.
 
 ---
 
@@ -95,7 +94,7 @@ Concrete binary checks for each of the five subsystems. Use these to produce a d
 
 - [ ] CLAUDE.md or rules contain a "no-pre-existing evasion" / "fix in scope" principle (search for: "pre-existing", "in scope", "WIP", "one feature at a time")
 - [ ] Definition of Done is **explicit** in CLAUDE.md or a rule (not just implied)
-- [ ] If feature_list.json exists: at most one feature `in-progress` (WIP=1)
+- [ ] A documented concurrency policy protects shared mutable resources; WIP=1 is evaluated only when that is the project's chosen serialized lane
 - [ ] Task-deferral has named valid reasons (not freeform "I'll do it later")
 
 ### Soft checks
@@ -120,9 +119,9 @@ Concrete binary checks for each of the five subsystems. Use these to produce a d
 ### Hard checks
 
 - [ ] `.claude/settings.json` or `.claude/settings.local.json` exists
-- [ ] At least one SessionStart hook is registered (to inject context / validate environment)
-- [ ] At least one Stop hook is registered (to enforce cleanup / handoff / tests)
-- [ ] `init.sh` is documented as the canonical entry point (mentioned in CLAUDE.md Startup Workflow)
+- [ ] SessionStart behavior required by this project is configured and has an execution trace or current evidence
+- [ ] Stop behavior required by this project is configured and has an execution trace or current evidence
+- [ ] The project's canonical entry/verification command is documented in its startup workflow
 - [ ] Cleanup convention is named (e.g., "don't commit if `./init.sh` is red")
 
 ### Soft checks

@@ -1,9 +1,10 @@
 ---
 name: harness-design
 description: >
-  Design and build multi-agent harness architectures for long-running AI application
-  development. GAN-inspired Generator-Evaluator pattern, Sprint Contract negotiation,
-  context management, quality criteria calibration. Based on Anthropic Engineering patterns.
+  Design a scoped multi-agent harness for a requested long-running AI workflow. Preserve
+  the user-approved product boundary while using Generator-Evaluator separation, testable
+  sprint contracts, context management, and task-appropriate validation. Based on Anthropic
+  Engineering patterns.
   Use when: "build a harness", "multi-agent architecture", "agent orchestration",
   "generator-evaluator", "long-running app", "harness design", "agent pipeline",
   "quality evaluation loop", "sprint contract", "build app with agents",
@@ -30,10 +31,10 @@ model: opus
 | Сигнал | Solo agent | Harness |
 |--------|-----------|---------|
 | Scope | Одна фича, bug fix, refactor | Full-stack app, multi-feature product |
-| Длительность | < 30 мин | 1-6+ часов |
+| Длительность | Bounded work with direct evidence | Work that needs durable state, resumes, or independent evaluation |
 | Качество | Baseline достаточно | Нужен polish, originality, craft |
-| Стоимость | ~$5-15 | ~$100-200+ |
-| Проверка | Manual review | Automated evaluation + Playwright |
+| Стоимость | В рамках явного бюджета задачи | Бюджет и stop condition фиксируются для этой задачи |
+| Проверка | Прямой task-appropriate proof | Независимая проверка и runtime proof, если требуются контрактом |
 
 **Правило:** Evaluator оправдан когда задача **за пределами reliable solo performance**. Не фиксированное yes/no — зависит от complexity tier.
 
@@ -42,10 +43,11 @@ model: opus
 ## Архитектура: Three-Agent System
 
 ### 1. Planner (Планировщик)
-- Расширяет 1-4 предложения пользователя в **детальную спецификацию**
-- Амбициозный scope — находит возможности для AI-фич
+- Превращает запрос пользователя в **детальную, проверяемую спецификацию**
+- Сохраняет утверждённый scope, явные non-goals и существующие границы продукта
+- Не добавляет AI-фичи, миграции стека или новые deliverables без запроса пользователя либо подтверждённой причинной необходимости
 - **НЕ** over-specify реализацию — только what, не how
-- Вписывает AI features в продукт органично
+- Если AI-фичи уже входят в утверждённый scope, вписывает их в продукт органично
 
 ### 2. Generator (Генератор)
 - Реализует фичи итеративно
@@ -54,7 +56,7 @@ model: opus
 
 ### 3. Evaluator (Оценщик)
 - **Независимый** от генератора — отдельный контекст, отдельный промпт
-- Валидирует через Playwright MCP — скриншоты, навигация, тесты
+- Выбирает проверку по acceptance contract: unit/integration/runtime probe для сервисов, browser/UI проверку только для затронутого пользовательского пути
 - Откалиброван через few-shot примеры
 - Ловит то, что self-evaluation пропускает
 
@@ -72,10 +74,12 @@ model: opus
    - Что НЕ входит в scope
 3. Generator реализует
 4. Evaluator валидирует по контракту
-5. Если не пройдено → конкретный feedback → повтор с п.3
+5. Если конкретный критерий не пройден → конкретный feedback → повтор с п.3 только для этого критерия
 ```
 
 **Контракт = мост** между user stories и implementation. Без него evaluator судит по своим критериям, generator не знает что проверять.
+
+Останавливай цикл, когда все утверждённые criteria имеют требуемое доказательство. Не назначай число раундов заранее; продолжай только при наблюдаемом незакрытом критерии или новом опровергающем evidence.
 
 ---
 
@@ -87,7 +91,7 @@ model: opus
 ### Решение: Independent evaluator
 - Другой system prompt с calibrated skepticism
 - Few-shot примеры с **детальными score breakdowns**
-- Тестирует через browser, не через чтение кода
+- Проверяет исполнимую поверхность acceptance contract: browser только для затронутого UI journey; native/API/worker задачи — их unit, integration, CLI или runtime probe, а не browser по умолчанию
 - Конкретные failure criteria, а не общие "looks good"
 
 ### Калибровка оценщика (QA Tuning Loop)
@@ -151,9 +155,8 @@ model: opus
 - Handoff artifact = документ с state, decisions, progress
 
 ### Context Anxiety
-Модели (особенно Sonnet) начинают **сворачивать работу раньше времени** — думают что контекст кончается.
-- Решение: clean context resets
-- Opus 4.6: проблема значительно уменьшена
+Модели могут **сворачивать работу раньше времени** из-за роста контекста.
+- Решение: clean context resets, когда они уменьшают риск потери важных ограничений
 
 ### Structured Handoff
 При context reset передавать:
@@ -172,9 +175,8 @@ model: opus
 > "Every component in a harness encodes an assumption about what the model can't do on its own"
 
 ### Принцип: предположения устаревают
-- Модели улучшаются → scaffolding requirements снижаются
-- Sprint decomposition нужно было для Sonnet → Opus 4.6 может без него
-- **Стратегия**: убирать компоненты по одному, измерять влияние
+- Возможности моделей меняются, поэтому необходимость каждого harness-компонента должна подтверждаться наблюдаемым риском
+- **Стратегия**: при наличии безопасного измеримого эксперимента убирать компоненты по одному, измерять влияние и откатывать ухудшение
 
 ### Simplification Loop
 ```
@@ -208,26 +210,22 @@ model: opus
 - Manages context growth across long sessions
 - Рекомендуемый стек для production harnesses
 
-### Playwright MCP
-- Evaluator навигирует запущенное приложение
-- Скриншоты перед grading
-- Тестирует UI features, API endpoints, database states
+### Проверочные инструменты
+- Для UI: browser automation и screenshots проверяют реальный затронутый user journey
+- Для API, очередей и данных: contract/integration tests, health/runtime probes и проверка нужных persistent states
+- Используй инструменты, уже поддержанные проектом; не меняй стек ради соответствия этой skill
 
-### Рекомендуемый стек
-- Frontend: React + Vite / Nuxt + Vue
-- Backend: FastAPI / Fastify
-- Database: SQLite (dev) → PostgreSQL (prod)
-- Version Control: Git integration
-- Testing: Playwright MCP для automated evaluation
+### Иллюстративные технологии
+React/Vite, Nuxt/Vue, FastAPI/Fastify, SQLite/PostgreSQL и Playwright — примеры веб-проектов на момент написания, а не default, требование или инструкция к миграции. Выбирай технологии по существующей архитектуре, пользовательскому запросу и текущей документации.
 
 ---
 
 ## Gotchas
 
 - **Language shapes output**: формулировки в criteria сдвигают генератор ДО обратной связи от оценщика. "Museum quality" → convergence, "experimental" → divergence
-- **Creative leaps happen late**: в итерации 9 — стандартный dark theme, в итерации 10 — CSS 3D perspective room. Не останавливай цикл слишком рано
-- **Cost scales with iteration**: каждый round ≈ $20-40. 5 rounds = $100-200. Budget accordingly
-- **Evaluator needs tuning**: первая версия QA промпта почти всегда слишком мягкая. Планируй 3-5 итераций калибровки
+- **Не обосновывай продолжение цикла номером итерации**: новая итерация нужна только при незакрытом criterion или новом evidence
+- **Cost/time figures are dated examples, not gates**: если бюджет нужен, согласуй task-specific limit и не понижай acceptance ради формального PASS
+- **Evaluator may need tuning**: меняй QA prompt только в ответ на конкретный false positive/negative и повторно проверяй затронутый criterion
 - **Self-evaluation is seductive**: генератор БУДЕТ говорить "всё отлично" — не верь, проверяй через independent evaluator
 
 ## Troubleshooting
@@ -236,7 +234,7 @@ model: opus
 |---------|---------|---------|
 | Evaluator всё одобряет | Промпт слишком мягкий | Добавь few-shot с detailed score breakdowns, конкретные failure criteria |
 | Generator не улучшается | Feedback слишком абстрактный | Evaluator должен давать конкретные файлы/строки/проблемы |
-| Бесконечные итерации | Criteria невыполнимы | Пересмотри контракт, снизь планку или split задачу |
+| Бесконечные итерации | Criteria невыполнимы или feedback не связан с ними | Пересмотри контракт; сохраняй требуемую safety/runtime планку, а несовместимый scope split только с явным решением пользователя |
 | Context degradation | Длинная сессия без reset | Structured handoff + clean context reset |
 | Все итерации выглядят одинаково | Criteria слишком узкие | Расширь пространство, убери "museum quality" формулировки |
 | Evaluator ловит мелочи, пропускает крупное | Wrong priority в промпте | Restructure: critical → high → medium → cosmetic |

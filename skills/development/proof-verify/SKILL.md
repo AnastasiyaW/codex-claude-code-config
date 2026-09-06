@@ -59,8 +59,12 @@ summary that the previous stage once looked good.
 
 Validate the ledger deterministically:
 
+Resolve `<proof-verify-skill-dir>` to the directory containing the loaded
+`proof-verify` `SKILL.md`; do not assume that a project checkout has a
+`skills/development/` copy:
+
 ```text
-python skills/development/proof-verify/scripts/validate_stage_ledger.py \
+python <proof-verify-skill-dir>/scripts/validate_stage_ledger.py \
   .proof/stage-ledger.json
 ```
 
@@ -106,7 +110,9 @@ Rules for good ACs:
 - **Testable** - there is a command or check that produces PASS/FAIL
 - **Specific** - "function returns correct value" not "code works"
 - **Independent** - each AC can be verified without the others
-- **3-8 ACs** - fewer than 3 = loopholes, more than 8 = checklist gaming
+- **Sufficient** - use one criterion when one observable contract is all that
+  changed; split criteria only when their behavior, owner, or verification
+  command is meaningfully independent
 - **Frozen** - once written, do not modify during build
 
 ## Phase 2: Build
@@ -232,7 +238,9 @@ If VERDICT.md shows any FAIL:
 4. Verifier runs again (Phase 3)
 5. Loop until all PASS
 
-Typical: 1-2 fix rounds. If 3+ rounds on same AC → the AC itself might be wrong. Revisit PLAN.md.
+If repeated failures stop distinguishing causal hypotheses, re-triage the
+affected owner and evidence. Do not weaken or rewrite an acceptance criterion
+merely to turn the current implementation green.
 
 ## File Structure
 
@@ -255,7 +263,10 @@ Typical: 1-2 fix rounds. If 3+ rounds on same AC → the AC itself might be wron
   blocks its own stage. It does not turn a sealed source or artifact into a failed one.
 - **Do not reuse stale proof.** A changed contract, source tree, or recorded input
   requires a successor stage and a fresh verdict.
-- **Time limit.** If verification takes >30 min, the ACs are too vague. Rewrite them.
+- **Duration is not a verdict.** Give a long-running check a bounded timeout
+  appropriate to its environment. Prefer a smaller check only when it proves
+  the same contract; do not discard a valid runtime boundary merely because it
+  takes longer than a fixed threshold.
 - **Don't verify style.** ACs should be functional ("function returns X"), not stylistic ("code is clean"). Style is for code review, not proof loop.
 
 ## Troubleshooting
@@ -263,7 +274,7 @@ Typical: 1-2 fix rounds. If 3+ rounds on same AC → the AC itself might be wron
 | Symptom | Cause | Fix |
 |---|---|---|
 | Verifier passes everything | ACs too vague | Rewrite with specific commands |
-| 3+ fix rounds on same AC | AC is wrong or untestable | Revisit PLAN.md |
+| Repeated failures no longer distinguish causal hypotheses | Current owner, evidence, or remedy is no longer discriminating | Re-triage the affected owner and evidence; preserve the frozen acceptance contract unless an explicitly authorized successor contract is required |
 | Verifier disagrees with builder's evidence | Different env or stale state | Both run from clean state |
 | Builder keeps editing PLAN.md | Not frozen | Hash check catches this |
 | A new audit says an old stage is "missing" | It mixed an unavailable next prerequisite with already-proven scope | Check `.proof/stage-ledger.json`; record the external `BLOCKED` stage separately |

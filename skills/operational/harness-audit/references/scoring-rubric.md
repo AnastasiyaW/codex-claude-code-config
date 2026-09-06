@@ -10,9 +10,9 @@ The five-subsystem audit produces a score from 1 to 5 in each dimension. The num
 
 - All hard checks pass
 - Most soft checks pass
-- Convention is **documented** (it exists in writing, not just in someone's head)
-- Convention is **consistently followed** (sample 3 recent artifacts and the convention is visible)
-- **Mechanical enforcement** present where applicable (hooks, scripts, schemas)
+- Convention is **documented** and its behavior is demonstrated by an inspectable current receipt
+- Convention is **consistently followed** in a sample sized to the available evidence; do not require a fixed sample count
+- **Mechanical enforcement** has evidence that it executes where applicable (hooks, scripts, schemas)
 
 A 5/5 subsystem is one the user would point to as a model for other projects.
 
@@ -20,9 +20,9 @@ A 5/5 subsystem is one the user would point to as a model for other projects.
 
 - All hard checks pass
 - Some soft checks pass
-- Convention is mostly documented but with one or two gaps
-- Sampled artifacts follow the convention 80%+ of the time
-- Some mechanical enforcement present but not comprehensive
+- Convention is mostly documented with one or two bounded evidence gaps
+- Available sampled artifacts and receipts substantially follow the convention
+- Some mechanical enforcement is evidenced but not comprehensive
 
 A 4/5 subsystem is functional and unlikely to be the bottleneck. Improvement is polish, not foundation.
 
@@ -30,8 +30,8 @@ A 4/5 subsystem is functional and unlikely to be the bottleneck. Improvement is 
 
 - Hard checks split: half pass, half fail
 - Soft checks mostly miss
-- Convention exists but is informal (no document, just behavior)
-- Sampled artifacts inconsistent
+- Convention may be documented, but behavior evidence is partial, stale, or inconsistent
+- Available sampled artifacts are inconsistent or insufficient to decide
 - No mechanical enforcement
 
 A 3/5 subsystem works but degrades over time and across handoffs. Adding structure here gives real returns.
@@ -60,27 +60,23 @@ A 1/5 subsystem must be fixed before any work in adjacent subsystems pays back.
 
 The hard part of scoring is 3 vs 4, or 4 vs 5. Use these tiebreakers, in order:
 
-### 1. Documented vs Behavioral
+### 1. Documented vs Demonstrated
 
-- If the convention is **only** behavioral ("we usually do X"), cap at 3.
-- If documented but not consistently followed: cap at 4.
-- Both documented AND followed: eligible for 5.
+- If the convention is **only documented**, cap at 3 until an inspectable receipt demonstrates behavior.
+- If documented and demonstrated but not consistently followed: cap at 4.
+- Both documented AND demonstrated consistently: eligible for 5.
 
 ### 2. Mechanical Enforcement
 
-- No enforcement at all: cap at 3.
-- Soft enforcement (rule says "should"): cap at 4.
-- Hard enforcement (hook blocks Stop, schema validates, CI fails): eligible for 5.
+- No evidence of enforcement execution: cap at 3.
+- Soft enforcement (rule says "should") with observed adherence: cap at 4.
+- Hard enforcement (hook blocks Stop, schema validates, CI fails) with an execution receipt: eligible for 5.
 
-### 3. Sample 3 Recent Artifacts
+### 3. Sample Available Relevant Evidence
 
-Pick 3 recent files in the subsystem's domain (handoffs, problems entries, feature_list updates, commits). Ask: does each follow the convention?
+Inspect enough recent, relevant artifacts to establish a pattern without fabricating a sample size. Include a behavior receipt when the claim is about runtime, CI, or hooks. If evidence is absent or stale, report `unknown` and cap the score rather than inferring success.
 
-- 3/3 follow: eligible for 5
-- 2/3 follow: cap at 4
-- 1/3 or 0/3: cap at 3
-
-This is the most reliable tiebreaker. Documentation can lie about reality; sampling can't.
+Documentation can lie about reality; the audit must distinguish it from demonstrated behavior.
 
 ---
 
@@ -98,9 +94,9 @@ Conversely, don't score 1 when 2 fits. 1 is reserved for "structurally missing" 
 
 If `init.sh` is missing, that's a Verification problem (3/5 instead of 4/5). It's not also a Lifecycle problem (Lifecycle is about hooks and session boundaries, not about whether init.sh exists). Don't penalize the same gap twice.
 
-### Don't reward intent
+### Don't reward metadata or intent
 
-"They were going to add PROBLEMS.md" is not 3/5. It's 2/5 until the file exists with content. Scoring rewards what's present, not what's planned.
+"They were going to add PROBLEMS.md" is not 3/5. Nor is a non-empty evidence field, configured hook, or existing `init.sh` a pass by itself. Score documented structure separately from inspectable behavior; do not turn missing proof into a PASS.
 
 ---
 
@@ -129,7 +125,7 @@ Total: 8/25. Bottleneck: State (1/5) or Lifecycle (1/5) — tiebreaker: State (f
 - `.claude/rules/` with 5 files
 - `.claude/handoffs/` with 30 files going back 6 months, INDEX.md current
 - No PROBLEMS.md, no feature_list.json
-- `init.sh` exists and works (Makefile-based)
+- A current CI or local receipt demonstrates the documented verification command (Makefile-based)
 - `.claude/settings.json` has SessionStart + Stop hooks
 - 3 hooks configured: auto_backup_git, stop-test-gate, remind_handoff
 
@@ -137,9 +133,9 @@ Scoring:
 
 - Instructions: 4 (good CLAUDE.md, modular rules, slightly long)
 - State: 3 (rich handoffs but missing PROBLEMS.md and feature_list)
-- Verification: 4 (init.sh exists, tests run, 3-layer not explicit but Proof Loop referenced)
-- Scope: 4 (no-pre-existing rule present, no WIP=1 yet because no feature_list)
-- Lifecycle: 5 (hooks configured, settings.json complete, all hard + most soft)
+- Verification: 4 (current receipt covers the required checks; 3-layer is not explicit but Proof Loop is referenced)
+- Scope: 4 (no-pre-existing rule present; this project has no declared serialized lane, so WIP=1 is not a requirement)
+- Lifecycle: 4 (hooks configured and one current execution receipt is available; remaining lifecycle behavior has bounded evidence)
 
 Total: 20/25. Bottleneck: State (3/5). One concrete weakness in an otherwise mature project — and a fixable one.
 
@@ -158,9 +154,9 @@ Scoring (adjusted for project type):
 - Instructions: 5
 - State: 4 (UPDATES.md serves as a chronicle, but no PROBLEMS.md tracking active issues)
 - Verification: 3 (validators exist in scripts/ but no init.sh entry point)
-- Scope: 4 (no-pre-existing rule, but no WIP=1 since project type doesn't need it)
+- Scope: 4 (no-pre-existing rule and a project-appropriate concurrency policy)
 - Lifecycle: 3 (some hooks but not full lifecycle coverage)
 
-Total: 19/25. Bottleneck: Verification (3/5). The skill repo would benefit from an init.sh that runs all validators in one command.
+Total: 19/25. Bottleneck: Verification (3/5). The skill repo would benefit from a documented command that runs its required validators and records a current receipt.
 
-**Note**: For project types that don't need a subsystem (e.g., a knowledge base doesn't need WIP=1), score based on appropriate-to-type criteria. Don't penalize a knowledge repo for lacking feature delivery infrastructure.
+**Note**: Score each subsystem against the project's actual acceptance and concurrency model. Do not penalize a knowledge repo, independent lanes, or read-only work for omitting a serialized WIP=1 policy that they do not need.
