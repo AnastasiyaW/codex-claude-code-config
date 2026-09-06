@@ -1,16 +1,12 @@
 ---
 name: feature-new
 description: >
-  Scaffold a new feature narrative document in an existing layer
-  following the ULTRAPACK-style template extended for feature-layer
-  architecture (principle 28). Creates docs/layers/<layer>/features/feat-NNN-<slug>.md
-  with Design / Plan / Verify / Conclusion sections, populates layer
-  README features table, and adds entry to feature_list.json if
-  present. Use when: "create a new feature", "start work on feature",
-  "scaffold feature doc", "/feature-new", "new feature in <layer>",
-  "begin feature narrative". Auto-allocates next F-NNN ID. Do NOT use to
-  create the layer itself or its bounded-concern KB scaffold; use /layer-new
-  for that (a feature lives inside an already-existing layer).
+  Scaffold a feature narrative in an existing project layer with Design,
+  Plan, Verify, and Conclusion sections. Use when: "create a new feature",
+  "start work on feature", "scaffold feature doc", "/feature-new", or
+  "begin feature narrative". Inspects and preserves the target project's
+  feature ID, registry, filename, and coordination conventions; does not
+  create a missing layer (use /layer-new).
 user-invocable: true
 model: sonnet
 ---
@@ -40,19 +36,19 @@ invariants and global principles.
 ## Arguments
 
 ```
-/feature-new <layer> <slug> [--title "..."] [--branch <name>] [--id F-NNN]
+/feature-new <layer> <slug> [--title "..."] [--branch <name>] [--id <project-id>]
 ```
 
 - `<layer>` -- existing layer name. Must be a directory under
   `docs/layers/`. If missing, suggest `/layer-new <layer>` first.
-- `<slug>` -- kebab-case feature identifier without the `F-NNN-`
+- `<slug>` -- kebab-case feature identifier without a project ID
   prefix. Examples: `api-key-rotation`, `audit-log`,
   `dual-encryption`.
 - `--title` -- human-readable feature title. If omitted, derive from
   slug by title-casing.
 - `--branch` -- git branch name. If omitted, default to
   `feature/<slug>`.
-- `--id` -- override the auto-allocated F-NNN. Use only when
+- `--id` -- override the auto-allocated project-native ID. Use only when
   migrating a pre-existing feature with a known ID. Refuse if the ID
   already exists in this layer.
 
@@ -67,42 +63,73 @@ invariants and global principles.
    exists. If not, copy from
    `<claude-code-skills-checkout>/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/features/_FEATURE-TEMPLATE.md`.
 
-### Step 2 -- Allocate F-NNN
+### Step 2 -- Discover and reserve the project-native ID
 
-If `--id` was provided:
+Do this before changing the feature document, layer README, or registry. A
+feature registry is project-owned state; this skill does not impose its old
+`F-NNN` example on it.
 
-- Validate format (`F-\d{3,}`).
-- Check that
-  `docs/layers/<layer>/features/feat-<NNN>-*.md` does not already
-  exist. Refuse if it does.
+1. Inspect existing feature documents, the layer README, `feature_list.json`
+   (if present), a co-located schema or validator, and `AGENTS.md`/project
+   docs for the actual ID format, namespace, filename convention, fields,
+   initial status, allocator, and coordination rule. For example, this
+   repository's long-run template uses lowercase `feat-NNN` IDs with
+   `description`, `dependencies`, and string `evidence`; that is not
+   interchangeable with the old `F-NNN` example.
+2. If `--id` was provided, validate it against the discovered convention and
+   check every project-owned feature source that the convention names. If it
+   is already used, refuse without changing anything.
+3. Otherwise use the project's allocator when one exists. If the convention is
+   visible only in current records, derive a candidate from those records and
+   recheck all of them immediately before reservation. Do not infer a global
+   namespace, digit width, prefix, or sort order from this skill.
+4. Follow an existing project coordination mechanism when one exists and you
+   are authorized to use it. Otherwise reserve the **logical ID**, not a
+   slug-bearing pathname, with `scripts/reserve_feature_id.py`. It atomically
+   creates `refs/feature-new/reservations/<project-id>` in the repository and
+   binds that ID to the layer, slug, and final document path. This is a Git
+   allocator record, not a second feature registry: the same request returns
+   `resumed`; a different layer/slug/path returns `conflict` and must not edit
+   the registry or another claimant's document.
+5. On `conflict`, re-inventory the project convention and choose the next
+   project-native candidate. Continue safe reconciliation while the requested
+   scaffold remains actionable; do not guess that a durable reservation has a
+   stale owner, overwrite it, or impose an arbitrary retry limit.
+6. If no project ID/path convention exists at all, bootstrap only this skill's
+   documented default: lowercase `feat-NNN`, globally allocated through the
+   Git-ref helper, with `docs/layers/<layer>/features/feat-NNN-<slug>.md` as
+   the document path. Do not create `feature_list.json`; once a registry exists
+   it becomes authoritative over this fallback.
+7. After reservation, re-read the README and registry before companion
+   updates. If their convention changed, preserve the valid document and stop
+   before a stale README/registry write; report the exact conflict and reserved
+   path for the owner to reconcile.
 
-If `--id` was NOT provided:
-
-- Scan all existing feature files across **all** layers (not just
-  this one) for the highest F-NNN already used.
-- Allocate the next number, zero-padded to 3 digits (F-001, F-042,
-  F-099, F-100, ...).
-- Cross-check that the ID is not in use anywhere -- F-NNN is a
-  **project-wide** namespace, not per-layer.
+When the project has no registry schema or helper, do not stop merely because
+it differs from this skill's example. Adapt by copying one current entry's
+field set and ID style, changing only values whose meaning is established by
+the project. If no representative entry or documented meaning exists, create
+the requested narrative only and leave the unknown registry untouched rather
+than append an invented record.
 
 ### Step 3 -- Validate slug
 
 - Lowercase kebab-case (`[a-z][a-z0-9-]*`).
 - Length <= 50 characters.
-- Does not start with `f-` or `feat-` (avoid double-prefix).
-- The resulting file `feat-<NNN>-<slug>.md` does not already exist.
+- Does not repeat the discovered ID prefix.
+- The resulting project-native feature filename does not already exist.
 
 ### Step 4 -- Copy and fill the template
 
 Source: `docs/layers/<layer>/features/_FEATURE-TEMPLATE.md`
 
-Destination: `docs/layers/<layer>/features/feat-<NNN>-<slug>.md`
+Destination: the project-native feature filename discovered in Step 2.
 
 In the new file, replace placeholders:
 
 | Placeholder | Replacement |
 |-------------|-------------|
-| `F-NNN: <feature title>` | `F-<NNN>: <title>` |
+| feature ID/title placeholder | the discovered ID and `<title>` |
 | `**Layer:** [<layer-name>](../README.md)` | `**Layer:** [<layer>](../README.md)` |
 | `**Status:** design` | leave as `design` |
 | `**Branch:** feature/<slug>` | use `--branch` value or default |
@@ -114,41 +141,37 @@ placeholders -- the user fills these.
 
 ### Step 5 -- Update layer README
 
-In `docs/layers/<layer>/README.md`, find the `## Features in this
-layer` table. Insert a new row at the bottom (sorted by F-NNN
-ascending):
+Inspect `docs/layers/<layer>/README.md` for its existing feature index and
+preserve its columns, ID form, ordering, and link style. Insert the new entry
+only if a feature index exists and its row convention is understood:
 
 ```
-| F-<NNN> | <title> | design | YYYY-MM-DD | [feat-<NNN>-<slug>.md](features/feat-<NNN>-<slug>.md) |
+| <project-id> | <title> | <project-native initial status> | YYYY-MM-DD | <project-native link> |
 ```
 
-If the table has only the placeholder rows from the template, replace
-them entirely with the real entry.
+If the table has only known placeholder rows, replace only those placeholders.
+If there is no compatible index, do not invent one; report that the narrative
+was created without a README index.
 
 ### Step 6 -- Update feature_list.json (if present)
 
-If `<repo>/feature_list.json` exists at repo root, parse it and
-**append** a new feature entry:
-
-```json
-{
-  "id": "F-<NNN>",
-  "name": "<title>",
-  "layer": "<layer>",
-  "doc": "docs/layers/<layer>/features/feat-<NNN>-<slug>.md",
-  "branch": "feature/<slug>",
-  "status": "not-started",
-  "dependencies": [],
-  "evidence": []
-}
-```
+If `<repo>/feature_list.json` exists at repo root, parse it and use the
+project's schema or validator plus a representative entry to construct a
+native record. Preserve the existing top-level shape, field names, value
+types, default status, evidence representation, ordering, and encoding.
+Change only fields that the project convention establishes for a new feature
+(such as its unique ID, title/name, description, document link, or initial
+state).
 
 Important encoding rule (per
 `~/.claude/rules/api-utf8-posting.md`): write the JSON file with
 `json.dump(data, f, ensure_ascii=False, indent=2)` to preserve any
 Cyrillic in titles.
 
-Do NOT change existing entries.
+Do NOT change existing entries or add fields merely because this skill's old
+example had them. Run the project-provided feature registry validator when one
+exists. If the registry's required fields cannot be determined safely, leave
+it unchanged and report that fact; the requested narrative remains valid.
 
 If `feature_list.json` does not exist, do not auto-create it -- emit
 a hint instead.
@@ -158,12 +181,12 @@ a hint instead.
 Print a summary:
 
 ```
-Created: docs/layers/<layer>/features/feat-<NNN>-<slug>.md
-Updated: docs/layers/<layer>/README.md (added F-<NNN> to features table)
-Updated: feature_list.json (added F-<NNN>, status: not-started)
+Created: <project-native feature-document path>
+Updated: <README path or "not indexed; no compatible feature index">
+Updated: <feature_list.json path and project-native ID, or "not changed; no safe registry mapping">
 
 Suggested next steps:
-1. Fill the Design section in feat-<NNN>-<slug>.md
+1. Fill the Design section in <feature document>
    - Approach (one paragraph)
    - Invariants (IV-1, IV-2, ...)
    - Rejected alternatives
@@ -177,8 +200,9 @@ Suggested next steps:
 
 ## Status lifecycle
 
-Two parallel state systems exist; you maintain both manually after this
-skill creates them. They serve different purposes:
+The following lifecycle is the bundled long-run-project convention, not a
+universal registry schema. Apply it only after Step 2 confirms that the target
+project uses it; otherwise preserve the project's own lifecycle and mapping.
 
 ### Doc Status (narrative phase, in feature.md frontmatter)
 
@@ -221,38 +245,40 @@ Four states: `not-started`, `in-progress`, `blocked`, `done`. `done` is
 | blocked | blocked | identical |
 | done | done | identical |
 
-This skill creates the doc with `Status: design` AND the json entry
-with `status: "not-started"`. Subsequent transitions are manual --
-update both files in lockstep, or use future `/feature-done`,
-`/feature-block` skills (not yet implemented).
+For a project that uses this convention, create the doc with `Status: design`
+and the native JSON record with `status: "not-started"`. Subsequent transitions
+are manual and follow that project's coordination rule.
 
 ## Gotchas
 
-- **F-NNN is project-wide.** Even though features live under layers,
-  the F-NNN namespace is shared. Two features in different layers
-  cannot share an ID. The skill enforces this by scanning all layer
-  directories before allocating.
+- **ID namespace is project-defined.** It may be global, per layer, or managed
+  by a registry. Discover it before allocation; never treat `F-NNN` as a
+  universal format.
+- **Concurrent allocation.** Scanning and then writing is a race. Use the
+  existing project coordinator or reserve the logical ID with the Git-ref
+  helper before a document/registry mutation. A same-ID different-slug/layer
+  claimant must conflict; re-inventory it, never overwrite it or guess that
+  the durable reservation is stale.
 - **Migration of in-flight features.** When migrating an existing
-  feature into the new format, pass `--id F-NNN` explicitly so the
+  feature into the new format, pass its project-native `--id` explicitly so the
   feature retains its prior ID in any links from PROBLEMS.md or
   handoffs. The skill will not auto-detect existing IDs.
 - **Cyrillic titles + Windows.** Per global rule
   `api-utf8-posting.md`, when writing the markdown file or
   feature_list.json, always specify `encoding="utf-8"` explicitly to
   avoid mojibake on Windows.
-- **Layer README table edit.** The skill performs a text-level edit
-  to insert a row into the features table. If the user has heavily
-  customized the table (added columns, changed format), the edit may
-  fail. Detect by checking for the canonical 5-column header; if
-  absent, emit a warning and skip table edit.
+- **Layer README table edit.** Preserve the project's existing columns and
+  ordering. If the index cannot be interpreted safely, leave it unchanged and
+  report the unindexed narrative rather than inventing a canonical 5-column
+  row.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | "Layer does not exist" | `docs/layers/<layer>/` missing | Run `/layer-new <layer>` first |
-| F-NNN conflict | Allocator hit a manually-set ID | Pass `--id F-MMM` explicitly with the next free number |
-| `feature_list.json` parse error | Invalid JSON in file | Stop, surface the parse error. User fixes manually before retry |
+| ID reservation conflict | Another request owns that logical ID | Re-inventory project state and use the next native candidate; never overwrite or delete the durable reservation |
+| `feature_list.json` parse/schema error | Registry is invalid or uses an unknown convention | Preserve the narrative and do not write the registry; report the exact parser/schema failure and use a project-native adapter when its fields are established |
 | Template missing on this machine | Different host / fresh clone | Pull from public repo: `gh api repos/AnastasiyaW/claude-code-config/contents/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/features/_FEATURE-TEMPLATE.md` |
 | Cyrillic in title shows as `?????` | File written without explicit utf-8 | Re-write the file with `encoding="utf-8"`; see `~/.claude/rules/api-utf8-posting.md` |
 
@@ -264,6 +290,6 @@ sections of the produced document are meant for the user (or the
 session that invoked the skill) to fill -- this skill does not
 attempt to generate Design content from the title.
 
-Auto-allocating F-NNN requires reading the full tree of
-`docs/layers/*/features/feat-*.md` files; do this lazily and cache for
-the duration of the skill invocation.
+ID discovery reads only the sources that the project's convention declares.
+Reserve the resulting logical ID atomically, then re-read mutable sources;
+cache is not authority across a concurrent mutation.

@@ -70,7 +70,14 @@ Order matters more than technique, and this order is what keeps each step small:
    behind produces "modules" that still need the old file.
 4. **The long tail last.** Single functions with no clear home go where they are used,
    or into one honestly-named remainder. Splitting them first is motion without benefit.
-5. **Delete the old path only after the new one carries traffic**, and only once.
+5. **Delete an old path only after every identified consumer has migrated and
+   proportionate consumer/integration proof shows the replacement carries the
+   required behavior.** For a live externally served boundary, that proof may
+   include traffic/canary evidence; an offline installer, private module, or
+   staged component instead uses its applicable focused contract/integration
+   receipt. Keep the old path until deletion is authorized, needed consumers
+   are proven migrated, and no speculative early removal can erase a rollback
+   or compatibility boundary.
 
 At each step: green before, green after, one commit.
 
@@ -108,6 +115,10 @@ moving anything guarded:
   what step 1 and 2 are for.
 - **Renaming during a move.** Move, commit, then rename. A diff that does both is
   unreviewable and hides accidental behaviour changes.
+- **Treating traffic as universal proof.** Traffic/canary proof is meaningful for a
+  live served boundary, not an offline or sealed module. Match the consumer or
+  integration receipt to the boundary, while retaining its deletion authority
+  and migration check.
 
 ## Troubleshooting
 
@@ -117,3 +128,4 @@ moving anything guarded:
 | Extracted function needs six parameters | The cut is in the wrong place | Cut along the data, not along the line count |
 | Circular import after the split | Two new modules both own part of one concept | Extract the shared concept into a third |
 | Race appears only after the move | State and its lock ended up in different modules | Move them together; re-state the invariant |
+| New offline path has no traffic | The module is not a live served boundary | Identify its consumers and use the applicable focused contract/integration receipt before authorized deletion |

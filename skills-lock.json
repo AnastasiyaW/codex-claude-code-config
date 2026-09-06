@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-06T13:40:11+00:00",
+  "generated_at": "2026-09-06T15:59:45+00:00",
   "skill_count": 57,
-  "aggregate_hash": "sha256:ba5c290a4a8bb4f709009820edb7de129ce8c891933da2059abf705852920547",
+  "aggregate_hash": "sha256:a08999015fcb1fa6b697d4cc2c5471a0584fd8c052326683b84042976cd7d9d9",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -121,11 +121,12 @@
       ]
     },
     "architecture/feature-new": {
-      "content_hash": "sha256:1334abdc9fd58fcd5f495c01742ef780614b620a7837dc898d41523e534e7f50",
-      "size_bytes": 10149,
-      "file_count": 1,
+      "content_hash": "sha256:3a75899495142c39117507a81b4e6acf7addda4be74edd9dd14cb350536dcc44",
+      "size_bytes": 17538,
+      "file_count": 2,
       "files": [
-        "SKILL.md"
+        "SKILL.md",
+        "scripts/reserve_feature_id.py"
       ]
     },
     "architecture/harness-design": {
@@ -357,8 +358,8 @@
       ]
     },
     "development/refactoring-safely": {
-      "content_hash": "sha256:eb95d6de6dac8a5dd0836627709bf212e9336185c0a01d74a41ed0b1385e5ad2",
-      "size_bytes": 106492,
+      "content_hash": "sha256:9bc6a4a20840c92aa6403cfa0326814963cae844f0a464e126eae20ae7152972",
+      "size_bytes": 107438,
       "file_count": 8,
       "files": [
         "SKILL.md",
