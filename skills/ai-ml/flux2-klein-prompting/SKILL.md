@@ -213,7 +213,9 @@ image = pipe(
     prompt='Постер "КОФЕ". Жирный гротеск, ровный кернинг, без других надписей.',
     height=1024, width=1024,
     guidance_scale=1.0, num_inference_steps=4,
-    generator=torch.Generator("cuda").manual_seed(42),
+    # A CPU generator makes comparisons more stable across GPU runs.  It is
+    # not a cross-version or cross-hardware reproducibility guarantee.
+    generator=torch.Generator("cpu").manual_seed(42),
 ).images[0]
 
 # Edit (I2I)
@@ -246,8 +248,11 @@ edited = pipe(
 1. Write scene in prose (one paragraph)
 2. Create a controlled candidate using parameters supported by the selected
    checkpoint or API, and record them with the output.
-3. Fix seed when the runner supports it; pick 1–2 directions against the task's
-   actual criteria.
+3. Fix the seed when the runner supports it and record the model revision,
+   Diffusers/PyTorch version, hardware, dtype and scheduler. A seed makes a
+   controlled comparison within that recorded stack; it is not a cross-version
+   or cross-hardware reproducibility guarantee. Pick 1–2 directions against
+   the task's actual criteria.
 4. Refine prompt: add specifics, quote text, remove filler adjectives.
 5. Edit iterations: one change per step, state what must be preserved, and keep
    only variants that pass the requested fidelity checks.

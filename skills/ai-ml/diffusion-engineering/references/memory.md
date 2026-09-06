@@ -36,25 +36,25 @@ VRAM ≈ Веса + Градиенты + Состояния оптимизато
 ```python
 import torch
 
-scaler = torch.amp.GradScaler("cuda")  # только для fp16, не нужен для bf16
+# Choose the dtype only after checking the target accelerator.  GradScaler is
+# active for fp16 and deliberately disabled for bf16.
+amp_dtype = torch.bfloat16
+scaler = torch.amp.GradScaler("cuda", enabled=amp_dtype == torch.float16)
 
 for batch in dataloader:
     optimizer.zero_grad(set_to_none=True)
     
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):  # или float16
+    with torch.autocast(device_type="cuda", dtype=amp_dtype):
         output = model(batch)
         loss = criterion(output, target)
     
-    # Для fp16 — через scaler (предотвращает underflow)
+    # For fp16 this scales; for bf16 the disabled scaler is a no-op.
     scaler.scale(loss).backward()
     scaler.unscale_(optimizer)
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     scaler.step(optimizer)
     scaler.update()
     
-    # Для bf16 — напрямую (bf16 не требует scaling)
-    # loss.backward()
-    # optimizer.step()
 ```
 
 **BF16 vs FP16:**

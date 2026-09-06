@@ -214,15 +214,17 @@ ds = ds.shuffle(seed=42, buffer_size=10_000)
 ds = ds.filter(lambda x: x["width"] >= 512 and x["height"] >= 512)
 ds = ds.map(lambda x: {"text": x["caption"], "url": x["url"]})
 
-# PyTorch DataLoader из IterableDataset
-loader = DataLoader(
-    ds.with_format("torch"),
-    batch_size=8,
-    num_workers=4,
-    pin_memory=True,
-    prefetch_factor=2,
-    persistent_workers=True,
-)
+# Start with one process.  Before raising this above zero, shard the iterable
+# per worker and measure throughput/RAM on the target OS; Windows uses spawn.
+num_workers = 0
+loader_kwargs = {
+    "batch_size": 8,
+    "num_workers": num_workers,
+    "pin_memory": torch.cuda.is_available(),
+}
+if num_workers > 0:
+    loader_kwargs.update(prefetch_factor=2, persistent_workers=True)
+loader = DataLoader(ds.with_format("torch"), **loader_kwargs)
 ```
 
 ### WebDataset — TAR-шарды для больших корпусов
@@ -250,7 +252,8 @@ dataset = (
     .batched(8, partial=False)
 )
 
-loader = wds.WebLoader(dataset, num_workers=4, pin_memory=True)
+# Profile workers and pinning on the target runtime; this is the safe baseline.
+loader = wds.WebLoader(dataset, num_workers=0, pin_memory=torch.cuda.is_available())
 ```
 
 ### Кэширование text embeddings

@@ -113,8 +113,12 @@ t = torch.randint(0, pipe.scheduler.config.num_train_timesteps,
 noise = torch.randn_like(latents)
 noisy_latents = pipe.scheduler.add_noise(latents, noise, t)
 
-# Epsilon-prediction
-with torch.autocast(device_type="cuda", dtype=torch.float16):
+# Epsilon-prediction.  The CPU fallback stays out of CUDA autocast.
+with torch.autocast(
+    device_type=device,
+    dtype=torch.float16 if device == "cuda" else torch.bfloat16,
+    enabled=device == "cuda",
+):
     noise_pred = pipe.unet(noisy_latents, t, encoder_hidden_states=text_emb).sample
     loss = F.mse_loss(noise_pred.float(), noise.float())
 

@@ -103,8 +103,9 @@ scaler.update()
 ```python
 # Симптом: генерации не соответствуют промпту при любом guidance_scale
 
-# Причина 1: слишком низкий guidance_scale (≤1.0)
-image = pipe(prompt, guidance_scale=7.5, ...)  # поднять до 5–10
+# Причина 1: configuration is not appropriate for this checkpoint or task.
+# Compare only values supported by the selected checkpoint on fixed inputs.
+image = pipe(prompt, guidance_scale=selected_supported_value)
 
 # Причина 2: несогласованный text encoder после замены
 # Симптом + замена энкодера → нужен projection + дообучение cross-attention
@@ -188,8 +189,8 @@ bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.
 | Симптом | Первое что проверить | Быстрый фикс |
 |---|---|---|
 | loss = NaN | LR слишком высокий / FP16 underflow | LR ÷10; переключить BF16; добавить grad clip |
-| Текст игнорируется | guidance_scale ≤ 1; несовместимый энкодер | guidance_scale → 6–8; проверить frozen encoder |
-| Все картинки похожи | guidance_scale слишком высокий | guidance_scale → 4–6; смена scheduler |
+| Текст игнорируется | guidance configuration or incompatible encoder | Compare the checkpoint-supported range on fixed inputs; verify the frozen encoder |
+| Все картинки похожи | guidance may be too high | Reduce it in a controlled comparison or change scheduler |
 | Артефакты при малых шагах | Неподходящий scheduler | DPM-Solver++ или Euler 20–25 шагов |
 | OOM при обучении | Нет AMP / batch слишком большой | BF16 + grad_accum + checkpointing |
 | OOM при инференсе | Нет оптимизации памяти | attention_slicing + CPU offload |
@@ -249,7 +250,7 @@ print(info.card_data.license)  # creativeml-openrail-m
 
 ### Инференс
 - [ ] Scheduler выбран через A/B на фиксированных seed
-- [ ] `guidance_scale` подобран (5–8 для большинства задач)
+- [ ] `guidance_scale` выбран для конкретного checkpoint/task на фиксированных входах
 - [ ] Memory optimizations включены по нужде
 - [ ] NSFW/safety фильтры применены (если публичный продукт)
 
