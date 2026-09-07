@@ -788,12 +788,20 @@ def capture(root: Path, case_id: str, phase: str, argv: list[str]) -> tuple[int,
     evidence_dir.mkdir(parents=True, exist_ok=True)
     evidence_path = evidence_dir / f"{phase}-{len(case.get('attempts') or []):02d}.txt"
     rendered = "argv: " + json.dumps(argv, ensure_ascii=False) + f"\nreturncode: {returncode}\n\n" + output
-    evidence_path.write_text(rendered, encoding="utf-8")
+    # Write the exact bytes that get hashed. ``write_text`` applies the platform
+    # newline translation, so on Windows the file gained CRLF while the digest
+    # was taken over the LF string -- a proof whose digest could never identify
+    # its own artefact, on every case captured on this OS. Measured 2026-09-07 on
+    # price-index-r30-small-promotion-20260903: recorded 8f8c06c8..., file
+    # 392c94c9..., and the LF rendering of that same file hashes to the recorded
+    # value. Bytes in, bytes out.
+    payload = rendered.encode("utf-8")
+    evidence_path.write_bytes(payload)
     item = {
         "argv": argv,
         "returncode": returncode,
         "evidence_path": _normal(evidence_path.relative_to(root)),
-        "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        "sha256": hashlib.sha256(payload).hexdigest(),
     }
     verification = case.setdefault("verification", {})
     verification[phase] = item
