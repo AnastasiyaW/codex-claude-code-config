@@ -416,11 +416,28 @@ def _local_path(value: Any, root: Path) -> Path | None:
         return None
 
 
+def _local_paths(value: Any, root: Path) -> list[Path]:
+    """One contract field may name several local destinations separated by ';'.
+
+    A multi-root skill install ("a; b; c") used to be resolved as ONE path, which
+    exists nowhere, so every such verified contract read as "destination is absent"
+    and blocked every later session's Stop. Each part is checked on its own.
+    """
+    raw = _text(value)
+    parts = [part.strip() for part in raw.split(";")] if raw else []
+    paths: list[Path] = []
+    for part in parts:
+        resolved = _local_path(part, root)
+        if resolved is not None:
+            paths.append(resolved)
+    return paths
+
+
 def _verified_path_errors(contract: dict[str, Any], root: Path) -> list[str]:
     if _text(contract.get("status")) != "verified":
         return []
     errors: list[str] = []
-    destination = _local_path(contract.get("destination"), root)
+    destinations = _local_paths(contract.get("destination"), root)
     # A destination cleanup inverts what "verified" should see, exactly as a source
     # cleanup already does below. Without this a transfer whose product was scratch -
     # a mutation copy, a throwaway checkout - could never be closed honestly: the
@@ -428,7 +445,7 @@ def _verified_path_errors(contract: dict[str, Any], root: Path) -> list[str]:
     # arguing for the litter.
     dest_cleanup = contract.get("destination_cleanup") or {}
     dest_disposed = bool(dest_cleanup.get("planned") and dest_cleanup.get("performed"))
-    if destination is not None:
+    for destination in destinations:
         if dest_disposed:
             if destination.exists():
                 errors.append(f"destination still exists after claimed cleanup: {destination}")
@@ -568,6 +585,16 @@ def _self_test() -> int:
             present = dict(base_contract, status="verified", destination=str(kept))
             if _verified_path_errors(present, root2):
                 problems.append("an ordinary present destination is reported as a problem")
+
+            # ';'-separated multi-destination (real shape of the skill-install contracts)
+            kept2 = root2 / "kept-copy-2"
+            kept2.mkdir()
+            multi_ok = dict(base_contract, status="verified", destination=f"{kept}; {kept2}")
+            if _verified_path_errors(multi_ok, root2):
+                problems.append("a multi-destination whose parts all exist is reported absent")
+            multi_bad = dict(base_contract, status="verified", destination=f"{kept}; {gone}")
+            if not _verified_path_errors(multi_bad, root2):
+                problems.append("a multi-destination with one missing part passes")
         return problems
 
     fails.extend(_dest_cleanup_cases())
