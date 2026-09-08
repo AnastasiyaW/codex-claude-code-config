@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-08T08:55:13+00:00",
+  "generated_at": "2026-09-08T10:04:26+00:00",
   "skill_count": 57,
-  "aggregate_hash": "sha256:e17fd022f7a1ebda9b1b295a761e039486c4aef5560b0475a8bd440ce09039f9",
+  "aggregate_hash": "sha256:42efa24cb0bf2f86a258652474619b69ae21ad0d32750eb577707203a424dbf4",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -529,8 +529,8 @@
       ]
     },
     "lean-code": {
-      "content_hash": "sha256:981fd54cfb6d424716d017d46e69b3a432f9542c19039ee81a82004dd8297aa2",
-      "size_bytes": 5188,
+      "content_hash": "sha256:0feb4416fb359561a93f45e32dde4dbdc41630c6eb76a756f425b526d4aa2b37",
+      "size_bytes": 5391,
       "file_count": 1,
       "files": [
         "SKILL.md"

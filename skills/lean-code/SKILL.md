@@ -1,6 +1,7 @@
 ---
 name: lean-code
-description: On-demand minimalism intensifier — find the smallest sufficient, verified implementation for the requested outcome. Use when the user says "be lazy / yagni / simplest / minimal / shortest / don't over-engineer", complains about bloat / boilerplate / unnecessary dependencies / abstraction, or before writing a substantial chunk of new code. Supports intensity: lite / full / ultra. Pairs with the always-on quality-code rule and the over-engineering-advisor hook. Do NOT use as a general code-review or bug-hunting pass — it only removes over-building and will not find unrelated correctness defects; use /code-review or /review for those.
+description: >-
+  On-demand minimalism intensifier — find the smallest sufficient, verified implementation for the requested outcome. Use when the user says "be lazy / yagni / simplest / minimal / shortest / don't over-engineer", complains about bloat / boilerplate / unnecessary dependencies / abstraction, or before writing a substantial chunk of new code. Supports intensity: lite / full / ultra. Pairs with the always-on quality-code rule and the over-engineering-advisor hook. Do NOT use as a general code-review or bug-hunting pass — it only removes over-building and will not find unrelated correctness defects; use /code-review or /review for those.
 ---
 
 # Lean Code
@@ -8,6 +9,8 @@ description: On-demand minimalism intensifier — find the smallest sufficient, 
 Aggressive YAGNI mode, on demand. The always-on baseline is `rules/quality-code.md`; this skill is the **intensifier** you invoke when minimalism matters most. The win is the smallest solution that fully satisfies the accepted task outcome, not the fewest lines or the shortest explanation.
 
 ## The ladder — stop at the first rung that holds
+Choose a rung only when it preserves the accepted architecture, contracts, and non-functional requirements; installed/native status alone does not justify crossing an established project boundary.
+
 1. **Does this need to exist at all?** Speculative need → skip it, say so in one line. (YAGNI)
 2. **Stdlib does it?** Use it.
 3. **Native platform feature covers it?** (`<input type="date">` over a picker lib, CSS over JS, a DB constraint over app code.)
