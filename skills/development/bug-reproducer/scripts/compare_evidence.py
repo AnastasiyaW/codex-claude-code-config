@@ -92,7 +92,9 @@ def main() -> None:
         help="Why targeted-only scope is sufficient; required with --targeted-scope-sufficient.",
     )
     args = parser.parse_args()
-    if args.targeted_scope_sufficient and not args.scope_rationale:
+    if args.targeted_scope_sufficient and (
+        not args.scope_rationale or not args.scope_rationale.strip()
+    ):
         parser.error("--targeted-scope-sufficient requires --scope-rationale")
     if args.scope_rationale and not args.targeted_scope_sufficient:
         parser.error("--scope-rationale requires --targeted-scope-sufficient")

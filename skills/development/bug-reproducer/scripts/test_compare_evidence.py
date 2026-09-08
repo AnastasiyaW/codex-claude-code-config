@@ -173,6 +173,36 @@ class CompareEvidenceEntrypointTests(unittest.TestCase):
         self.assertIn("Pure function; no additional integration boundary exists.", report_text)
         self.assertIn("explicit targeted-only rationale", report_text)
 
+    def test_whitespace_targeted_only_scope_rationale_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            before = directory / "before.json"
+            after = directory / "after.json"
+            target_status = directory / "target-status.txt"
+            target_status.write_text("1", encoding="utf-8")
+            self.capture(before, target_status)
+            target_status.write_text("0", encoding="utf-8")
+            self.capture(after, target_status)
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(COMPARE),
+                    str(before),
+                    str(after),
+                    str(directory / "result.json"),
+                    "--reproduction",
+                    "confirmed",
+                    "--targeted-scope-sufficient",
+                    "--scope-rationale",
+                    "   ",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("requires --scope-rationale", completed.stderr)
+
     def test_self_reported_full_suite_flag_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
