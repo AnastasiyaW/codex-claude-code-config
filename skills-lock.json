@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-08T10:52:46+00:00",
+  "generated_at": "2026-09-08T13:14:43+00:00",
   "skill_count": 57,
-  "aggregate_hash": "sha256:42efa24cb0bf2f86a258652474619b69ae21ad0d32750eb577707203a424dbf4",
+  "aggregate_hash": "sha256:7e864b7d6f7bd1c89b9f86f88b920ca2e40d08d43d0dd84f12b0c46cf29b8553",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -444,8 +444,8 @@
       ]
     },
     "frontend/frontend-design": {
-      "content_hash": "sha256:7e1d8e8ac3c7b485d5d0f1bf2c5cae0a3c5d28ced49bcb9847f6d9a9473fc23f",
-      "size_bytes": 42906,
+      "content_hash": "sha256:fcdfd1931147429e90ecac6771c4ea18a611d245300b5c6317d9a1cbb2eb05af",
+      "size_bytes": 43662,
       "file_count": 5,
       "files": [
         "SKILL.md",
@@ -467,11 +467,12 @@
       ]
     },
     "frontend/ui-design": {
-      "content_hash": "sha256:fbcc81aefe79c7a95cbebadcf5b869e0e954b4d84fe300087b5a61dca411427e",
-      "size_bytes": 8038,
-      "file_count": 1,
+      "content_hash": "sha256:d95a60368e6ab5b2f0e92be24dabc992260fb937f3cd5d1972b6c74139cc8553",
+      "size_bytes": 16740,
+      "file_count": 2,
       "files": [
-        "SKILL.md"
+        "SKILL.md",
+        "references/editable-visual-assets.md"
       ]
     },
     "frontend/ui-ux-pro-max": {

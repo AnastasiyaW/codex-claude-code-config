@@ -193,6 +193,8 @@ ROUTES = [
     # legitimately select both without turning every UI task into a test-only task.
     {
         "patterns": [
+            r"(?s)^(?=.*\b(qt|qml)\b)(?=.*\b(toolbar|control\w*|dialog\w*|widget\w*|панел\w*|кнопк\w*|диалог\w*)\b)(?=.*\b(accessib\w*|focus|keyboard|layout|design|доступност\w*|фокус\w*|клавиатур\w*|дизайн\w*)\b)",
+            r"(?s)^(?=.*\b(hero|banner|баннер\w*)\b)(?=.*\b(pptx|powerpoint)\b)(?=.*\b(editable|export\w*|convert\w*|редактируем\w*|экспорт\w*|конверт\w*)\b)",
             r"\b(ui|ux)\b.{0,100}\b(design|redesign|layout|responsive|accessib\w*|a11y|animation|motion|implement|build|fix|component|dashboard|form|page|landing)\b",
             r"\b(design|redesign|layout|responsive|accessib\w*|a11y|animation|motion|implement|build|fix)\b.{0,100}\b(ui|ux|interface|frontend|dashboard|form|page|landing)\b",
             r"\b(interface|frontend|dashboard|form|page|landing|component|website)\b.{0,100}\b(prettier|spacing|mobile|desktop|visual|design|redesign|layout|responsive|accessib\w*|a11y|animation|motion)\b",

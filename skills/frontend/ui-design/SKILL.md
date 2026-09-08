@@ -1,12 +1,27 @@
 ---
 name: ui-design
-description: Unify product UI design, frontend implementation, and verification. Use when asked to design, redesign, build, or fix a web, desktop, or mobile interface; a page, dashboard, form, component, design system, responsive layout, accessibility, or interface animation. Combine visual decisions with the implementation rather than treating design as a separate later task. Do not use for backend-only work, generic system architecture, non-product artwork, or browser-test-only requests.
+description: Unify product UI design, frontend implementation, and verification. Use when asked to design, redesign, build, or fix a web, desktop, or mobile interface; a page, dashboard, form, component, design system, responsive layout, accessibility, interface animation, or editable hero/banner/infographic within a product surface. Combine visual decisions with implementation. Do not use for backend-only work, generic architecture, standalone artwork or slide decks, or browser-test-only requests.
 ---
 
 # UI Design
 
 Use one product-surface loop. Preserve existing brand tokens and component
 conventions as the authority; do not replace them with a generic style guide.
+
+This is the shared entry point for interface design. Supporting skills below
+are implementation details, not alternative design workflows. Read the shared
+contract once; a link back from a supporting skill is not a recursive reload.
+
+## Editable visual blocks
+
+For an illustrated hero, promotional banner, product infographic, or a supplied
+visual to rebuild as editable UI, read
+[Editable visual assets](references/editable-visual-assets.md). Keep text,
+controls, data, and layout native to the product; generate only the imagery
+that the requested composition needs. A screenshot is a preview, not editable
+source or interaction proof. Ordinary forms and small CSS fixes skip this mode.
+Standalone posters and PowerPoint conversion are separate deliverables, not
+mandatory stages of UI work.
 
 ## Select the smallest supporting skill set
 
@@ -128,3 +143,20 @@ Do not run or report `test_catalog_refresh.py` or `test_relevance_evaluator.py`
 as local PASS criteria: each imports an upstream-root script absent from the
 distributed skill. Preserve that boundary as `NOT_RUN_UPSTREAM_DEPENDENCY`, not
 as a failure repaired with stubs or as a passing test.
+
+## Gotchas
+
+- A fixed-canvas poster can look excellent while being unsuitable for a
+  responsive interface. Do not import its absolute-pixel, single-file layout
+  policy into a product.
+- A selectable raster layer is not editable text, a working control, or a
+  data-bound chart. Name the actual editability boundary.
+
+## Troubleshooting
+
+- The agent found only `frontend-design`: follow its shared-entry link here
+  once, then load only the reference needed for the changed surface.
+- A copy change requires regenerating the hero: extract the copy into native
+  text and keep the illustration separate; verify wrapping and contrast.
+- The render is correct but an action cannot be used: inspect the running
+  control, focus, and hit area. More screenshot polishing does not fix it.

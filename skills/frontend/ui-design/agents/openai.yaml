@@ -1,4 +1,4 @@
 interface:
-  display_name: "UI Design"
-  short_description: "Unify product UI design, implementation, and proof."
-  default_prompt: "Design and implement this interface with a coherent visual system, then verify the changed flow."
+  display_name: "UI Design — интерфейсы и визуальные блоки"
+  short_description: "Interface design, editable visuals, and working UI."
+  default_prompt: "Use $ui-design to design and implement this interface, keep visual blocks editable, and verify the changed user flow."
