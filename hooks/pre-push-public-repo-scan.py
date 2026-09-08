@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 
 # =============================================================================
@@ -98,6 +99,30 @@ def get_push_diff(remote_sha: str, local_sha: str, remote_name: str = "origin") 
             base = parent.stdout.strip() or EMPTY_TREE  # oldest may be a root commit
     r = run(["git", "diff", f"{base}..{local_sha}"])
     return r.stdout
+
+
+def pushed_material_problems(push_lines: list[str], remote_name: str = "origin") -> list[str] | None:
+    """Return private-policy findings from pushed blobs; None means not armed."""
+    private_root = Path(PRIVATE_ROUTING).parent
+    resolver = private_root / "guard" / "skill_material_privacy.py"
+    if not Path(PRIVATE_ROUTING).exists() and not resolver.exists():
+        return None
+    if not Path(PRIVATE_ROUTING).is_file() or not resolver.is_file():
+        return ["hash-bound skill material policy is unavailable"]
+    try:
+        routing = json.loads(Path(PRIVATE_ROUTING).read_text(encoding="utf-8-sig"))
+        if "skill_material_privacy" not in routing:
+            return None
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_private_skill_material_policy", resolver)
+        if spec is None or spec.loader is None:
+            return ["hash-bound skill material policy is unavailable"]
+        policy = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = policy
+        spec.loader.exec_module(policy)
+        return policy.pushed_git_blob_problems(private_root, push_lines, remote_name)
+    except (OSError, ValueError, UnicodeError, ImportError, AttributeError):
+        return ["hash-bound skill material policy is invalid"]
 
 
 # =============================================================================
@@ -461,6 +486,14 @@ def main() -> int:
 
     # Read stdin for push refs; find SHAs
     push_lines = sys.stdin.read().splitlines()
+    material_problems = pushed_material_problems(push_lines, remote_name)
+    if material_problems is not None:
+        if material_problems:
+            print(f"[pre-push] hash-bound skill material policy BLOCKED — {len(material_problems)} problem(s)", file=sys.stderr)
+            return 1
+        print("[pre-push] hash-bound skill material policy armed", file=sys.stderr)
+    else:
+        print("[pre-push] material policy not configured; mandatory regex and semantic checks remain active", file=sys.stderr)
     if not push_lines:
         # Called manually without stdin — scan against origin/HEAD
         local_sha = run(["git", "rev-parse", "HEAD"]).stdout.strip()

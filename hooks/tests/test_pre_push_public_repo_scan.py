@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -31,6 +32,7 @@ def patched_runtime(*, remote: str, visibility: bool | None, findings, semantic)
             patch.object(MODULE, "get_push_diff", return_value="fixture diff"),
             patch.object(MODULE, "agent_a_regex", return_value=findings),
             patch.object(MODULE, "agent_b_claude", return_value=semantic),
+            patch.object(MODULE, "pushed_material_problems", return_value=None),
         ):
             yield
     finally:
@@ -151,6 +153,35 @@ class PublicPushScanTests(unittest.TestCase):
         self.assertNotEqual(Path.cwd(), Path(str(observed["cwd"])))
         self.assertEqual(adversarial, observed["payload"]["git_diff"])
         self.assertNotIn(adversarial, MODULE.AGENT_B_SYSTEM_PROMPT)
+
+    def test_material_policy_absent_is_explicitly_unarmed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, patch.object(MODULE, "PRIVATE_ROUTING", str(Path(temp) / "missing.json")):
+            self.assertIsNone(MODULE.pushed_material_problems(["a b c d"], "origin"))
+
+    def test_material_policy_invalid_and_stub_forwarding_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "private"; guard = root / "guard"; guard.mkdir(parents=True)
+            routing = root / "routing.json"; resolver = guard / "skill_material_privacy.py"
+            routing.write_text('{"skill_material_privacy":{}}', encoding="utf-8")
+            resolver.write_text('raise ValueError("fixture")\n', encoding="utf-8")
+            with patch.object(MODULE, "PRIVATE_ROUTING", str(routing)):
+                self.assertTrue(MODULE.pushed_material_problems(["a b c d"]))
+            resolver.write_text(
+                'def pushed_git_blob_problems(root, lines, remote):\n'
+                '    return [] if root.name == "private" and lines == ["r l q s"] and remote == "upstream" else ["bad"]\n',
+                encoding="utf-8",
+            )
+            with patch.object(MODULE, "PRIVATE_ROUTING", str(routing)):
+                self.assertEqual(MODULE.pushed_material_problems(["r l q s"], "upstream"), [])
+
+    def test_material_denial_precedes_mandatory_agents_and_unarmed_keeps_them(self) -> None:
+        with patched_runtime(remote="https://github.com/example/public.git", visibility=True, findings=[], semantic={"verdict": "SAFE", "reason": "x"}), \
+                patch.object(MODULE, "pushed_material_problems", return_value=["denied"]), \
+                patch.object(MODULE, "agent_a_regex", side_effect=AssertionError("must not run")):
+            self.assertEqual(MODULE.main(), 1)
+        code, output = self.run_main(remote="https://github.com/example/public.git", visibility=True, findings=[], semantic={"verdict": "SAFE", "reason": "x"})
+        self.assertEqual(code, 0, output)
+        self.assertIn("not configured", output)
 
 
 if __name__ == "__main__":
