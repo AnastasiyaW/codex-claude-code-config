@@ -244,6 +244,70 @@ class TaskCompletionHookTests(unittest.TestCase):
             self.assertEqual(payload.get("decision"), "block")
             self.assertIn("actually finish the work", payload.get("reason", ""))
 
+    def test_stop_phrase_guard_prefers_final_payload_over_stale_transcript(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stop-final-payload-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".claude").mkdir()
+            transcript = tmp_path / "transcript.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Result: checks completed. Evidence: existing receipt.",
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(STOP_GUARD)],
+                input=json.dumps(
+                    {
+                        "transcript_path": str(transcript),
+                        "last_assistant_message": (
+                            "Осталось доделать проверку; хочешь, сделаю следующим шагом."
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload.get("decision"), "block")
+            self.assertIn("missing-data, missing-dep, arch-decision", payload.get("reason", ""))
+            self.assertIn("not a label in prose", payload.get("reason", ""))
+
+    def test_stop_phrase_guard_allows_clean_final_payload_without_transcript(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stop-final-payload-clean-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".claude").mkdir()
+            result = subprocess.run(
+                [sys.executable, str(STOP_GUARD)],
+                input=json.dumps(
+                    {
+                        "last_assistant_message": (
+                            "Result: checks completed. Evidence: local receipt verified."
+                        )
+                    },
+                    ensure_ascii=False,
+                ),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.strip(), "", result.stdout + result.stderr)
+
     def test_stop_phrase_guard_blocks_private_credential_refusal(self) -> None:
         with tempfile.TemporaryDirectory(prefix="private-credential-stop-") as tmp:
             tmp_path = Path(tmp)

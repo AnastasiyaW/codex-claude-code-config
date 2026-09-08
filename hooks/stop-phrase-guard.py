@@ -332,6 +332,14 @@ def get_final_assistant_message(transcript_path: str | None) -> str:
     return last_content
 
 
+def final_assistant_message(event: dict, transcript_path: str | None) -> str:
+    """Prefer the documented Stop payload; retain transcript compatibility fallback."""
+    payload = event.get("last_assistant_message")
+    if isinstance(payload, str) and payload.strip():
+        return payload
+    return get_final_assistant_message(transcript_path)
+
+
 def get_user_messages(transcript_path: str | None) -> list[str]:
     """Return all user text newest-first for intent routing across data continuations."""
     if not transcript_path:
@@ -524,7 +532,7 @@ def main() -> int:
     if fires >= MAX_FIRES:
         return 0
 
-    message = get_final_assistant_message(transcript_path)
+    message = final_assistant_message(event, transcript_path)
     if not message:
         return 0  # no transcript, no-op
 
@@ -581,9 +589,11 @@ def main() -> int:
                 f"explicitly explain what is blocking and what concrete next "
                 f"step is needed. Per rules/finish-the-task.md: do NOT end by asking "
                 f"'что дальше?' or offering a menu of options while planned work "
-                f"remains — keep doing it in order; the ONLY legitimate stop is a real "
-                f"external blocker (name it explicitly, not as a 'shall I?') or context "
-                f"overflow (write a handoff). After a genuine conclusion, you may end."
+                f"remains — keep doing it in order. A legitimate deferral must be a "
+                f"documented canonical status (missing-data, missing-dep, arch-decision, "
+                f"scope-explosion, or inaccessible-repo) or real context overflow; it needs "
+                f"the required record and evidence. An external blocker is evidence-backed, "
+                f"not a label in prose. After a genuine conclusion, you may end."
             )
         )
     )

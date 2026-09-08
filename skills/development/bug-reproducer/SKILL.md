@@ -114,7 +114,7 @@ python3 scripts/capture_command.py --label reproduced --output reproduced.json -
 ```
 
 - Confirm that a failure matches the predicted behavior and cause. Syntax errors, missing dependencies, invalid fixtures, unrelated failures, and assertions built on an unsupported assumption reject or invalidate the candidate.
-- Return `REPRODUCED`, `NOT_REPRODUCED`, or `INCONCLUSIVE` for each tested candidate. Delete or clearly separate rejected speculative tests unless the user asks to retain them.
+- Return `REPRODUCED`, `NOT_REPRODUCED`, or `INCONCLUSIVE` for each tested candidate. Clearly separate rejected speculative tests by default. Delete them only with explicit user authority.
 - Stop after evidence when the user requested discovery or reproduction only. Do not slide into production changes.
 
 ### 6. Isolate and resolve Gate 2 authority
@@ -142,8 +142,15 @@ python3 scripts/capture_command.py --label relevant-check --output relevant-chec
 python3 scripts/compare_evidence.py reproduced.json fixed.json result.json --reproduction confirmed --relevant-evidence relevant-check.json
 ```
 
+When the exact targeted reproducer is genuinely the only proportionate relevant check, do not reuse `fixed.json` as `--relevant-evidence` or pretend an additional command ran. Record that boundary explicitly instead:
+
+```bash
+python3 scripts/compare_evidence.py reproduced.json fixed.json result.json --reproduction confirmed --targeted-scope-sufficient --scope-rationale "Pure function; no additional integration boundary exists."
+```
+
 - Classify a passing targeted test with a failing captured relevant check as `FIX_REGRESSION`.
-- Classify a passing targeted test without a captured proportionate relevant check as `FIX_UNVERIFIED`, unless the project genuinely has no additional meaningful check and that limitation is explicit.
+- Classify a passing targeted test with a reused targeted receipt presented as an additional check as `FIX_UNVERIFIED`.
+- Classify a passing targeted test without a captured proportionate relevant check as `FIX_UNVERIFIED`, unless the project genuinely has no additional meaningful check and `--targeted-scope-sufficient` records the explicit rationale.
 
 ## Handle an existing bug report
 
@@ -162,9 +169,9 @@ When the user supplies a symptom, error, screenshot, stack trace, or failing beh
 - `NO_BUG_PROVEN` — Read-only discovery or approved candidate tests did not prove a correctness defect.
 - `INCONCLUSIVE` — Environment, nondeterminism, missing access, or ambiguous signals prevent a conclusion.
 - `STILL_FAILING` — The same reproducer continues to fail after an attempted fix.
-- `FIX_UNVERIFIED` — The reproducer passes, but captured proportionate correctness evidence is missing.
+- `FIX_UNVERIFIED` — The reproducer passes, but proportionate correctness evidence or an explicit targeted-only scope rationale is missing.
 - `FIX_REGRESSION` — The reproducer passes or changes, but a captured relevant correctness check fails.
-- `FIX_PROVEN` — The same reproducer goes red to green and a captured proportionate relevant check passes.
+- `FIX_PROVEN` — The same reproducer goes red to green and either a captured additional proportionate relevant check passes or targeted-only scope is explicitly justified.
 
 Never claim a bug from code inspection alone. Never claim a fix without red-to-green evidence.
 
@@ -198,13 +205,17 @@ If no bug is proven, preserve the project and say so plainly. A clean hunt is ev
   when the `python` launcher is slow or resolves to a store shim. Record the
   runtime in the evidence JSON.
 - Treat `--reproduction confirmed` as operator input, not independent proof.
-  `compare_evidence.py` accepts a passing broader check only through a captured
-  `--relevant-evidence` receipt. The agent or a fresh verifier must inspect the
-  captured commands, exit codes, output, and relevant-check scope before
-  accepting the status.
+  `compare_evidence.py` accepts an additional passing check only through a
+  captured `--relevant-evidence` receipt that is distinct from the targeted
+  reproducer. If the targeted reproducer is sufficient, declare that scope and
+  rationale explicitly. The agent or a fresh verifier must inspect the captured
+  commands, exit codes, output, and relevant-check scope before accepting the
+  status.
 - Do not use the upstream installer when the destination may already exist: it
-  force-removes the destination. Install only into an absent or separately
-  backed-up directory, then verify the resulting file list.
+  force-removes the destination. A backup does not authorize that removal.
+  Install only into an absent destination; request explicit replacement or
+  deletion authority before touching an existing one, then verify the resulting
+  file list.
 
 ## Gotchas
 
@@ -214,14 +225,16 @@ If no bug is proven, preserve the project and say so plainly. A clean hunt is ev
   suite invalidates the reproduction; it is not a product bug.
 - A clean hunt covers only the inspected scope. It never proves that the whole
   repository is bug-free.
-- `compare_evidence.py` classifies recorded receipts; it does not prove causal
-  root cause or independently run the relevant check.
+- `compare_evidence.py` classifies recorded receipts and declared scope; it does
+  not prove causal root cause, independently run the relevant check, or decide
+  whether targeted-only scope is actually sufficient.
 
 ## Troubleshooting
 
 - **capture command hangs on Windows**: replace the launcher with the explicit
   verified Python executable, reduce the timeout, and rerun the same command.
-- **FIX_UNVERIFIED**: run and capture the proportionate relevant check; do not
-  upgrade the label by hand.
+- **FIX_UNVERIFIED**: run and capture the proportionate relevant check, or
+  explicitly record why the targeted reproducer is sufficient; do not upgrade
+  the label by hand.
 - **INCONCLUSIVE**: check that before and after commands are byte-for-byte the
   same and that the failure signal matches the predicted assertion.

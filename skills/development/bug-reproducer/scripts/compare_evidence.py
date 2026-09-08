@@ -24,6 +24,8 @@ def classify(
     after: dict[str, Any],
     reproduction: str,
     relevant_evidence: dict[str, Any] | None,
+    targeted_scope_sufficient: bool,
+    scope_rationale: str | None,
 ) -> tuple[str, str]:
     if before.get("command") != after.get("command"):
         return "INCONCLUSIVE", "Before and after did not run the exact same targeted command."
@@ -35,11 +37,25 @@ def classify(
         return "INCONCLUSIVE", "The failing run was not confirmed to match the reported bug."
     if after.get("timed_out") or after.get("exit_code") != 0:
         return "STILL_FAILING", "The same targeted reproducer still fails after the attempted fix."
-    if relevant_evidence is None:
-        return "FIX_UNVERIFIED", "The targeted reproducer passes, but no captured proportionate relevant check was supplied."
-    if relevant_evidence.get("timed_out") or relevant_evidence.get("exit_code") != 0:
-        return "FIX_REGRESSION", "The targeted reproducer passes, but the captured relevant check fails or times out."
-    return "FIX_PROVEN", "The same reproducer changed from failing to passing and the captured proportionate relevant check passed."
+    if relevant_evidence is not None:
+        if duplicates_targeted_reproducer(before, after, relevant_evidence):
+            return "FIX_UNVERIFIED", "The purported relevant check duplicates the targeted reproducer; record targeted-only scope explicitly instead."
+        if relevant_evidence.get("timed_out") or relevant_evidence.get("exit_code") != 0:
+            return "FIX_REGRESSION", "The targeted reproducer passes, but the captured relevant check fails or times out."
+        return "FIX_PROVEN", "The same reproducer changed from failing to passing and the captured proportionate relevant check passed."
+    if targeted_scope_sufficient:
+        return "FIX_PROVEN", "The same reproducer changed from failing to passing; the declared targeted-only scope is the proportionate check."
+    return "FIX_UNVERIFIED", "The targeted reproducer passes, but no captured proportionate relevant check or targeted-only scope rationale was supplied."
+
+
+def duplicates_targeted_reproducer(
+    before: dict[str, Any], after: dict[str, Any], relevant_evidence: dict[str, Any]
+) -> bool:
+    return (
+        relevant_evidence == before
+        or relevant_evidence == after
+        or relevant_evidence.get("command") == after.get("command")
+    )
 
 
 def relevant_check_status(evidence: dict[str, Any] | None) -> str:
@@ -60,25 +76,52 @@ def main() -> None:
         choices=["confirmed", "unconfirmed"],
         default="unconfirmed",
     )
-    parser.add_argument(
+    relevant_group = parser.add_mutually_exclusive_group()
+    relevant_group.add_argument(
         "--relevant-evidence",
         type=Path,
         help="Evidence JSON captured from the proportionate relevant check.",
     )
+    relevant_group.add_argument(
+        "--targeted-scope-sufficient",
+        action="store_true",
+        help="Declare that the exact targeted reproducer is the only proportionate relevant check.",
+    )
+    parser.add_argument(
+        "--scope-rationale",
+        help="Why targeted-only scope is sufficient; required with --targeted-scope-sufficient.",
+    )
     args = parser.parse_args()
+    if args.targeted_scope_sufficient and not args.scope_rationale:
+        parser.error("--targeted-scope-sufficient requires --scope-rationale")
+    if args.scope_rationale and not args.targeted_scope_sufficient:
+        parser.error("--scope-rationale requires --targeted-scope-sufficient")
 
     before = load(args.before)
     after = load(args.after)
     relevant_evidence = load(args.relevant_evidence) if args.relevant_evidence else None
     relevant_check = relevant_check_status(relevant_evidence)
-    status, reason = classify(before, after, args.reproduction, relevant_evidence)
+    if relevant_evidence and duplicates_targeted_reproducer(before, after, relevant_evidence):
+        relevant_check = "duplicate-targeted"
+    if args.targeted_scope_sufficient:
+        relevant_check = "targeted-only"
+    status, reason = classify(
+        before,
+        after,
+        args.reproduction,
+        relevant_evidence,
+        args.targeted_scope_sufficient,
+        args.scope_rationale,
+    )
     result = {
         "schema_version": 1,
         "status": status,
         "reason": reason,
         "reproduction": args.reproduction,
         "relevant_check": relevant_check,
+        "relevant_scope": "targeted-only" if args.targeted_scope_sufficient else "additional" if relevant_evidence else "not-recorded",
         "relevant_evidence": str(args.relevant_evidence) if args.relevant_evidence else None,
+        "scope_rationale": args.scope_rationale,
         "same_command": before.get("command") == after.get("command"),
         "before": before,
         "after": after,

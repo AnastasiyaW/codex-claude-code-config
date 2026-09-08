@@ -14,38 +14,39 @@ Score a project's agent harness across five subsystems and tell the user which e
 
 ## What This Skill Does
 
-Given a project directory, produces a scorecard like this:
+Given a project directory, produces a scorecard like this. This example assumes
+`project-xyz` delivers features across sessions and uses pull requests:
 
 ```
 === Harness Audit: project-xyz ===
 
-Instructions  4/5  ✓ CLAUDE.md present, modular rules in .claude/rules/
-                   ✗ No project-level REVIEW.md for PR review guidance
-State         2/5  ✓ .claude/handoffs/ exists (3 files)
-                   ✗ No PROBLEMS.md - issues scattered in handoffs
-                   ✗ No feature_list.json - scope state not machine-readable
-Verification  3/5  ~ pytest configured; no current execution receipt supplied
-                   ✗ No documented bootstrap command
-                   ✗ 3-layer gate not documented in CLAUDE.md
+Instructions  4/5  ✓ Agent entrypoint and modular rules are documented and used
+                   ~ PR review guidance is not found in the inspected evidence
+State         2/5  ✓ 3 handoffs preserve some continuation state
+                   ✗ No current record locates active scope and deferred work
+                   ~ PROBLEMS.md / feature_list.json are suitable conventions, not prerequisites
+Verification  3/5  ✓ Documented test command; pytest is configured
+                   ~ No current execution receipt supplied
+                   ✗ No documented staged validation/proof route
 Scope         3/5  ✓ in-scope principle in CLAUDE.md
-                   ~ concurrency policy is not documented for this project
+                   ~ shared-resource policy is unknown; no serialized lane is declared
                    ✗ Definition of Done not explicit
-Lifecycle     2/5  ✗ No SessionStart hook (no .claude/settings.json)
-                   ✗ No Stop hook for clean-state check
+Lifecycle     2/5  ✗ Needed session-boundary entry/stop behavior is not documented or demonstrated
                    ~ Manual cleanup convention exists but not enforced
 
-Bottleneck: State (2/5) — lack of structured progress tracking
+Bottleneck: State (2/5) — no current locator for feature scope and deferred work
 
 Priority improvement (only when the user asks for recommendations):
 - Record an execution receipt for the existing test command   ↗ Verification evidence
 ```
 
 For an **audit-only** request, this skill produces the scorecard without making
-changes. If the user also requested correction or implementation, the scorecard
-is an intermediate result: return the confirmed findings to the owning task and
-execute its necessary, authorized reversible fixes, verification and delivery.
-Do not stop at a report or assign agent-owned fixes back to the user. Preserve
-the original acceptance criteria and real external/irreversible boundaries.
+changes or running probes merely to convert `unknown` into a pass. If the user
+also requested correction or implementation, the scorecard is an intermediate
+result: return the confirmed findings to the owning task and execute its
+necessary, authorized reversible fixes, verification and delivery. Do not stop
+at a report or assign agent-owned fixes back to the user. Preserve the original
+acceptance criteria and real external/irreversible boundaries.
 
 ---
 
@@ -85,12 +86,16 @@ Use `Glob` + `Read` for the harness, then inspect the smallest relevant evidence
 
 ### Phase 2 — Score
 
-For each subsystem, use the checks in `references/checklist-per-subsystem.md`. Mark every finding as `documented`, `demonstrated`, or `unknown`; score from evidence rather than file presence alone.
+For each subsystem, first identify the project delivery model and applicable
+outcomes in `references/checklist-per-subsystem.md`. Mark every finding as
+`documented`, `demonstrated`, or `unknown`; score from evidence rather than file
+presence alone. The canonical files in the table are useful conventions, not
+universal prerequisites.
 
-- **5** = documented, demonstrated, and consistently followed for the project type
-- **4** = strong evidence with bounded gaps
-- **3** = basics exist but behavioral evidence or continuity is partial
-- **2** = weak or mostly undocumented/demonstrated only by stale evidence
+- **5** = applicable outcomes are documented, demonstrated, and consistently followed
+- **4** = documented and demonstrated with bounded gaps
+- **3** = only documented, only demonstrated, materially partial, or unknown at a relevant boundary
+- **2** = isolated or stale structure does not meet most applicable outcomes
 - **1** = missing or actively harmful
 
 For each subsystem, list:
@@ -102,7 +107,7 @@ For each subsystem, list:
 
 The lowest-scoring subsystem is the bottleneck. **Even if other subsystems are weaker by absolute count of checks**, the lowest score is the one to fix first because it limits the value of the rest.
 
-Tie-breaker (multiple subsystems at same low score): pick the one whose improvement *unlocks* progress in others. State usually wins ties because feature_list.json + PROBLEMS.md unlock Verification and Scope checks.
+Tie-breaker (multiple subsystems at same low score): pick the one whose improvement *unlocks* progress in others. State often wins when the project lacks a durable locator for active scope and unresolved work; do not assume two particular filenames are required.
 
 ### Phase 4 — Prioritized Improvement Plan
 
@@ -151,12 +156,12 @@ Keep the entire output under 50 lines. The user is scanning for next steps, not 
 
 ---
 
-## Quick Self-Audit (for skill development)
+## Gotchas
 
-This skill is itself a `[LONG-RUN]`-style artifact. To audit the audit:
+- A scorecard example must use the same evidence rules as the checklist; a missing filename alone does not prove a missing outcome.
+- Presence of this skill or its rubric is not proof that auditors apply it consistently. Do not cite an example-evaluation file unless it actually exists and was inspected.
 
-- **Instructions**: SKILL.md is this file (✓)
-- **State**: Scoring decisions are reproducible from `references/scoring-rubric.md` (✓)
-- **Verification**: 5 example evals in `references/example-audits.md` (TODO if added)
-- **Scope**: Clear "what this skill is NOT" section (✓)
-- **Lifecycle**: No hooks needed — this is a query skill, not a continuous one (N/A)
+## Troubleshooting
+
+- **Two auditors give different scores to the same evidence:** compare the declared delivery model and applicable outcomes, then resolve the checklist/example contradiction; do not add files just to raise the score.
+- **An authorized repair ends at the scorecard:** return each confirmed finding to the original task, implement the necessary correction and verify it. An audit-only request remains read-only.

@@ -7,10 +7,15 @@ at an immutable audited revision.
 - Retrieved/audited: 2026-09-04
 - Upstream license: [LICENSE-upstream](LICENSE-upstream)
 
-The files under `agents/`, `references/`, and `scripts/` are byte-equivalent to
-that revision after normalizing CRLF to LF. `SKILL.md` starts from the same
-upstream workflow and keeps the locally installed Windows evidence notes. The
-local authority adaptation makes an explicit request to fix a reported bug count
-as approval for the normal reversible reproduction and causal repair inside that
-request's scope; gates remain for discovery-only requests and material scope
-changes.
+The files under `agents/`, `references/`, and `scripts/capture_command.py` are
+byte-equivalent to that revision after normalizing CRLF to LF.
+
+Local adaptations are:
+
+- `SKILL.md`: Windows evidence notes, task-authority gates, proportionate-check
+  scope, report-location guidance, and deletion/install authority boundaries.
+- `scripts/compare_evidence.py`: receipt-backed relevant-check classification
+  plus explicit targeted-only scope recording.
+- `scripts/generate_report.py`: local relevant-check scope fields.
+- `scripts/test_compare_evidence.py`: local entrypoint regression controls;
+  this file has no upstream counterpart.
