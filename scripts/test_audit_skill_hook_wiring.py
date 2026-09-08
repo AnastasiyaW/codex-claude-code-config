@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -99,6 +100,46 @@ class AuditSkillHookWiringTests(unittest.TestCase):
                 router_path=paths["router"],
             )
         self.assertTrue(report["checks"]["all_hook_targets_exist"])
+
+    def test_executable_only_hook_requires_resolvable_binary(self) -> None:
+        temp, paths = self.make_fixture()
+        with temp:
+            data = json.loads(paths["hooks"].read_text(encoding="utf-8"))
+            data["hooks"]["Stop"] = [{"hooks": [{"command": "rtk hook claude"}]}]
+            paths["hooks"].write_text(json.dumps(data), encoding="utf-8")
+            with patch("audit_skill_hook_wiring.shutil.which", return_value=None):
+                missing_binary = audit(
+                    active_skills_root=paths["active"],
+                    source_skills_root=paths["source"],
+                    hooks_config=paths["hooks"],
+                    router_path=paths["router"],
+                )
+            with patch("audit_skill_hook_wiring.shutil.which", return_value="C:/tools/rtk.exe"):
+                resolved_binary = audit(
+                    active_skills_root=paths["active"],
+                    source_skills_root=paths["source"],
+                    hooks_config=paths["hooks"],
+                    router_path=paths["router"],
+                )
+        self.assertIn("all_hook_targets_exist", missing_binary["failures"])
+        self.assertIn("missing executable rtk", missing_binary["hooks"]["errors"][-1])
+        self.assertEqual(resolved_binary["failures"], [])
+
+    def test_interpreter_does_not_mask_missing_script_payload(self) -> None:
+        temp, paths = self.make_fixture()
+        with temp:
+            data = json.loads(paths["hooks"].read_text(encoding="utf-8"))
+            data["hooks"]["Stop"] = [{"hooks": [{"command": "python missing.py"}]}]
+            paths["hooks"].write_text(json.dumps(data), encoding="utf-8")
+            with patch("audit_skill_hook_wiring.shutil.which", return_value="C:/tools/python.exe"):
+                report = audit(
+                    active_skills_root=paths["active"],
+                    source_skills_root=paths["source"],
+                    hooks_config=paths["hooks"],
+                    router_path=paths["router"],
+                )
+        self.assertIn("all_hook_targets_exist", report["failures"])
+        self.assertIn("missing target", report["hooks"]["errors"][-1])
 
 
 if __name__ == "__main__":

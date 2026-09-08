@@ -12,6 +12,8 @@ import argparse
 import importlib.util
 import json
 import re
+import shlex
+import shutil
 import sys
 from collections import Counter
 from pathlib import Path
@@ -31,10 +33,41 @@ FRONTMATTER_RE = re.compile(
 # reported a real, wired .js hook as a missing target and failed the whole audit
 # on a false positive -- the loud-gate failure, in a validator.
 HOOK_EXTENSIONS = r"(?:py|js|mjs|cjs|ts|ps1|sh|cmd|bat|exe)"
+HOOK_SCRIPT_EXTENSIONS = {".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".sh", ".cmd", ".bat"}
 HOOK_PATH_RE = re.compile(
     rf"(?:[\"']([^\"']+\.{HOOK_EXTENSIONS})[\"']|((?:[A-Za-z]:[\\/]|/)[^\s\"']+\.{HOOK_EXTENSIONS}))",
     re.IGNORECASE,
 )
+
+
+def command_tokens(command: str) -> list[str]:
+    """Split a hook command without evaluating it or invoking a shell."""
+    try:
+        return shlex.split(command, posix=False)
+    except ValueError:
+        return []
+
+
+def configured_script_target(command: str, config_path: Path) -> Path | None:
+    """Return a referenced hook script, preserving quoted and absolute paths."""
+    match = HOOK_PATH_RE.search(command)
+    target_raw = (match.group(1) or match.group(2)) if match else None
+    if target_raw is None:
+        for token in command_tokens(command):
+            candidate = token.strip("\"'")
+            if Path(candidate).suffix.lower() in HOOK_SCRIPT_EXTENSIONS:
+                target_raw = candidate
+                break
+    if target_raw is None:
+        return None
+    target = Path(target_raw)
+    return target if target.is_absolute() else config_path.parent / target
+
+
+def configured_executable(command: str) -> str | None:
+    """Return the command executable name without interpreting shell syntax."""
+    tokens = command_tokens(command)
+    return tokens[0].strip("\"'") if tokens else None
 
 
 
@@ -111,21 +144,26 @@ def hook_rows(config_path: Path) -> tuple[list[dict[str, Any]], list[str]]:
                     errors.append(f"{event}[{group_index}][{hook_index}]: hook is not an object")
                     continue
                 command = str(hook.get("command") or "")
-                match = HOOK_PATH_RE.search(command)
-                target_raw = (match.group(1) or match.group(2)) if match else None
-                target = Path(target_raw) if target_raw else None
-                if target is not None and not target.is_absolute():
-                    target = config_path.parent / target
-                if target is None:
-                    errors.append(f"{event}[{group_index}][{hook_index}]: no supported hook target")
-                elif not target.is_file():
-                    errors.append(f"{event}[{group_index}][{hook_index}]: missing target {target}")
+                target = configured_script_target(command, config_path)
+                exists = bool(target and target.is_file())
+                if target is not None:
+                    if not exists:
+                        errors.append(f"{event}[{group_index}][{hook_index}]: missing target {target}")
+                else:
+                    executable = configured_executable(command)
+                    resolved = shutil.which(executable) if executable else None
+                    if resolved is None:
+                        missing = executable or "supported hook target"
+                        errors.append(f"{event}[{group_index}][{hook_index}]: missing executable {missing}")
+                    else:
+                        target = Path(resolved)
+                        exists = True
                 rows.append(
                     {
                         "event": event,
                         "command": command,
                         "target": str(target) if target else None,
-                        "exists": bool(target and target.is_file()),
+                        "exists": exists,
                     }
                 )
     return rows, errors
@@ -235,8 +273,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     # This audit is Codex-oriented -- see --hooks-config below. Its skills root must be
     # the Codex skills root, or the pair describes two different harnesses and the report
-    # is about neither. It defaulted to ~/.agents/skills, which Codex does not read at all,
-    # so "active skills: 0" was reported as a finding rather than as a wrong root.
+    # is about neither. The Codex sync/runtime catalog can include ~/.agents/skills as a
+    # shared root, but this audit intentionally keeps its declared active root scoped to
+    # ~/.codex/skills rather than silently expanding the scan.
     # Point it at a Claude tree explicitly to audit Claude Code instead.
     parser.add_argument("--active-skills-root", type=Path, default=Path.home() / ".codex" / "skills")
     parser.add_argument("--source-skills-root", type=Path, default=repo_root / "skills")
