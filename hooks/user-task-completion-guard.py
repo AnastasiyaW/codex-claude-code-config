@@ -37,6 +37,8 @@ from typing import Any
 REQUEST_SCHEMA = "agent-user-task-request/v1"
 STATE_SCHEMA = "agent-user-task-state/v1"
 TERMINAL_RECEIPT_SCHEMA = "agent-user-task-terminal-receipt/v1"
+CHILD_RESULT_RECEIPT_SCHEMA = "agent-child-result-receipt/v1"
+CHILD_JOIN_RECEIPT_SCHEMA = "agent-child-join-receipt/v1"
 RECONCILIATION_OBSERVATION_SCHEMA = "agent-reconciliation-observation/v1"
 RECONCILIATION_REGISTRATION_SCHEMA = "agent-reconciliation-registration-receipt/v1"
 CYCLE_SCHEMA = "agent-task-cycle/v1"
@@ -67,6 +69,11 @@ MACHINE_PROMPT_ENVELOPE = re.compile(
 )
 TRANSCRIPT_TAIL_LIMIT = 16 * 1024 * 1024
 TRANSCRIPT_RECORD_LIMIT = 512
+NATIVE_SPAWN_TOOL_NAMES = {"collaboration.spawn_agent", "spawn_agent", "Task"}
+USER_TASK_MARKER = re.compile(
+    r"(?:user[_-]?task[_-]?id|<user-task\s+id)\s*(?:=|:)\s*[\"']?([^\"'\s>/]+)",
+    re.IGNORECASE,
+)
 
 
 def load_task_cycle_controller() -> Any:
@@ -521,6 +528,174 @@ def evidence_files(task_dir: Path, values: Any, label: str) -> None:
         evidence_file(task_dir, value, label)
 
 
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def parse_tool_json(value: Any) -> dict[str, Any]:
+    """Return one native tool envelope without treating prose as an event."""
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def native_task_marker(arguments: dict[str, Any]) -> str:
+    direct = arguments.get("user_task_id") or arguments.get("userTaskId")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    message = arguments.get("message") or arguments.get("prompt")
+    if not isinstance(message, str):
+        return ""
+    match = USER_TASK_MARKER.search(message)
+    return match.group(1) if match else ""
+
+
+def native_child_identifier(value: Any) -> str:
+    """Read only documented identifier-shaped fields from tool data."""
+    if not isinstance(value, dict):
+        return ""
+    for key in ("task_path", "taskPath", "agent_id", "agentId", "threadId", "task_name", "taskName"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
+def observed_native_children(event: dict[str, Any], task_id: str) -> set[str]:
+    """Return native children whose spawn call explicitly binds this work order.
+
+    Desktop currently does not persist collaboration calls in its rollout JSONL.
+    This parser deliberately returns an empty set in that case: absence of an
+    observable native event is a coverage limitation, not evidence that no
+    child was spawned.  If a supported runtime does emit the normal custom
+    tool envelope, the expected child set comes from that envelope rather than
+    from parent-maintained ``state.json.children``.
+    """
+    transcript = str(event.get("transcript_path") or "").strip()
+    if not transcript:
+        return set()
+    calls: dict[str, str] = {}
+    completed: dict[str, str] = {}
+    for row in reversed(list(reverse_jsonl_rows(Path(transcript)))):
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        if payload.get("type") != "custom_tool_call":
+            continue
+        if payload.get("name") not in NATIVE_SPAWN_TOOL_NAMES:
+            continue
+        if payload.get("status") != "completed":
+            continue
+        arguments = parse_tool_json(payload.get("input") or payload.get("arguments"))
+        if native_task_marker(arguments) != task_id:
+            continue
+        child_id = native_child_identifier(arguments)
+        call_id = payload.get("call_id")
+        if child_id and isinstance(call_id, str) and call_id:
+            calls[call_id] = child_id
+
+    if not calls:
+        return set()
+    for row in reversed(list(reverse_jsonl_rows(Path(transcript)))):
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        if payload.get("type") != "custom_tool_call_output":
+            continue
+        call_id = payload.get("call_id")
+        if not isinstance(call_id, str) or call_id not in calls:
+            continue
+        output = payload.get("output")
+        if isinstance(output, list):
+            for block in output:
+                if isinstance(block, dict):
+                    parsed = parse_tool_json(block.get("text") or block.get("input_text"))
+                    identifier = native_child_identifier(parsed)
+                    if identifier:
+                        completed[call_id] = identifier
+                        break
+        else:
+            identifier = native_child_identifier(parse_tool_json(output))
+            if identifier:
+                completed[call_id] = identifier
+    # A dispatch is observed only after its completed call has a parseable
+    # native result.  An input envelope or failed tool result is not a child.
+    return set(completed.values())
+
+
+def assess_children(task_dir: Path, state: dict[str, Any], expected: set[str]) -> str | None:
+    """Validate the declared child scope and its result/join receipt chain."""
+    raw_children = state.get("children")
+    if raw_children is None:
+        if expected:
+            return "native transcript observed child spawn(s) missing from state.json.children: " + ", ".join(sorted(expected))
+        return None
+    if not isinstance(raw_children, list):
+        return "state.json.children must be a list"
+    declared: set[str] = set()
+    for index, child in enumerate(raw_children):
+        label = f"children[{index}]"
+        if not isinstance(child, dict):
+            return f"{label} must be an object"
+        try:
+            child_id = nonempty(child.get("child_id"), f"{label}.child_id")
+            scope = nonempty(child.get("scope"), f"{label}.scope")
+        except ValueError as exc:
+            return str(exc)
+        if child_id in declared:
+            return f"duplicate child_id: {child_id}"
+        declared.add(child_id)
+        if child.get("status") != "JOINED":
+            return f"{child_id}: child is {child.get('status')!r}, not JOINED"
+        try:
+            result_path = evidence_file(task_dir, child.get("result_receipt"), f"{child_id}.result_receipt")
+            result_hash = nonempty(child.get("result_receipt_sha256"), f"{child_id}.result_receipt_sha256")
+            if result_hash != sha256_file(result_path):
+                return f"{child_id}: result receipt digest is stale"
+            result = load_json(result_path)
+            if result.get("schema") != CHILD_RESULT_RECEIPT_SCHEMA:
+                return f"{child_id}: result receipt schema is invalid"
+            if (
+                result.get("task_id") != state.get("task_id")
+                or result.get("request_sha256") != state.get("request_sha256")
+                or result.get("child_id") != child_id
+                or result.get("scope") != scope
+            ):
+                return f"{child_id}: result receipt does not bind this task, request, child id, and scope"
+            result_text = nonempty(result.get("result"), f"{child_id}.result_receipt.result")
+            if result.get("result_sha256") != prompt_digest(result_text):
+                return f"{child_id}: result receipt result_sha256 is stale"
+            child_evidence = evidence_file(task_dir, result.get("evidence"), f"{child_id}.result_receipt.evidence")
+            if result.get("evidence_sha256") != sha256_file(child_evidence):
+                return f"{child_id}: result receipt evidence digest is stale"
+            utc_timestamp(result.get("recorded_at"), f"{child_id}.result_receipt.recorded_at")
+
+            join_path = evidence_file(task_dir, child.get("join_receipt"), f"{child_id}.join_receipt")
+            join = load_json(join_path)
+            if join.get("schema") != CHILD_JOIN_RECEIPT_SCHEMA:
+                return f"{child_id}: join receipt schema is invalid"
+            if (
+                join.get("task_id") != state.get("task_id")
+                or join.get("request_sha256") != state.get("request_sha256")
+                or join.get("child_id") != child_id
+                or join.get("scope") != scope
+            ):
+                return f"{child_id}: join receipt does not bind this task, request, child id, and scope"
+            if join.get("result_receipt") != child.get("result_receipt") or join.get("result_receipt_sha256") != result_hash:
+                return f"{child_id}: join receipt does not bind the current result receipt"
+            utc_timestamp(join.get("joined_at"), f"{child_id}.join_receipt.joined_at")
+        except ValueError as exc:
+            return str(exc)
+    if not expected:
+        return None
+    if not expected.issubset(declared):
+        missing = sorted(expected - declared)
+        return "state.json.children is missing observed child " + ", ".join(missing)
+    return None
+
+
 def nonempty(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must be a non-empty string")
@@ -803,7 +978,11 @@ def assess_items(task_dir: Path, state: dict[str, Any]) -> tuple[str, str]:
     return "COMPLETE", f"{total}/{total} collection items PASS with local receipts"
 
 
-def assess_task(root: Path, request: dict[str, Any]) -> tuple[str, str]:
+def assess_task(
+    root: Path,
+    request: dict[str, Any],
+    event: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     task_id = nonempty(request.get("task_id"), "request task_id")
     path = state_path(root, task_id)
     if not path.is_file():
@@ -821,6 +1000,10 @@ def assess_task(root: Path, request: dict[str, Any]) -> tuple[str, str]:
             return "INCOMPLETE", f"state status is {status}; write the result and its local receipt"
         if status not in TERMINAL_STATUSES:
             raise ValueError(f"unknown task status {status!r}")
+        expected_children = observed_native_children(event or {}, task_id)
+        child_defect = assess_children(path.parent, state, expected_children)
+        if child_defect:
+            return "INCOMPLETE", child_defect
         # ``requires_inventory`` means an inventory is mandatory. It never means
         # that an explicitly supplied item contract may be ignored. Otherwise a
         # parent COMPLETE/BLOCKED_EXTERNAL can silently hide a child that is still
@@ -852,7 +1035,12 @@ def assess_task(root: Path, request: dict[str, Any]) -> tuple[str, str]:
         return "INCOMPLETE", str(exc)
 
 
-def record_terminal_receipt(root: Path, request: dict[str, Any], outcome: str) -> None:
+def record_terminal_receipt(
+    root: Path,
+    request: dict[str, Any],
+    outcome: str,
+    event: dict[str, Any] | None = None,
+) -> None:
     """Bind an already-validated terminal state to the project task.
 
     The archive ledger reads this small receipt rather than treating a hand-edited
@@ -860,12 +1048,23 @@ def record_terminal_receipt(root: Path, request: dict[str, Any], outcome: str) -
     requires the guard to validate it again before the projection closes.
     """
     task_id = nonempty(request.get("task_id"), "request task_id")
-    state_bytes = state_path(root, task_id).read_bytes()
+    state_file = state_path(root, task_id)
+    state_bytes = state_file.read_bytes()
+    state = load_json(state_file)
+    expected_children = observed_native_children(event or {}, task_id)
+    declared_children = state.get("children")
+    if expected_children:
+        child_coverage = "OBSERVED_TAIL"
+    elif isinstance(declared_children, list) and declared_children:
+        child_coverage = "LIMITED"
+    else:
+        child_coverage = "NOT_APPLICABLE"
     write_json_atomic(terminal_receipt_path(root, task_id), {
         "schema": TERMINAL_RECEIPT_SCHEMA,
         "task_id": task_id,
         "outcome": outcome,
         "state_sha256": hashlib.sha256(state_bytes).hexdigest(),
+        "child_coverage": child_coverage,
         "recorded_at": now_utc(),
     })
 
@@ -927,7 +1126,7 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
         return 0
     unresolved = assess_reconciliation_observations(root)
     for request in task_requests(root, session_id(event)):
-        outcome, detail = assess_task(root, request)
+        outcome, detail = assess_task(root, request, event)
         if outcome == "INCOMPLETE":
             prompt = " ".join(str(request.get("prompt") or "").split())
             if len(prompt) > 500:
@@ -937,7 +1136,7 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
                 f".agent/user-tasks/{request['task_id']}/request.json now: {prompt}"
             )
         else:
-            record_terminal_receipt(root, request, outcome)
+            record_terminal_receipt(root, request, outcome, event)
     if not unresolved:
         return 0
     print(json.dumps({

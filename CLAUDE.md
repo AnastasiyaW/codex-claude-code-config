@@ -314,6 +314,9 @@ Sources: [2603.14703] Multi-Agent System Optimization, [2603.13256] Training-Fre
 - **Function-level** -- one agent, one file -> standard workflow
 - **System-level** -- multiple files, cross-cutting concerns -> needs multi-agent
 
+With explicit user authorization, two or more independent bounded scopes use the actually available
+native `Task`/`collaboration.spawn_agent` and join under [`rules/finish-the-task.md`](rules/finish-the-task.md#автоматическое-сотрудничество-нативных-агентов); coupled files alone are not a dispatch trigger.
+
 ### Control-flow + Data-flow Representation
 Before system-level optimization: build a dependency graph (which components call which, which data flows where). This reveals bottlenecks and side effects invisible at function-level analysis.
 

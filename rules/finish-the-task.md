@@ -240,6 +240,41 @@ observation-only monitor, or when the recovery action lacks current authority. A
 P6 не разрешает заглушки, ложный PASS, ослабление принятой безопасности или завышение статуса.
 Мы честно называем границу текущего результата, но не держим её заложником будущего.
 
+## Автоматическое сотрудничество нативных агентов
+
+Явное разрешение пользователя на автоматическое сотрудничество означает: когда в текущей
+задаче есть **две или больше независимых, ограниченных scope**, родитель сам вызывает доступный
+нативный dispatch (`collaboration.spawn_agent` в Codex desktop или `Task` в Claude). Не просит
+разрешение на каждый spawn, не заменяет его dashboard/планом/mclaude и не подменяет одного
+провайдера другим. Каждый child получает уникальный `child_id`, исключительный scope, acceptance
+criteria и task-bound skill contract; scope child не расширяет исходную задачу.
+
+Родитель не завершает user work order до механического `JOINED` каждого child: под
+`.agent/user-tasks/<REQ>/` лежат его result receipt и parent join receipt, оба привязаны к
+`child_id`, scope и актуальному SHA-256 result receipt. `state.json.children[]` содержит те же
+идентификаторы, scope и ссылки. Если runtime transcript действительно сохраняет native spawn,
+spawn prompt обязан передать `user_task_id=<REQ>`; Stop guard выводит expected children из этих
+tool events в доступном transcript tail и блокирует отсутствующего **наблюдаемого** child, а не
+доверяет только добровольному списку родителя. Tail неполон по определению: ненаблюдаемый
+declared child не является лишним и не доказывает отсутствие spawn.
+
+Покрытие называется `LIMITED`, когда текущий runtime не экспортирует native collaboration events:
+отсутствие такого event не доказывает отсутствие child и не создаёт ложный блок. В этом режиме
+guard всё ещё проверяет объявленные children и их digest-bound join chain; реальную полноту
+desktop dispatch не может подтвердить без экспортируемого native event; сохранённые native tool
+results — локальное evidence, а не подмена этого отсутствующего export. Не использовать старый `Agent` lifecycle
+как доказательство desktop `collaboration.spawn_agent`: он применим только там, где соответствующие
+hook events фактически наблюдаются.
+
+**Source receipt (2026-09-08).** [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)
+documents delegation from applicable `AGENTS.md` or skill instructions and collection in the main
+response; [Claude subagents](https://code.claude.com/docs/en/sub-agents) documents concurrent
+background work. [Codex issue #36973](https://github.com/openai/codex/issues/36973) records that
+an explicit-request-only developer instruction wins over generic delegation hints. This user’s
+explicit authorization and this rule are that required request; neither source supplies a desktop
+transcript export, hence the `LIMITED` receipt boundary above. Where a supported transcript tail
+does contain completed native calls, terminal receipt uses `OBSERVED_TAIL`, not an exhaustive claim.
+
 ## Исключения — только реальный блокер или переполнение контекста
 - Реальное переполнение контекста (≈>85%): **создать handoff** (не просто остановиться).
   Путь: `<cwd>/.claude/handoffs/<project-slug>/ГГГГ-ММ-ДД_ЧЧ-ММ_<session-id>.md` + строка в

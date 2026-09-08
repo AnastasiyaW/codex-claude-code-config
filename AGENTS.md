@@ -124,16 +124,21 @@ After installing into a local Codex/Claude environment, also run
 
 ## Delegating agents
 
+When the user explicitly authorizes automatic cooperation and the current work has two or more
+independent, bounded scopes (not merely two coupled files), dispatch them with the actually
+available native `collaboration.spawn_agent`/`Task` tool and join their receipt-bound results as
+required by [`rules/finish-the-task.md`](rules/finish-the-task.md#автоматическое-сотрудничество-нативных-агентов).
+
 Before dispatching any Claude subagent, render the task-bound contract with
 `python hooks/agent-skill-contract.py --task "<child task>"`; use `--profile
 codex` only for a manually rendered Codex brief. Append it to
 the exact child prompt. It selects the minimum curated skill set (or an explicit
 no-route result), requires source-backed decisions, and records `INCONCLUSIVE`
-when no current source is available. Claude Code checks the contract at its
-native `Task` boundary. Codex `PreToolUse(Agent)` inserts or validates the
-client-specific contract before dispatch, `PostToolUse(Agent)` binds it to the
-returned child id, `SubagentStart` reinforces the method, and `SubagentStop`
-requires the bound decision-source receipt.
+when no current source is available. Claude `Task` and Codex
+`PreToolUse(Agent)`/`PostToolUse(Agent)` plus `SubagentStart`/`SubagentStop` are
+contract enforcement only where those events are actually emitted; current desktop
+`collaboration.spawn_agent` bypasses them and has `LIMITED` transcript coverage
+under the linked rule.
 The rendered contract also keeps explicit task instructions above skill
 methodology and requires the child to name the exact skill instruction whenever
 that methodology causes a pause or divergence. A missing routed skill starts a

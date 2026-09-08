@@ -10,6 +10,7 @@ These tests make the hook expectations executable:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -107,6 +108,211 @@ class TaskCompletionHookTests(unittest.TestCase):
         config = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
         self.assertEqual(set(config), {"hooks"})
         self.assertIsInstance(config["hooks"], dict)
+
+    def test_native_child_join_receipts_gate_completion_when_transcript_is_available(self) -> None:
+        """A native event, not a voluntary state list, supplies expected children."""
+        with tempfile.TemporaryDirectory(prefix="native-child-join-") as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".git").mkdir()
+            prompt = "Implement the bounded cooperation proof."
+            session = "session-native"
+            recorded = subprocess.run(
+                [sys.executable, str(USER_TASK_GUARD)],
+                input=json.dumps({"prompt": prompt, "session_id": session}),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+            request_path = next((tmp_path / ".agent" / "user-tasks").glob("*/request.json"))
+            task_dir = request_path.parent
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            task_id = request["task_id"]
+            parent_evidence = task_dir / "evidence" / "parent.txt"
+            parent_evidence.parent.mkdir()
+            parent_evidence.write_text("parent synthesis\n", encoding="utf-8")
+            transcript = tmp_path / "native-transcript.jsonl"
+            spawn_call = {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "collaboration.spawn_agent",
+                    "status": "completed",
+                    "call_id": "spawn-1",
+                    "input": json.dumps({
+                        "task_name": "child-build",
+                        "user_task_id": task_id,
+                        "message": f"user_task_id={task_id}; exclusive scope: parser",
+                    }),
+                },
+            }
+            spawn_output = {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "spawn-1",
+                    "output": [{"type": "input_text", "text": json.dumps({"task_path": "/root/child-build"})}],
+                },
+            }
+            transcript.write_text(
+                "\n".join(json.dumps(row) for row in (spawn_call, spawn_output)) + "\n",
+                encoding="utf-8",
+            )
+            state_path = task_dir / "state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state.update(
+                status="COMPLETE",
+                result="parent synthesis joined the bounded scopes",
+                evidence=["evidence/parent.txt"],
+                children=[{"child_id": "/root/child-build", "scope": "parser", "status": "PENDING"}],
+            )
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            state.pop("children")
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            omitted = subprocess.run(
+                [sys.executable, str(USER_TASK_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript), "session_id": session}),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(omitted.returncode, 0, omitted.stdout + omitted.stderr)
+            self.assertEqual(json.loads(omitted.stdout)["decision"], "block")
+            self.assertIn("observed child spawn", omitted.stdout)
+            state["children"] = [{"child_id": "/root/child-build", "scope": "parser", "status": "PENDING"}]
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            blocked = subprocess.run(
+                [sys.executable, str(USER_TASK_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript), "session_id": session}),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(blocked.returncode, 0, blocked.stdout + blocked.stderr)
+            self.assertEqual(json.loads(blocked.stdout)["decision"], "block")
+            self.assertIn("not JOINED", blocked.stdout)
+
+            result_text = "parser proof completed"
+            child_evidence = task_dir / "evidence" / "child-build-proof.txt"
+            child_evidence.write_text("native child proof\n", encoding="utf-8")
+            result_path = task_dir / "evidence" / "child-build-result.json"
+            result_path.write_text(json.dumps({
+                "schema": "agent-child-result-receipt/v1",
+                "task_id": task_id,
+                "request_sha256": request["prompt_sha256"],
+                "child_id": "/root/child-build",
+                "scope": "parser",
+                "result": result_text,
+                "result_sha256": hashlib.sha256(result_text.encode("utf-8")).hexdigest(),
+                "evidence": "evidence/child-build-proof.txt",
+                "evidence_sha256": hashlib.sha256(child_evidence.read_bytes()).hexdigest(),
+                "recorded_at": "2026-09-08T20:00:00+00:00",
+            }), encoding="utf-8")
+            result_digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
+            join_path = task_dir / "evidence" / "child-build-join.json"
+            join_path.write_text(json.dumps({
+                "schema": "agent-child-join-receipt/v1",
+                "task_id": task_id,
+                "request_sha256": request["prompt_sha256"],
+                "child_id": "/root/child-build",
+                "scope": "parser",
+                "result_receipt": "evidence/child-build-result.json",
+                "result_receipt_sha256": result_digest,
+                "joined_at": "2026-09-08T20:01:00+00:00",
+            }), encoding="utf-8")
+            state["children"] = [{
+                "child_id": "/root/child-build",
+                "scope": "parser",
+                "status": "JOINED",
+                "result_receipt": "evidence/child-build-result.json",
+                "result_receipt_sha256": result_digest,
+                "join_receipt": "evidence/child-build-join.json",
+            }]
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            state["children"][0]["result_receipt_sha256"] = "0" * 64
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            stale_digest = subprocess.run(
+                [sys.executable, str(USER_TASK_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript), "session_id": session}),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(stale_digest.returncode, 0, stale_digest.stdout + stale_digest.stderr)
+            self.assertEqual(json.loads(stale_digest.stdout)["decision"], "block")
+            self.assertIn("result receipt digest is stale", stale_digest.stdout)
+            state["children"][0]["result_receipt_sha256"] = result_digest
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            joined = subprocess.run(
+                [sys.executable, str(USER_TASK_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript), "session_id": session}),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(joined.returncode, 0, joined.stdout + joined.stderr)
+            self.assertEqual(joined.stdout.strip(), "", joined.stdout + joined.stderr)
+            terminal_receipt = task_dir / "terminal-receipt.json"
+            self.assertTrue(terminal_receipt.is_file())
+            self.assertEqual(json.loads(terminal_receipt.read_text(encoding="utf-8"))["child_coverage"], "OBSERVED_TAIL")
+
+            transcript.write_text("", encoding="utf-8")
+            limited = subprocess.run(
+                [sys.executable, str(USER_TASK_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript), "session_id": session}),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(limited.returncode, 0, limited.stdout + limited.stderr)
+            self.assertEqual(limited.stdout.strip(), "", limited.stdout + limited.stderr)
+            self.assertEqual(json.loads(terminal_receipt.read_text(encoding="utf-8"))["child_coverage"], "LIMITED")
+
+            state.pop("children")
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            transcript.write_text(json.dumps(spawn_call) + "\n", encoding="utf-8")
+            outputless = subprocess.run(
+                [sys.executable, str(USER_TASK_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript), "session_id": session}),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(outputless.returncode, 0, outputless.stdout + outputless.stderr)
+            self.assertEqual(outputless.stdout.strip(), "", outputless.stdout + outputless.stderr)
+            unrelated = dict(spawn_call)
+            unrelated["payload"] = dict(spawn_call["payload"])
+            unrelated["payload"]["input"] = json.dumps({
+                "task_name": "other-child", "user_task_id": "other-task", "message": "user_task_id=other-task",
+            })
+            transcript.write_text(json.dumps(unrelated) + "\n", encoding="utf-8")
+            no_false_block = subprocess.run(
+                [sys.executable, str(USER_TASK_GUARD)],
+                input=json.dumps({"transcript_path": str(transcript), "session_id": session}),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmp,
+                check=False,
+            )
+            self.assertEqual(no_false_block.returncode, 0, no_false_block.stdout + no_false_block.stderr)
+            self.assertEqual(no_false_block.stdout.strip(), "", no_false_block.stdout + no_false_block.stderr)
 
     def test_plugin_hook_configs_have_supported_top_level_schema(self) -> None:
         if not PLUGIN_CACHE.exists():
