@@ -9,13 +9,13 @@ Turn a codebase or bug report into evidence. When no bug is supplied, discover c
 
 ## Honor existing authority, then apply missing gates
 
-Invocation alone to hunt for unknown bugs is inspection-only. A direct request to fix or implement a reported bug, or to `find and fix` bugs in a named repository, authorizes the normal reversible reproduction tests and causal production edits inside that stated task. Record that authority and proceed through both evidence stages without stopping for duplicate confirmation, even when the exact responsible file is learned during diagnosis. Do not ask the user to approve the same scope twice.
+Invocation alone to hunt for unknown bugs is inspection-only. A direct request to fix or implement a reported bug, or to `find and fix` bugs in a named repository, authorizes the normal reversible reproduction tests and causal production edits inside that stated task. A direct request to reproduce a reported bug or create its regression test likewise authorizes the normal reversible reproduction files and commands, but not a production repair. Record the matching task scope and proceed without stopping for duplicate confirmation, even when the exact responsible file is learned during diagnosis. Do not ask the user to approve the same scope twice.
 
-If the user asked only to inspect, audit, find, isolate, or reproduce, do not infer permission to change production code. Before a gate that has not been satisfied, do not create or edit project files, install dependencies, run formatters or migrations, modify configuration, generate reports, create worktrees, or execute commands likely to mutate project state. Read source, configuration, documentation, existing tests, user-supplied logs, and Git history. Run an existing targeted test only when it is clearly safe and does not require project changes.
+If the user asked only to inspect, audit, find, or isolate, do not infer permission to create reproduction files or change production code. A direct reproduction or regression-test request authorizes only the normal reversible reproduction work described above; it does not authorize a production repair. Before a gate that has not been satisfied, do not create or edit project files, install dependencies, run formatters or migrations, modify configuration, generate reports, create worktrees, or execute commands likely to mutate project state. Read source, configuration, documentation, existing tests, user-supplied logs, and Git history. Run an existing targeted test only when it is clearly safe and does not require project changes.
 
 ### Gate 1 — test the candidate
 
-When the current request has not already authorized reproduction files and commands, present and stop at:
+When the current request has not explicitly authorized creating and running a reproducer, present and stop at:
 
 ```markdown
 ## Bug candidates
@@ -37,7 +37,7 @@ When the current request has not already authorized reproduction files and comma
 No project files have been modified. Do you want me to create and run these tests?
 ```
 
-List only candidates backed by a reachable code path, a defensible expected behavior, and a specific triggering input or state. Approval covers only the displayed reproduction files and commands. Test one strong candidate by default; batch at most three only when their files and commands are all explicit.
+List only candidates backed by a reachable code path, a defensible expected behavior, and a specific triggering input or state. Approval covers only the displayed reproduction files and commands. A direct request to reproduce a supplied symptom or write its regression test already satisfies this gate: record that scope and continue without requiring file names that diagnosis has not yet established. Test one strong candidate by default; batch at most three only when their files and commands are all explicit.
 
 ### Gate 2 — fix a proven bug
 
@@ -97,7 +97,7 @@ Show no more than five candidates and label confidence `high`, `medium`, or `low
 
 ### 4. Resolve Gate 1 authority
 
-- If the request already authorized reproduction work, record the matching task scope and continue.
+- If the request explicitly asked to reproduce a supplied symptom, create a regression test, or otherwise authorized reproduction work, record the matching task scope and continue. Do not require exact file names before diagnosis establishes them.
 - Otherwise show the ranked shortlist and exact test plan for the strongest one to three candidates.
 - Name every file and command that approval would cover.
 - State that no project files have been modified, then stop and wait.
@@ -133,16 +133,17 @@ python3 scripts/capture_command.py --label reproduced --output reproduced.json -
 ### 8. Prove red to green
 
 - Run the exact same targeted command used for failing evidence.
-- Run the broadest relevant suite, typecheck, lint, or build.
+- Run the narrowest additional check that meaningfully covers the changed behavior and its integration boundary. Escalate to a broader relevant suite, typecheck, lint, or build when the change's risk or contract requires it; record the selected scope and any unavailable or disproportionate checks as limitations.
 - Capture and classify the fixed run:
 
 ```bash
 python3 scripts/capture_command.py --label fixed --output fixed.json -- npm test -- path/to/regression.test.ts
-python3 scripts/compare_evidence.py reproduced.json fixed.json result.json --reproduction confirmed --full-suite passed
+python3 scripts/capture_command.py --label relevant-check --output relevant-check.json -- npm test -- path/to/affected-area
+python3 scripts/compare_evidence.py reproduced.json fixed.json result.json --reproduction confirmed --relevant-evidence relevant-check.json
 ```
 
-- Classify a passing targeted test with a failing relevant suite as `FIX_REGRESSION`.
-- Classify a passing targeted test without broader evidence as `FIX_UNVERIFIED`, unless the project genuinely has no broader checks and that limitation is explicit.
+- Classify a passing targeted test with a failing captured relevant check as `FIX_REGRESSION`.
+- Classify a passing targeted test without a captured proportionate relevant check as `FIX_UNVERIFIED`, unless the project genuinely has no additional meaningful check and that limitation is explicit.
 
 ## Handle an existing bug report
 
@@ -161,23 +162,18 @@ When the user supplies a symptom, error, screenshot, stack trace, or failing beh
 - `NO_BUG_PROVEN` — Read-only discovery or approved candidate tests did not prove a correctness defect.
 - `INCONCLUSIVE` — Environment, nondeterminism, missing access, or ambiguous signals prevent a conclusion.
 - `STILL_FAILING` — The same reproducer continues to fail after an attempted fix.
-- `FIX_UNVERIFIED` — The reproducer passes, but broader correctness evidence is missing.
-- `FIX_REGRESSION` — The reproducer passes or changes, but relevant correctness checks fail.
-- `FIX_PROVEN` — The same reproducer goes red to green and relevant broader checks pass.
+- `FIX_UNVERIFIED` — The reproducer passes, but captured proportionate correctness evidence is missing.
+- `FIX_REGRESSION` — The reproducer passes or changes, but a captured relevant correctness check fails.
+- `FIX_PROVEN` — The same reproducer goes red to green and a captured proportionate relevant check passes.
 
 Never claim a bug from code inspection alone. Never claim a fix without red-to-green evidence.
 
 ## Create the native report
 
-After a completed approved workflow, create:
-
-- `outputs/bug-reproducer-evidence.json` — captured test evidence and classification.
-- `outputs/bug-reproducer-report.md` — native report that opens directly in Codex and renders on GitHub.
-
-Prepare context JSON following `references/report-schema.md`, including discovery scope and ranked candidates when using `hunt-and-prove`, then run:
+Create a native report only when the user requests one or the repository requires one. Use the existing project evidence or audit location specified by the user or repository; do not create a generic `outputs/` directory. Prepare context JSON following `references/report-schema.md`, including discovery scope and ranked candidates when using `hunt-and-prove`, then run:
 
 ```bash
-python3 scripts/generate_report.py result.json context.json outputs/bug-reproducer-report.md
+python3 scripts/generate_report.py result.json context.json path/to/existing-evidence-location/bug-reproducer-report.md
 ```
 
 Include discovery evidence, tested candidates, minimal reproduction, root cause, approvals and scope, changed files, red/green commands, broader checks, limitations, and residual risks. Link the Markdown report in the final response.
@@ -192,7 +188,7 @@ Lead with the strongest evidence label, then report:
 4. Root cause, if proven
 5. Approved fix and red-to-green evidence, if requested
 6. Broader checks, limitations, and residual risk
-7. Link to `outputs/bug-reproducer-report.md`
+7. Link to the report when one was requested
 
 If no bug is proven, preserve the project and say so plainly. A clean hunt is evidence about the inspected scope, not proof that the entire codebase has no bugs.
 
@@ -201,10 +197,11 @@ If no bug is proven, preserve the project and say so plainly. A clean hunt is ev
 - On Windows, prefer an explicit verified Python executable in capture commands
   when the `python` launcher is slow or resolves to a store shim. Record the
   runtime in the evidence JSON.
-- Treat `--reproduction confirmed` and `--full-suite passed` as operator input,
-  not independent proof. The agent or a fresh verifier must inspect the captured
-  command, exit codes, output, and broader-suite evidence before accepting the
-  status.
+- Treat `--reproduction confirmed` as operator input, not independent proof.
+  `compare_evidence.py` accepts a passing broader check only through a captured
+  `--relevant-evidence` receipt. The agent or a fresh verifier must inspect the
+  captured commands, exit codes, output, and relevant-check scope before
+  accepting the status.
 - Do not use the upstream installer when the destination may already exist: it
   force-removes the destination. Install only into an absent or separately
   backed-up directory, then verify the resulting file list.
@@ -217,14 +214,14 @@ If no bug is proven, preserve the project and say so plainly. A clean hunt is ev
   suite invalidates the reproduction; it is not a product bug.
 - A clean hunt covers only the inspected scope. It never proves that the whole
   repository is bug-free.
-- `compare_evidence.py` classifies recorded evidence; it does not prove causal
-  root cause or independently run the broader suite.
+- `compare_evidence.py` classifies recorded receipts; it does not prove causal
+  root cause or independently run the relevant check.
 
 ## Troubleshooting
 
 - **capture command hangs on Windows**: replace the launcher with the explicit
   verified Python executable, reduce the timeout, and rerun the same command.
-- **FIX_UNVERIFIED**: run the broadest relevant suite and capture its result;
-  do not upgrade the label by hand.
+- **FIX_UNVERIFIED**: run and capture the proportionate relevant check; do not
+  upgrade the label by hand.
 - **INCONCLUSIVE**: check that before and after commands are byte-for-byte the
   same and that the failure signal matches the predicted assertion.

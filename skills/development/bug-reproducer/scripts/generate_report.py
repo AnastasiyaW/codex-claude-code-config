@@ -186,7 +186,7 @@ def build_report(evidence: dict[str, Any], context: dict[str, Any]) -> str:
         f"| Timed out | {cell(before.get('timed_out'))} | {cell(after.get('timed_out'))} |",
         f"| Duration | {number(before.get('duration_ms'))} ms | {number(after.get('duration_ms'))} ms |",
         f"| Same command | — | {cell(evidence.get('same_command'))} |",
-        f"| Broader suite | — | {cell(evidence.get('full_suite'))} |",
+        f"| Relevant check | — | {cell(evidence.get('relevant_check'))} |",
         "",
         "### Before — failing evidence",
         "",

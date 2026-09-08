@@ -23,7 +23,7 @@ def classify(
     before: dict[str, Any],
     after: dict[str, Any],
     reproduction: str,
-    full_suite: str,
+    relevant_evidence: dict[str, Any] | None,
 ) -> tuple[str, str]:
     if before.get("command") != after.get("command"):
         return "INCONCLUSIVE", "Before and after did not run the exact same targeted command."
@@ -35,11 +35,19 @@ def classify(
         return "INCONCLUSIVE", "The failing run was not confirmed to match the reported bug."
     if after.get("timed_out") or after.get("exit_code") != 0:
         return "STILL_FAILING", "The same targeted reproducer still fails after the attempted fix."
-    if full_suite == "failed":
-        return "FIX_REGRESSION", "The targeted reproducer passes, but broader relevant checks fail."
-    if full_suite == "not-run":
-        return "FIX_UNVERIFIED", "The targeted reproducer passes, but broader checks were not run."
-    return "FIX_PROVEN", "The same reproducer changed from failing to passing and broader checks passed."
+    if relevant_evidence is None:
+        return "FIX_UNVERIFIED", "The targeted reproducer passes, but no captured proportionate relevant check was supplied."
+    if relevant_evidence.get("timed_out") or relevant_evidence.get("exit_code") != 0:
+        return "FIX_REGRESSION", "The targeted reproducer passes, but the captured relevant check fails or times out."
+    return "FIX_PROVEN", "The same reproducer changed from failing to passing and the captured proportionate relevant check passed."
+
+
+def relevant_check_status(evidence: dict[str, Any] | None) -> str:
+    if evidence is None:
+        return "not-run"
+    if evidence.get("timed_out") or evidence.get("exit_code") != 0:
+        return "failed"
+    return "passed"
 
 
 def main() -> None:
@@ -53,21 +61,24 @@ def main() -> None:
         default="unconfirmed",
     )
     parser.add_argument(
-        "--full-suite",
-        choices=["passed", "failed", "not-run"],
-        default="not-run",
+        "--relevant-evidence",
+        type=Path,
+        help="Evidence JSON captured from the proportionate relevant check.",
     )
     args = parser.parse_args()
 
     before = load(args.before)
     after = load(args.after)
-    status, reason = classify(before, after, args.reproduction, args.full_suite)
+    relevant_evidence = load(args.relevant_evidence) if args.relevant_evidence else None
+    relevant_check = relevant_check_status(relevant_evidence)
+    status, reason = classify(before, after, args.reproduction, relevant_evidence)
     result = {
         "schema_version": 1,
         "status": status,
         "reason": reason,
         "reproduction": args.reproduction,
-        "full_suite": args.full_suite,
+        "relevant_check": relevant_check,
+        "relevant_evidence": str(args.relevant_evidence) if args.relevant_evidence else None,
         "same_command": before.get("command") == after.get("command"),
         "before": before,
         "after": after,
