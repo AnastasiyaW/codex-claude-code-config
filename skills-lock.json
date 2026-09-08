@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-08T18:24:28+00:00",
+  "generated_at": "2026-09-08T19:24:40+00:00",
   "skill_count": 57,
-  "aggregate_hash": "sha256:089f3b88dab183341c28420fceeb0967777259ec7d3d96a67f60f4f0f559a525",
+  "aggregate_hash": "sha256:b631411347d34a831b6565336f6d08a24d4077391b7183a74475ce69dea20a3d",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -557,15 +557,16 @@
       ]
     },
     "operational/desktop-sessions-discovery": {
-      "content_hash": "sha256:4955c6445db101dbfe845e9206cd3b3540fb08f25bc5abe7d43d7d024e189d0c",
-      "size_bytes": 48136,
-      "file_count": 5,
+      "content_hash": "sha256:faedf941c9a0549dd0ca909a82e43706b95e49f97f6484f30fe9bdd174304062",
+      "size_bytes": 50001,
+      "file_count": 6,
       "files": [
         "SKILL.md",
         "scripts/sessions_find.py",
         "scripts/sessions_inventory.py",
         "scripts/sessions_registry.py",
-        "scripts/sessions_restore.py"
+        "scripts/sessions_restore.py",
+        "scripts/test_sessions_find.py"
       ]
     },
     "operational/epistemic-challenge": {

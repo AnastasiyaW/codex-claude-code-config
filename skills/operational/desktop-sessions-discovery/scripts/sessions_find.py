@@ -120,7 +120,7 @@ def main() -> int:
                 continue
 
             if q:
-                hay = (meta.get("title", "") + " " + meta.get("cwd", "")).lower()
+                hay = " ".join((meta.get("title", ""), meta.get("cwd", ""), meta.get("session_id", ""))).lower()
                 if q not in hay:
                     continue
             matches.append(meta)
@@ -147,7 +147,7 @@ def main() -> int:
 
     print()
     print("# To restore: copy the local_xxxxxxxxxxxx prefix and run:")
-    print("#   python ~/.claude/scripts/sessions_restore.py local_xxxxxxxxxxxx")
+    print(f'#   python "{Path(__file__).resolve().with_name("sessions_restore.py")}" local_xxxxxxxxxxxx')
     return 0
 
 

@@ -64,7 +64,7 @@ Produces a self-contained HTML registry with:
 - **Sort** by recency / turns count / title A-Z / size
 - **Filter**: hide 0-turn auto-runs ("Morning digest", "Observer daily analysis"), hide already-restored
 - Per-accountId **collapsible sections**, active accountId highlighted green
-- **"Restore" button** per session — copies command to clipboard
+- **Selectable session ID** per session — select and copy it; the page does not perform a restore
 - **"RESTORED" badge** for sessions already migrated (read from `~/.claude/desktop-migrations.jsonl`)
 - Includes BOTH `claude-code-sessions/` (current) AND `local-agent-mode-sessions/` (legacy pre-Feb 2026)
 
@@ -79,12 +79,12 @@ Script: `scripts/sessions_inventory.py`
 
 Scans all `<accountId>/<orgId>/local_*.json`, prints grouped table with title/cwd/size/lastActivityAt sorted by recency. Includes cross-account view (which projects appear in multiple accountIds — useful when same user worked on the same project under different accounts).
 
-### 3. Find — search by title/cwd substring (text)
+### 3. Find — search by title, cwd, or session ID substring (text)
 
 Script: `scripts/sessions_find.py`
 
 ```bash
-python sessions_find.py "<query>"                  # substring in title or cwd
+python sessions_find.py "<query>"                  # substring in title, cwd, or session ID
 python sessions_find.py "<query>" --account <prefix>  # filter by accountId
 python sessions_find.py --since 2026-04-01         # date filter
 python sessions_find.py --untitled                  # parse-failed or empty
