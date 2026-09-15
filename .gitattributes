@@ -1,0 +1,5 @@
+# Delivery-case records are digest-bound: case.json stores the sha256 of each
+# evidence file and review receipt as written. With core.autocrlf=true a checkout
+# rewrote them as CRLF and every digest went stale (measured 2026-09-15 on
+# transfer-guard-cannot-close-a-cleaned-copy-20260901: before and after STALE).
+.agent/delivery-cases/** -text
