@@ -153,7 +153,11 @@ def bypass_marker(command_or_content: str, name: str) -> bool:
     """
     if not command_or_content or not name:
         return False
-    pattern = r"(?:#|//|<!--)\s*claude-bypass\s*:\s*([a-z0-9_, \-]+)"
+    # A hyphen belongs to a name only when no second hyphen follows it: `--` is
+    # the start of the `-->` that closes the html/md form, and swallowing it
+    # turned `<!-- claude-bypass: incomplete-handoff -->` into the name
+    # `incomplete-handoff --`, so that documented form never matched.
+    pattern = r"(?:#|//|<!--)\s*claude-bypass\s*:\s*((?:[a-z0-9_, ]|-(?!-))+)"
     for m in re.finditer(pattern, command_or_content, re.IGNORECASE):
         names = [x.strip().lower() for x in m.group(1).split(",")]
         if name.lower() in names or "all" in names:
