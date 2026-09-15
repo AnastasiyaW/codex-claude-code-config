@@ -1,4 +1,16 @@
 {
+  "accepted_residuals": {
+    "notification_shapes_still_classified": "BOM or zero-width prefix, attributes on the tag, text as first child, reminder before the marker, uppercase tag; none in 5348 runtime-labelled records",
+    "out_of_scope_observations": "Codex <subagent_notification> (304 classify) and origin.kind peer/coordinator cross-session messages (148 of 228 classify) are the same defect class if they reach UserPromptSubmit; a peer message did reach it live in session 668b04d0 on 2026-09-15 and recorded intent 18c5c32d3693 on the unfixed hook",
+    "owner_prompts_swallowed": [
+      "H4: pasted notification, then owner words that quote </task-notification>",
+      "X1/X2: marker (optionally behind <system-reminder>), owner words, then a pasted element",
+      "X3: owner words between two pasted elements",
+      "X5: an owner-written element whose first content is a child element"
+    ],
+    "source": "independent-review-3.md (fresh-context subagent of session 668b04d0, not a distinct session)",
+    "why_accepted": "0 of 5846 human-labelled prompts open with such an envelope; the two finer-splitting alternatives were measured to reopen the defect for notifications that quote the tag or to depend on harness preamble wording"
+  },
   "attempts": [
     {
       "changed_paths": [
@@ -80,9 +92,9 @@
   },
   "schema_version": 1,
   "session_id": "668b04d0-c5dd-4be1-b794-cf6462774914",
-  "status": "IMPLEMENTING",
+  "status": "VERIFIED",
   "summary": "A background-task notification delivered through UserPromptSubmit is classified as an owner prompt and overwrites the session's real delivery intent, orphaning its frozen case",
-  "updated_at": 1789456635.35162,
+  "updated_at": 1789467697.5043025,
   "verification": {
     "after": {
       "argv": [
@@ -101,6 +113,13 @@
       "evidence_path": ".agent/delivery-cases/delivery-guard-notification-overwrites-intent-20260915/evidence/before-00.txt",
       "returncode": 1,
       "sha256": "49378e1995af6b8706e6fb5f717e24c129ca716b34bce71c947e4118ad681eb8"
+    },
+    "independent_review": {
+      "evidence_path": ".agent/delivery-cases/delivery-guard-notification-overwrites-intent-20260915/independent-review-3.md",
+      "fresh_context": true,
+      "reviewer": "fresh-context-subagent-review-3 (spawned by session 668b04d0; not a distinct session)",
+      "sha256": "01098ff4308931d2e21f278382500e3e18ecf434f0f307700217e46670f150e8",
+      "verdict": "PASS"
     }
   }
 }

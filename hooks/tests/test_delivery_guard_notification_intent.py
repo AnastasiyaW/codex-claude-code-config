@@ -2,10 +2,10 @@
 """A background-task notification is not the owner's delivery intent.
 
 Measured 2026-09-15: Claude Code delivers a finished background task through the
-same UserPromptSubmit event as a human prompt. Its text is a bare
-<task-notification> element (1492 of 1492 notification records in the local
-transcripts start with it at byte 0, nothing follows the closing tag; a live
-probe matched the recorded intent digest to that raw text). The words inside it
+same UserPromptSubmit event as a human prompt. Its text is a <task-notification>
+element whose opening tag is followed by a child element (5258 of 5258
+notification strings in the local transcripts; a live probe matched the recorded
+intent digest to that raw text). The words inside it
 - "failed", "error", "completed" - matched the incident patterns, and because
 intent state is one file per (repository, session), each notification replaced
 the session's real intent. A case frozen under the owner's intent id then

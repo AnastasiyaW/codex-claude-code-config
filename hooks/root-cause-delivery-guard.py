@@ -355,10 +355,20 @@ def record_intent(root: Path, kind: str, prompt: str, session_id: str = "unscope
 # later. An owner who opens a prompt with the literal tag or marker and quotes the
 # closing tag has no child element there, so the old classification stands.
 #
-# simplification: detection is by that envelope only. If a notification ever
-# reaches this hook without it, recover the producer from the transcript record
-# (origin.kind, or an attachment's commandMode) the way
-# request_ledger.transcript_provenance does.
+# simplification: detection is by that envelope only. Ceiling, both directions,
+# measured by the third independent review of delivery case
+# delivery-guard-notification-overwrites-intent-20260915:
+# - owner prompts that themselves open with a complete envelope lose the words
+#   inside it: the marker, then owner words, then a pasted element; owner words
+#   between two pasted elements; owner words after a pasted element that quote the
+#   closing tag; an owner-written element with a child. None of 5846 human
+#   prompts has that shape. Finer splitting was measured to reopen the defect for
+#   notifications that quote the tag.
+# - notification shapes the runtime has never produced still classify as before:
+#   a BOM or zero-width prefix, attributes on the tag, text as the first child,
+#   a reminder in front of the marker.
+# Upgrade path: recover the producer from the transcript record (origin.kind, or
+# an attachment's commandMode) the way request_ledger.transcript_provenance does.
 SYSTEM_NOTIFICATION_MARKER = "[SYSTEM NOTIFICATION - NOT USER INPUT]"
 NOTIFICATION_CLOSE = "</task-notification>"
 _NOTIFICATION_OPEN = re.compile(r"<task-notification>\s*<[A-Za-z]")
@@ -370,7 +380,7 @@ def owner_text(prompt: str) -> str:
 
     A leading runtime notification, bare or behind the harness marker, is
     removed through the last closing tag, so several concatenated notifications
-    go together and anything written after a pasted one is still classified.
+    go together and words written after the last one are still classified.
     Text without that structure is returned as is.
     """
     text = prompt.lstrip()
