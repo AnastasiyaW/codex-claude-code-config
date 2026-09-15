@@ -1,0 +1,19 @@
+argv: ["python", "hooks/tests/test_delivery_guard_notification_intent.py"]
+returncode: 0
+
+  ok   Russian incident prompt records an intent
+  ok   English incident prompt records an intent
+  ok   owner prompt behind an unrelated system-reminder records
+  ok   prompt quoting task-notification mid-text records
+  ok   owner text written after a pasted notification records
+  ok   task-notification containing failed/error records nothing
+  ok   task-notification after leading whitespace records nothing
+  ok   truncated task-notification without its closing tag records nothing
+  ok   notification inside the SYSTEM NOTIFICATION marker records nothing
+  ok   notification leaves the owner's intent id in place
+  ok   owner intent with no case blocks a source edit
+  ok   ... and still blocks after a notification
+  ok   owner intent with a frozen case allows the edit
+  ok   ... and still allows it after a notification
+
+all 14 cases correct

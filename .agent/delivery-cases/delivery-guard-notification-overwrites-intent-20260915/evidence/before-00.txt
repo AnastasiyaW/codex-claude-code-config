@@ -1,0 +1,18 @@
+argv: ["python", "hooks/tests/test_delivery_guard_notification_intent.py"]
+returncode: 1
+
+  ok   Russian incident prompt records an intent
+  ok   English incident prompt records an intent
+  ok   owner prompt behind an unrelated system-reminder records
+  ok   prompt quoting task-notification mid-text records
+  ok   owner text written after a pasted notification records
+  FAIL task-notification containing failed/error records nothing (expected None, got {'expires_at': 1789481815.2443264, 'intent_id': '4616242d2131', 'kind': 'incident', 'prompt_sha256': '9303825b4b9cfc025f9baaedcb8d1efbc748d63ba0b17bfd4e0cf7403e6dfd3b', 'recorded_at': 1789453015.2443264, 'root': 'D:\\tmp\\delivery-guard-notification-lex9xigz\\repo', 'schema_version': 1, 'session_id': 'session-owner'})
+  FAIL task-notification after leading whitespace records nothing (expected None, got {'expires_at': 1789481815.2718132, 'intent_id': 'dae726c971f3', 'kind': 'incident', 'prompt_sha256': '00878a6d3649dddf228e96bff6e2feccbd63bd8fdf9da0f7fe3180cfaef42c09', 'recorded_at': 1789453015.2718132, 'root': 'D:\\tmp\\delivery-guard-notification-lex9xigz\\repo', 'schema_version': 1, 'session_id': 'session-owner'})
+  FAIL notification inside the SYSTEM NOTIFICATION marker records nothing (expected None, got {'expires_at': 1789481815.2960293, 'intent_id': 'c24f63b53892', 'kind': 'incident', 'prompt_sha256': '23b3af1de8b5da303af58887e11af18173da2dece93121a25db5d04fd4d1680f', 'recorded_at': 1789453015.2960293, 'root': 'D:\\tmp\\delivery-guard-notification-lex9xigz\\repo', 'schema_version': 1, 'session_id': 'session-owner'})
+  FAIL notification leaves the owner's intent id in place (expected '1613d46127be', got 'cac3ae16fc1d')
+  ok   owner intent with no case blocks a source edit
+  ok   ... and still blocks after a notification
+  ok   owner intent with a frozen case allows the edit
+  FAIL ... and still allows it after a notification (expected False, got True)
+
+5 of 13 wrong

@@ -1,0 +1,18 @@
+UserPromptSubmit/PreToolUse replay through the hook process stdin (the hook process must exit 0 or the replay aborts).
+Notification text: the real attachment prompt of background task b5jhe7jfl from this session's transcript,
+the event that recorded incident intent dd98ed5a187c over owner intent f6e81aecab98 on the live hook.
+
+== unfixed hook (main checkout, 3656fdf) == replay returncode 0
+owner prompt recorded intent: True
+PreToolUse Write with owner intent and no case -> blocked: True
+real notification b5jhe7jfl -> hook printed an intent receipt: True; intent id unchanged: False
+PreToolUse Write with a PLAN_FROZEN case bound to the owner intent -> blocked: True
+after replaying the notification again, PreToolUse Write -> blocked: True
+
+== fixed hook (this worktree) == replay returncode 0
+owner prompt recorded intent: True
+PreToolUse Write with owner intent and no case -> blocked: True
+real notification b5jhe7jfl -> hook printed an intent receipt: False; intent id unchanged: True
+PreToolUse Write with a PLAN_FROZEN case bound to the owner intent -> blocked: False
+after replaying the notification again, PreToolUse Write -> blocked: False
+

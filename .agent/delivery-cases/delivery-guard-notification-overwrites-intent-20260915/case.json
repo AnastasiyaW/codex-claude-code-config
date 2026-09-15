@@ -1,0 +1,106 @@
+{
+  "attempts": [
+    {
+      "changed_paths": [
+        "hooks/root-cause-delivery-guard.py",
+        "hooks/tests/test_delivery_guard_notification_intent.py"
+      ],
+      "hypothesis": "owner_text returned an empty string when no closing tag was found; independent review (independent-review.md, NEEDS_WORK) proved owner prompts opening with a literal unclosed <task-notification> tag or the marker then recorded no intent and passed the edit gate",
+      "number": 1,
+      "result": "FAIL"
+    },
+    {
+      "changed_paths": [
+        "hooks/root-cause-delivery-guard.py",
+        "hooks/tests/test_delivery_guard_notification_intent.py"
+      ],
+      "hypothesis": "fail closed only when no closing tag exists anywhere; second independent review (independent-review-2.md, NEEDS_WORK) proved owner prompts opening with the literal tag or marker and later quoting </task-notification> were still stripped to that quote and passed the edit gate (N1-N4)",
+      "number": 2,
+      "result": "FAIL"
+    }
+  ],
+  "builder": "668b04d0-c5dd-4be1-b794-cf6462774914",
+  "created_at": 1789452955.2430706,
+  "id": "delivery-guard-notification-overwrites-intent-20260915",
+  "intent_id": null,
+  "kind": "incident",
+  "layer": {
+    "direct_dependents": [
+      "record_intent: one state file per (repo root, session), so a later record replaces the earlier intent",
+      "pending_intent_needing_case / pretool: matches cases by the current intent id",
+      "stop: attributes changed sources to the current intent",
+      "Claude settings.json and Codex hooks.json both run this same file"
+    ],
+    "entrypoints": [
+      "hooks/root-cause-delivery-guard.py::handle_hook (UserPromptSubmit branch)"
+    ],
+    "owner_paths": [
+      "hooks/root-cause-delivery-guard.py",
+      "hooks/tests/test_delivery_guard_notification_intent.py",
+      "runtime notification envelope contract: a <task-notification> opening tag whose first content is a child element (<task-id> or <task-type>), closed later; 5258 of 5258 local transcript notification strings"
+    ],
+    "release_boundary": "hook file loaded fresh by every hook invocation from the main checkout of claude-code-config; effective on merge to main, no service or deploy",
+    "state_or_contract": [
+      "~/.claude/state/root-cause-delivery/<sha(root,session)>.json holds exactly one active intent per session",
+      "UserPromptSubmit payload carries no documented provenance field (docs list session_id, prompt_id, transcript_path, cwd, permission_mode, hook_event_name, prompt); the prompt text of a notification is the bare <task-notification> element",
+      "classify_prompt patterns and their behaviour on owner prompts stay unchanged"
+    ],
+    "tests_or_probes": [
+      "python hooks/tests/test_delivery_guard_notification_intent.py",
+      "python hooks/tests/test_delivery_guard_scope.py",
+      "python hooks/tests/test_root_cause_proof_executor.py",
+      "replay of a real PreToolUse Write event through the hook's stdin"
+    ]
+  },
+  "observed": {
+    "actual": "live probe 2026-09-15: a background Bash notification whose summary contained 'failed error' recorded incident intent dd98ed5a187c, replacing owner intent f6e81aecab98 in the same (root, session) state file; its prompt_sha256 fbe415f0... equals the raw <task-notification> text of the transcript attachment",
+    "expected": "a background-task notification delivered as a UserPromptSubmit event records no delivery intent and leaves the session's owner intent, and any case frozen under it, in force"
+  },
+  "plan": {
+    "causal_hypothesis": "handle_hook classifies the whole prompt text of every UserPromptSubmit event, and the runtime delivers background-task notifications through that event as a <task-notification> element, so words inside the notification record a new intent that overwrites the owner's; the exclusion must recognise that element by its structure (opening tag followed by a child element, then its closing tag), because a leading tag or marker plus any later closing tag also matches owner prompts that quote them",
+    "fix_steps": [
+      "add owner_text(prompt): strip a leading <task-notification> element (through its last closing tag) or a leading [SYSTEM NOTIFICATION - NOT USER INPUT] wrapper, return what the owner wrote",
+      "classify owner_text(prompt) instead of the raw prompt in the UserPromptSubmit branch; leave patterns, record_intent and pretool unchanged",
+      "behavioural test through handle_hook and pretool: owner prompts RU/EN record, notifications do not, owner intent id survives a notification, gate still blocks without a case and allows with a frozen case after a notification"
+    ],
+    "focused_argv": [
+      "python",
+      "hooks/tests/test_delivery_guard_notification_intent.py"
+    ]
+  },
+  "release": {
+    "required": false
+  },
+  "retriage": {
+    "after_failed_attempt": 2,
+    "expanded_owner_paths": [
+      "runtime notification envelope contract: a <task-notification> opening tag whose first content is a child element (<task-id> or <task-type>), closed later; 5258 of 5258 local transcript notification strings"
+    ],
+    "previous_hypothesis": "handle_hook classifies the whole prompt text of every UserPromptSubmit event, and the runtime delivers background-task notifications through that event as a leading <task-notification> element, so words inside the notification record a new intent that overwrites the owner's"
+  },
+  "schema_version": 1,
+  "session_id": "668b04d0-c5dd-4be1-b794-cf6462774914",
+  "status": "IMPLEMENTING",
+  "summary": "A background-task notification delivered through UserPromptSubmit is classified as an owner prompt and overwrites the session's real delivery intent, orphaning its frozen case",
+  "updated_at": 1789456635.35162,
+  "verification": {
+    "after": {
+      "argv": [
+        "python",
+        "hooks/tests/test_delivery_guard_notification_intent.py"
+      ],
+      "evidence_path": ".agent/delivery-cases/delivery-guard-notification-overwrites-intent-20260915/evidence/after-02.txt",
+      "returncode": 0,
+      "sha256": "77c697470908a32a3c88dfd88bbda03571c94407d3076090d9fddaf6348b02de"
+    },
+    "before": {
+      "argv": [
+        "python",
+        "hooks/tests/test_delivery_guard_notification_intent.py"
+      ],
+      "evidence_path": ".agent/delivery-cases/delivery-guard-notification-overwrites-intent-20260915/evidence/before-00.txt",
+      "returncode": 1,
+      "sha256": "49378e1995af6b8706e6fb5f717e24c129ca716b34bce71c947e4118ad681eb8"
+    }
+  }
+}

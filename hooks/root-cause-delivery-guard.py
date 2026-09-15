@@ -340,6 +340,56 @@ def record_intent(root: Path, kind: str, prompt: str, session_id: str = "unscope
     return value
 
 
+# Runtime notifications ride the same UserPromptSubmit event as a human prompt.
+# Measured 2026-09-15: a finished background task arrives with ``prompt`` set to a
+# bare <task-notification> element (a live probe matched the recorded intent
+# digest to that raw text), and the documented payload carries no field naming
+# the producer. Classifying it recorded "incident" from the task's own
+# "failed"/"error", and because intent state is one file per (root, session) it
+# replaced the owner's intent and orphaned the case frozen under it. The
+# model-facing rendering puts the harness marker in front of the same element.
+#
+# The element is recognised by its structure, not by a leading tag alone: in
+# 5258 of 5258 notification strings in the local transcripts the opening tag is
+# followed directly by a child element (<task-id>, once <task-type>) and closed
+# later. An owner who opens a prompt with the literal tag or marker and quotes the
+# closing tag has no child element there, so the old classification stands.
+#
+# simplification: detection is by that envelope only. If a notification ever
+# reaches this hook without it, recover the producer from the transcript record
+# (origin.kind, or an attachment's commandMode) the way
+# request_ledger.transcript_provenance does.
+SYSTEM_NOTIFICATION_MARKER = "[SYSTEM NOTIFICATION - NOT USER INPUT]"
+NOTIFICATION_CLOSE = "</task-notification>"
+_NOTIFICATION_OPEN = re.compile(r"<task-notification>\s*<[A-Za-z]")
+_MARKER_LEAD = re.compile(r"(?:<system-reminder>\s*)?" + re.escape(SYSTEM_NOTIFICATION_MARKER))
+
+
+def owner_text(prompt: str) -> str:
+    """Return the part of a prompt-shaped event that the owner wrote.
+
+    A leading runtime notification, bare or behind the harness marker, is
+    removed through the last closing tag, so several concatenated notifications
+    go together and anything written after a pasted one is still classified.
+    Text without that structure is returned as is.
+    """
+    text = prompt.lstrip()
+    if _MARKER_LEAD.match(text):
+        opening = _NOTIFICATION_OPEN.search(text)
+    else:
+        opening = _NOTIFICATION_OPEN.match(text)
+    if opening is None:
+        return text
+    end = text.rfind(NOTIFICATION_CLOSE, opening.end())
+    if end < 0:
+        # An unclosed element proves nothing (no real record is truncated), so
+        # keep the old classification rather than let owner words pass the gate.
+        return text
+    # A wrapper's trailing </system-reminder> stays in the result: it carries no
+    # words the classifier matches.
+    return text[end + len(NOTIFICATION_CLOSE):]
+
+
 def classify_prompt(prompt: str) -> str | None:
     if any(re.search(pattern, prompt, re.IGNORECASE) for pattern in INCIDENT_PATTERNS):
         return "incident"
@@ -1043,7 +1093,7 @@ def handle_hook(event: dict[str, Any]) -> int:
     prompt = event_prompt(event)
     if prompt:
         root = repo_root()
-        kind = classify_prompt(prompt)
+        kind = classify_prompt(owner_text(prompt))
         if root is not None and kind is not None:
             intent = record_intent(root, kind, prompt, session_id_from_event(event))
             print(json.dumps({
