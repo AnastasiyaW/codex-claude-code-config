@@ -143,7 +143,8 @@ def _proof_executable_name(value: str) -> str:
     return Path(value).name.casefold()
 
 
-def _proof_argv_error(argv: list[str], root: Path | None) -> str | None:
+def _proof_argv_error(argv: list[str], root: Path | None,
+                      declared: object = None) -> str | None:
     """Reject agent-authored argv outside the local proof-executor contract."""
     if not nonempty_strings(argv):
         return "must contain non-empty string argv entries"
@@ -162,7 +163,7 @@ def _proof_argv_error(argv: list[str], root: Path | None) -> str | None:
             return f"must not use mutating argument {argument!r}"
 
     if re.fullmatch(r"(?:python(?:[0-9]+(?:\.[0-9]+)?)?|py)(?:\.exe)?", executable):
-        return _python_proof_argv_error(argv, root)
+        return _python_proof_argv_error(argv, root, declared)
     if executable in {"pytest", "pytest.exe"}:
         return None
     if executable in {"ruff", "ruff.exe"}:
@@ -188,7 +189,8 @@ def _proof_argv_error(argv: list[str], root: Path | None) -> str | None:
     return "must use an approved local test, compiler, linter, or validator executable"
 
 
-def _python_proof_argv_error(argv: list[str], root: Path | None) -> str | None:
+def _python_proof_argv_error(argv: list[str], root: Path | None,
+                             declared: object = None) -> str | None:
     index = 1
     while index < len(argv) and argv[index] in {"-B", "-E", "-I", "-s", "-S"}:
         index += 1
@@ -212,7 +214,25 @@ def _python_proof_argv_error(argv: list[str], root: Path | None) -> str | None:
     except (OSError, ValueError):
         return "python proof script must stay inside the repository"
     if not script_resolved.is_file():
-        return "python proof script must exist inside the repository"
+        # A brand-new instrument IS the deliverable: requiring its file up front made a
+        # case that creates a test impossible to freeze, so the gate refused the very work
+        # it exists to demand. A proof the case itself promises to write in
+        # layer.owner_paths is still a named proof; the capture path below keeps requiring
+        # the real file, because it has to run it.
+        promised = set()
+        if isinstance(declared, (list, tuple, set)):
+            for item in declared:
+                if not isinstance(item, str) or not item.strip():
+                    continue
+                try:
+                    candidate = (root_resolved / item.strip()).resolve()
+                    candidate.relative_to(root_resolved)
+                except (OSError, ValueError):
+                    continue
+                promised.add(candidate)
+        if script_resolved not in promised:
+            return ("python proof script must exist inside the repository, or be "
+                    "promised by this case in layer.owner_paths")
     return None
 
 
@@ -631,7 +651,7 @@ def validation_errors(
         if not nonempty_strings(focused_argv):
             errors.append("plan.focused_argv must contain the post-fix verifier command")
         else:
-            proof_error = _proof_argv_error(focused_argv, root)
+            proof_error = _proof_argv_error(focused_argv, root, layer.get("owner_paths"))
             if proof_error:
                 errors.append(f"plan.focused_argv {proof_error}")
 
