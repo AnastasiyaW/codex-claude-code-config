@@ -26,7 +26,7 @@ After result: notification test exit 0 (18/18); scope test exit 0 (10/10); proof
 - `python hooks/tests/test_delivery_guard_notification_intent.py`: exit 0, all 18 correct.
 - `python hooks/tests/test_delivery_guard_scope.py`: exit 0, all 10 correct.
 - `python hooks/tests/test_root_cause_proof_executor.py`: exit 0, all 14 correct.
-- The notification test with `HOOKS_DIR=C:/Users/AiD/.claude/claude-code-config/hooks`: exit 1, 5 of 18 wrong. This is the expected red.
+- The notification test with `HOOKS_DIR=~/.claude/claude-code-config/hooks`: exit 1, 5 of 18 wrong. This is the expected red.
 - The replay was re-run with REPLAY_TMP in the scratchpad against both hooks. Both exit 0, and all five lines of each block are identical to `replay-real-events.txt`.
 
 ## H1-H3 from the first review: closed
