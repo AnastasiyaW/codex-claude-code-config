@@ -406,8 +406,20 @@ def _post(event: dict[str, Any]) -> None:
 
 
 def _local_path(value: Any, root: Path) -> Path | None:
+    """Return the local path a field names, or None when the path is remote.
+
+    Remote forms: a URL scheme, `user@host:`, and the bare scp/ssh alias
+    `host:/path` that an ssh_config entry gives when there is no user part.
+    That last form used to fall through as a RELATIVE local path, so
+    `box:/srv/app/releases/...` resolved under the repo root, existed nowhere,
+    and every verified contract with such a destination read as "destination is
+    absent" and blocked every later session's Stop. A Windows drive letter is a
+    single character, so requiring two or more before the colon keeps a drive
+    path such as `C:/work` and `D:\tmp` local.
+    """
     raw = _text(value)
-    if not raw or re.match(r"^(?:[a-z]+://|[^\\/\s]+@[^\\/\s:]+:)", raw, re.I):
+    remote = r"^(?:[a-z]+://|[^\\/\s]+@[^\\/\s:]+:|[a-z0-9][a-z0-9._-]+:[/\\])"
+    if not raw or re.match(remote, raw, re.I):
         return None
     try:
         candidate = Path(raw).expanduser()
@@ -539,6 +551,26 @@ def _self_test() -> int:
 
     global SESSION_ROOT
     fails: list[str] = []
+
+    # Local/remote split, with the negative control the previous version lacked:
+    # a bare ssh alias must read REMOTE (None) while a Windows drive letter and a
+    # relative path must still read LOCAL. Under the old regex the first case
+    # returned a path under the repo root, which then failed its existence check.
+    _root = Path("C:/repo") if os.name == "nt" else Path("/repo")
+    for value, want_remote in (
+        ("box:/srv/app/releases/abc/", True),
+        ("myhost:/var/data", True),
+        ("deploy@box:/srv/app", True),
+        ("rclone://remote:dst", True),
+        ("ssh://host/src", True),
+        ("C:/work/project/x", False),
+        ("D:\\tmp\\x", False),
+        ("reports/letters/x.json", False),
+    ):
+        got_remote = _local_path(value, _root) is None
+        if got_remote != want_remote:
+            fails.append(f"_local_path({value!r}): expected remote={want_remote}, got {got_remote}")
+
     base_contract = {
         "schema_version": 1,
         "transfer_id": "t",
