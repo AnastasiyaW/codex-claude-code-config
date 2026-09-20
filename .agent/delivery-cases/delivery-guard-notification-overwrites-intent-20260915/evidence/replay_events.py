@@ -3,7 +3,13 @@ import json, os, pathlib, subprocess, sys, tempfile, time
 
 hook = pathlib.Path(sys.argv[1]).resolve()
 assert hook.is_file(), hook
-transcript = pathlib.Path.home() / ".claude/projects/C--Users-AiD-Desktop-Claude-code--claude-worktrees-recursing-brattain-8150be/668b04d0-c5dd-4be1-b794-cf6462774914.jsonl"
+# The transcript is named by the caller, not baked in: this file is public, and
+# a project directory name carries the machine's user and folder layout. Pass
+# it as the second argument or in REPLAY_TRANSCRIPT.
+transcript_arg = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("REPLAY_TRANSCRIPT", "")
+assert transcript_arg, "give the transcript path as argv[2] or REPLAY_TRANSCRIPT"
+transcript = pathlib.Path(transcript_arg).expanduser()
+assert transcript.is_file(), transcript
 notification = None
 for line in transcript.open(encoding="utf-8", errors="replace"):
     if "b5jhe7jfl" in line and "queued_command" in line:
