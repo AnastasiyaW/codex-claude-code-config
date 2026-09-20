@@ -78,6 +78,22 @@ def _self_hosted_git_conf() -> dict:
     """
     path = os.environ.get("SELF_HOSTED_GIT_ENV", "")
     if not path:
+        # A user-level variable only reaches processes started after it was
+        # set, so a guard that depended on it alone would work "after you
+        # restart the shell" -- the kind of instruction that gets skipped.
+        # The private config tree, which this repo already reads its name
+        # patterns from, can point at the file instead.
+        pointer = os.path.expanduser("~/.claude/claude-code-private/self-hosted-git.env")
+        try:
+            with open(pointer, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    m = re.match(r"^SELF_HOSTED_GIT_ENV\s*=\s*(.+)$", line.strip())
+                    if m:
+                        path = m.group(1).strip().strip('"').strip("'")
+                        break
+        except OSError:
+            return {}
+    if not path:
         return {}
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
