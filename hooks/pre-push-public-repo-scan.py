@@ -68,6 +68,69 @@ def repo_is_public(owner: str, repo: str) -> bool | None:
     return r.stdout.strip() == "false"
 
 
+def _self_hosted_git_conf() -> dict:
+    """Credentials for a self-hosted Git remote, if this machine declares one.
+
+    The location is named by an environment variable, never hardcoded: this
+    file is public, and a public file must not carry the path of a secrets
+    file or the shape of anyone's internal network. A machine that declares
+    nothing gets an empty dict and the caller fails closed.
+    """
+    path = os.environ.get("SELF_HOSTED_GIT_ENV", "")
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return dict(
+                m.groups() for m in
+                (re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line.strip()) for line in fh)
+                if m
+            )
+    except OSError:
+        return {}
+
+
+def gitea_repo_is_public(url: str) -> bool | None:
+    """Visibility of a repo on a self-hosted Gitea, asked of that Gitea itself.
+
+    The guard blocks any remote whose visibility it cannot establish, and that
+    default stays: this only teaches it one more way to *establish* it. The
+    answer comes from the server's API (`.private`), exactly as the GitHub path
+    asks `gh`; it is never inferred from a host looking familiar.
+
+    Returns None for anything that is not the declared remote, so an unknown
+    one keeps failing closed.
+    """
+    conf = _self_hosted_git_conf()
+    if not conf:
+        return None
+
+    base = (conf.get("GITEA_URL") or "").rstrip("/")
+    token = conf.get("GITEA_TOKEN") or ""
+    if not base or not token:
+        return None
+
+    host = re.sub(r"^https?://", "", base)
+    m = re.search(re.escape(host) + r"/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    if not m:
+        return None
+
+    import json as _json
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(f"{base}/api/v1/repos/{m.group(1)}/{m.group(2)}",
+                                 headers={"Authorization": "token " + token})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = _json.loads(r.read().decode())
+    except (urllib.error.URLError, ValueError, TimeoutError):
+        return None
+    private = data.get("private")
+    if not isinstance(private, bool):
+        return None
+    return not private
+
+
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
@@ -443,6 +506,16 @@ def main() -> int:
 
     slug = parse_github_slug(remote_url)
     if not slug:
+        # Our own Gitea can answer the same question about itself. Anything
+        # else still fails closed -- the rule is "visibility must be
+        # established", not "GitHub only".
+        gitea_public = gitea_repo_is_public(remote_url)
+        if gitea_public is False:
+            return 0
+        if gitea_public is True:
+            print("[pre-push] self-hosted Gitea repo is PUBLIC — push blocked, "
+                  "move it to private or scan by hand", file=sys.stderr)
+            return 2
         print(
             "[pre-push] cannot independently establish remote visibility for a "
             "non-GitHub or malformed remote — push blocked",
