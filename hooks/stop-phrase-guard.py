@@ -404,6 +404,37 @@ def has_evidence_bound_external_task(event: dict, prompt: str, classifier) -> bo
     return False
 
 
+# Verbs that actually hand a command over. A command SHAPE on its own does not:
+# "the repo has `smudge --skip` set" names a setting, "run `foo --bar`" assigns
+# work. Measured 2026-09-20: without this, a report that quotes any flag was
+# indistinguishable from an instruction, and the guard fired on its own author's
+# technical writing -- which is how a guard teaches people to phrase around it
+# instead of to finish the work.
+_INSTRUCTION_VERB = re.compile(
+    r"(?i)\b(?:run|execute|invoke|launch|paste|enter|type|copy|set|export|"
+    r"install|open|visit|click|sign in|log in|login|"
+    r"запусти\w*|выполни\w*|"
+    r"сделай\w*|вставь\w*|"
+    r"введи\w*|открой\w*|"
+    r"пропиши\w*|установи\w*|"
+    r"скопируй\w*|набери\w*|"
+    r"зайди\w*|войди\w*)\b"
+)
+
+
+def shape_is_instruction(message: str, start: int, end: int) -> bool:
+    """True when a command-shaped span is actually being assigned to someone.
+
+    The window is the surrounding sentence, where an instruction puts either
+    its addressee ("you", "вам") or its imperative ("run", "запусти"). A span
+    with neither is being described, not handed over.
+    """
+    left = max(0, start - 180)
+    right = min(len(message), end + 80)
+    window = message[left:right]
+    return bool(_SECOND_PERSON.search(window) or _INSTRUCTION_VERB.search(window))
+
+
 def agent_owns_phrase(message: str, start: int) -> bool:
     """True when the nearest explicit subject in this sentence is the agent."""
     prefix = message[:start]
@@ -450,6 +481,7 @@ def agent_capable_user_homework(
         match
         for match in _COMMAND_HANDOFF_SHAPE.finditer(message)
         if not agent_owns_phrase(message, match.start())
+        and shape_is_instruction(message, match.start(), match.end())
     ]
     if not directives and not command_shapes:
         return None
@@ -605,5 +637,45 @@ def main() -> int:
     return 0
 
 
+def _self_test() -> int:
+    """Prove the handoff detector still separates describing from assigning.
+
+    Three of these hand a command over and must stay caught; three only name
+    one and must not fire. Without the mandatory-red half, loosening the
+    detector would be indistinguishable from breaking it.
+    """
+    run_ru = "запусти"
+    cases = [
+        ("describes a setting",
+         "у репозитория "
+         "стоит `smudge --skip`", False),
+        ("states an outcome",
+         "`git push --force-with-lease` теперь "
+         "проходит", False),
+        ("names a flag in passing",
+         "the policy check reads `--pull never` from the env", False),
+        ("russian imperative", f"{run_ru} `claude auth login --claudeai`", True),
+        ("english imperative", "run `claude auth login --claudeai` to finish", True),
+        ("addressed to a person",
+         "тебе нужно `claude auth login --claudeai`",
+         True),
+    ]
+    fails = []
+    for label, text, want in cases:
+        shapes = list(_COMMAND_HANDOFF_SHAPE.finditer(text))
+        if not shapes:
+            fails.append(f"{label}: no command shape matched at all")
+            continue
+        got = any(shape_is_instruction(text, s.start(), s.end()) for s in shapes)
+        if got != want:
+            fails.append(f"{label}: expected flagged={want}, got {got}")
+    for f in fails:
+        print("FAIL:", f)
+    print("stop-phrase-guard self-test:", "FAILED" if fails else "ok")
+    return 1 if fails else 0
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        sys.exit(_self_test())
     sys.exit(main())
