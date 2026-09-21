@@ -52,6 +52,29 @@ DEFAULT_PROFILE = "shared"
 # Each entry: pattern (regex, case-insensitive) → skill name + description
 # Patterns should be specific enough to avoid false positives on normal conversation
 ROUTES = [
+    # Авторский текст от лица владелицы. Навык устанавливается глобально как
+    # тонкий вход, а профиль лежит в приватном хабе, поэтому сюда попадают
+    # только фразы-триггеры и ни одной её измеренной характеристики.
+    #
+    # Исключения важнее самих шаблонов: «напиши скрипт», «напиши тест»,
+    # «напиши функцию» — это код, а не авторский текст, и маршрут на них
+    # срабатывать не должен.
+    {
+        "patterns": [
+            r"\b(напиш\w*|состав\w*|сформулир\w*|отредактир\w*|перепиш\w*)\b.{0,60}\b(от (моего|её) лица|от меня|за меня|моим голосом|в мо[её]м стиле|как я)\b",
+            r"\b(от (моего|её) лица|от меня|за меня|моим голосом|в мо[её]м стиле)\b.{0,60}\b(напиш\w*|письм\w*|пост\w*|сообщени\w*|текст\w*)\b",
+            r"\b(звучал\w*|читал\w*|получил\w*)\b.{0,40}\bкак я\b",
+            r"\b(in my voice|as me|sound like me|my writing style|my own words)\b",
+            r"\b(write|draft|rewrite|edit)\b.{0,40}\b(as me|in my voice|like i would)\b",
+        ],
+        "exclude_patterns": [
+            r"\b(скрипт|script|тест|test|функци\w*|function|код|code|коммит|commit|запрос|query|регулярк\w*|regex)\b",
+        ],
+        "skill": "owner-voice",
+        "description": "Authored text in the owner's voice: measured register profiles, verbatim exemplars, suppression lists, British-on-Russian English and a mechanical draft check",
+        "refs": ["references/voice-ru.md", "references/voice-en.md", "references/acceptance.md"],
+        "required": False,
+    },
     # Provider-neutral remote compute: RunPod, Massed Compute, and owned servers.
     # Keep provider names in the trigger set, but route all of them to the
     # canonical skill so the transport/reconciliation policy is shared.

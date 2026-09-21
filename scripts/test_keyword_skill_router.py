@@ -60,6 +60,16 @@ CASES = [
     ("challenge my assumption with evidence, not a devil's-advocate performance", "epistemic-challenge"),
     ("Translate this literal string to Russian: 'Challenge my assumption with evidence.'", None),
     ("привет, как дела", None),
+    # Авторский текст от её лица. «Напиши» само по себе ничего не решает:
+    # маршрут обязан различать письмо от неё и просьбу написать код.
+    ("напиши письмо подрядчику от моего лица", "owner-voice"),
+    ("составь пост за меня про датасеты", "owner-voice"),
+    ("отредактируй это, чтобы звучало как я", "owner-voice"),
+    ("перепиши в моём стиле", "owner-voice"),
+    ("write this email as me", "owner-voice"),
+    ("draft a post in my voice", "owner-voice"),
+    ("напиши тест на этот шлюз", None),
+    ("write a regex for this", None),
 ]
 
 PROFILE_CASES = [
@@ -73,6 +83,12 @@ PROFILE_CASES = [
     ("codex", "Security audit a generic web application before release", "/deep-review", "retouch-security-audit"),
     ("codex", "проверь SEO сайта и sitemap", "SKILL_GAP: claude-seo:seo", "BLOCKED_SKILL_UNAVAILABLE"),
     ("claude", "проверь SEO сайта и sitemap", "/claude-seo:seo", "SKILL_GAP"),
+    # «Напиши» о коде обязано дойти до правила качества и НЕ дойти до голоса
+    # владелицы. Проверять «нет вывода вообще» тут нельзя: advisory-маршрут
+    # про качество кода срабатывает законно.
+    ("claude", "напиши скрипт для выгрузки", "quality-code", "owner-voice"),
+    ("claude", "напиши функцию которая режет тайлы", "quality-code", "owner-voice"),
+    ("claude", "напиши коммит месседж", "", "owner-voice"),
 ]
 
 ok = True
