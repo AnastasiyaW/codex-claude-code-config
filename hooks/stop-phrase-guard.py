@@ -28,11 +28,13 @@ Reference: https://github.com/anthropics/claude-code/issues/42796
 """
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 # Phrase categories from the AMD investigation. Lowercase-matched against the
@@ -252,7 +254,7 @@ _COMMAND_HANDOFF_SHAPE = re.compile(
 )
 _FIRST_PERSON = re.compile(r"(?i)\b(?:i|we|я|мы)\b")
 _SECOND_PERSON = re.compile(
-    r"(?i)\b(?:you|user|operator|admin|customer|human|person|вы|вам|вас|тебе|тебя|"
+    r"(?i)\b(?:you|user|operator|admin|customer|human|person|вы|вам|вас|ты|тебе|тебя|"
     r"пользовател\w*|оператор\w*|администратор\w*|человек\w*)\b"
 )
 _DELEGATED_TO_CONTEXT = re.compile(
@@ -410,16 +412,59 @@ def has_evidence_bound_external_task(event: dict, prompt: str, classifier) -> bo
 # indistinguishable from an instruction, and the guard fired on its own author's
 # technical writing -- which is how a guard teaches people to phrase around it
 # instead of to finish the work.
+# Russian verbs keep every assigning form (imperative, infinitive, "ты ...шь",
+# "давайте ...м", imperfective "запускай") and drop only the past tense:
+# "запустили"/"выполнила" report finished work, not an assignment.
 _INSTRUCTION_VERB = re.compile(
     r"(?i)\b(?:run|execute|invoke|launch|paste|enter|type|copy|set|export|"
     r"install|open|visit|click|sign in|log in|login|"
-    r"запусти\w*|выполни\w*|"
-    r"сделай\w*|вставь\w*|"
-    r"введи\w*|открой\w*|"
-    r"пропиши\w*|установи\w*|"
-    r"скопируй\w*|набери\w*|"
-    r"зайди\w*|войди\w*)\b"
+    r"запусти(?:те|ть|шь|м|мте)?|запускай(?:те)?|"
+    r"выполни(?:те|ть|шь|м|мте)?|выполняй(?:те)?|"
+    r"установи(?:те|ть|шь|м|мте)?|устанавливай(?:те)?|"
+    r"сделай(?:те)?|вставь(?:те)?|"
+    r"введи(?:те)?|открой(?:те)?|"
+    r"пропиши(?:те)?|"
+    r"скопируй(?:те)?|набери(?:те)?|"
+    r"зайди(?:те)?|войди(?:те)?)\b"
 )
+# A fence only where it opens a line: a ``` mentioned in prose must not pair
+# with the real fence and blank the sentence between them.
+_FENCED_CODE = re.compile(r"(?m)^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```")
+# Only whitespace-free spans: a span with spaces may be a mis-paired backtick
+# (PowerShell escape, stray quote) swallowing real prose, or a whole command
+# whose own verb still signals the hand-off.
+_INLINE_NAME = re.compile(r"`[^`\s]+`")
+# Linear split (a slash-anchored pattern rescans a long run from every start);
+# brackets end a token so "[Откройте](https://...)" keeps its link text.
+_TOKEN = re.compile(r"[^\s`\[\]()<>]+")
+# "запусти/перезапусти" or "вы/ты" carry a slash but are prose, not a path.
+_PATH_SHAPE = re.compile(
+    r"^(?:[a-z]:[/\\]|[/~.]|[^/\\]*://)|[/\\].*[/\\]|[/\\][^/\\]*\.\w+$",
+    re.IGNORECASE,
+)
+
+
+def _blank(match: re.Match) -> str:
+    return " " * len(match.group(0))
+
+
+def _blank_path(match: re.Match) -> str:
+    token = match.group(0)
+    if "/" not in token and "\\" not in token:
+        return token
+    return _blank(match) if _PATH_SHAPE.search(token.rstrip(".,;:!?'\"")) else token
+
+
+@functools.lru_cache(maxsize=4)  # one message, judged once per command shape
+def _mask_code(message: str) -> str:
+    """Blank fenced blocks, quoted names and paths, keeping offsets.
+
+    `data\\export\\x.jsonl` or docs/REVIEW-AND-BOARDS-RUN.md name a thing; the
+    words inside them are not the sentence's verb or addressee.
+    """
+    message = _FENCED_CODE.sub(_blank, message)
+    message = _INLINE_NAME.sub(_blank, message)
+    return _TOKEN.sub(_blank_path, message)
 
 
 def shape_is_instruction(message: str, start: int, end: int) -> bool:
@@ -431,7 +476,12 @@ def shape_is_instruction(message: str, start: int, end: int) -> bool:
     """
     left = max(0, start - 180)
     right = min(len(message), end + 80)
-    window = message[left:right]
+    masked = _mask_code(message)
+    if message.startswith("```", start):
+        # A fenced block judged as the shape keeps its own words; a block the
+        # agent ran and shows as evidence is cleared by agent_owns_phrase.
+        masked = masked[:start] + message[start:end] + masked[end:]
+    window = masked[left:right]
     return bool(_SECOND_PERSON.search(window) or _INSTRUCTION_VERB.search(window))
 
 
@@ -473,7 +523,7 @@ def agent_capable_user_homework(
         return None
     directives = [
         match
-        for match in _USER_WORK_DIRECTIVE.finditer(message)
+        for match in _USER_WORK_DIRECTIVE.finditer(_mask_code(message))
         if _RUSSIAN_DIRECTIVE.search(match.group(0))
         or not agent_owns_phrase(message, match.start())
     ]
@@ -640,9 +690,10 @@ def main() -> int:
 def _self_test() -> int:
     """Prove the handoff detector still separates describing from assigning.
 
-    Three of these hand a command over and must stay caught; three only name
+    Twelve of these hand a command over and must stay caught; six only name
     one and must not fire. Without the mandatory-red half, loosening the
-    detector would be indistinguishable from breaking it.
+    detector would be indistinguishable from breaking it. The last check
+    bounds masking time on a long unbroken run.
     """
     run_ru = "запусти"
     cases = [
@@ -654,7 +705,39 @@ def _self_test() -> int:
          "проходит", False),
         ("names a flag in passing",
          "the policy check reads `--pull never` from the env", False),
+        # Measured 2026-09-24: a location report was blocked twice, by the past
+        # tense of "запусти" and by "export"/"RUN" read out of quoted paths.
+        ("past tense reports finished work",
+         f"вчера {run_ru}ли прогон на сервере `build-rev`", False),
+        ("verb inside a quoted path",
+         "описания лежат в `data\\export\\pin-text.jsonl`", False),
+        ("word inside a quoted filename",
+         "отчёт лежит в `docs/REVIEW-AND-BOARDS-RUN.md`", False),
         ("russian imperative", f"{run_ru} `claude auth login --claudeai`", True),
+        ("russian plural imperative",
+         f"{run_ru}те `claude auth login --claudeai`", True),
+        # Independent review 2026-09-24: forms the first cut of this fix lost.
+        ("russian future second person",
+         f"Потом {run_ru}шь `python -m foo --bar`.", True),
+        ("russian imperfective imperative",
+         "Запускай `npm run dev --host`", True),
+        ("stray backtick must not swallow prose",
+         f"Файл `config.json и потом {run_ru}те `python -m foo --bar`.", True),
+        ("bare remaining step",
+         "Остался один шаг: `claude auth login --claudeai`.", True),
+        # Second review pass: masking must not reach prose or the fence itself.
+        ("fenced command after a neutral lead-in",
+         "Вот команда:\n```powershell\npython -m telegram_live_cli auth --login\n```",
+         True),
+        ("slash between two verbs is prose",
+         f"{run_ru.capitalize()}/пере{run_ru} сервис: `systemctl restart foo --now`.",
+         True),
+        ("link text is prose, only its target is a path",
+         f"[{run_ru.capitalize()}те](https://github.com/o/r/actions/workflows/ci.yml)"
+         " workflow `ci --ref main`.", True),
+        ("fence named in prose does not pair with the real one",
+         f"Блоки оформляются через ```. {run_ru.capitalize()}те:\n```\npython -m foo --bar\n```",
+         True),
         ("english imperative", "run `claude auth login --claudeai` to finish", True),
         ("addressed to a person",
          "тебе нужно `claude auth login --claudeai`",
@@ -669,6 +752,21 @@ def _self_test() -> int:
         got = any(shape_is_instruction(text, s.start(), s.end()) for s in shapes)
         if got != want:
             fails.append(f"{label}: expected flagged={want}, got {got}")
+    for label, text in (
+        ("quoted filename", "отчёт — `docs/REVIEW-AND-BOARDS-RUN.md`"),
+        ("bare path", "Отчёт лежит в docs/REVIEW-AND-BOARDS-RUN.md."),
+        ("fenced output", "Я " + run_ru + "ла:\n```\nnpm run test --ci\n```"),
+    ):
+        if list(_USER_WORK_DIRECTIVE.finditer(_mask_code(text))):
+            fails.append(f"directive read out of a {label}")
+    owned_fence = "Я " + run_ru + "ла:\n```\nnpm run test --ci\n```"
+    if not agent_owns_phrase(owned_fence, owned_fence.index("```")):
+        fails.append("agent's own fenced output not bound to its owner")
+    long_run = "Хэш: " + "A" * 100_000 + " готово."
+    started = time.perf_counter()
+    _mask_code(long_run)
+    if time.perf_counter() - started > 1.0:  # quadratic scan took ~97 s here
+        fails.append("masking a 100k unbroken run is not linear")
     for f in fails:
         print("FAIL:", f)
     print("stop-phrase-guard self-test:", "FAILED" if fails else "ok")
