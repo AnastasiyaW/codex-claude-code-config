@@ -243,15 +243,145 @@ _EXPLICIT_TUTORIAL_REQUEST = re.compile(
     r"(?:show|provide|give)\b[^\n]*(?:how\s+to|command|instruction|steps)"
     r")"
 )
-_COMMAND_HANDOFF_SHAPE = re.compile(
-    r"(?im)(?:"
-    r"```(?:powershell|pwsh|bash|shell|cmd|python)?[^\n]*\n[\s\S]*?```|"
-    r"`[^`\n]*(?:\$env:|https?://|--?[a-z]|[a-z]:\\|/[\w.-])[^`\n]*`|"
-    r"\$env:[a-z_]\w*\s*=|"
-    r"\b[a-z][\w.-]*(?:\.exe)?\s+(?:--?[a-z][\w-]*|https?://\S+|[a-z]:\\\S+|/[\w.-]+)|"
-    r"^\s*(?:ps>\s*|\$\s+)\S+"
-    r")"
+# Measured 2026-09-24: run as one regex by finditer, the command-shape
+# alternatives re-read a span from every start inside it -- a [\w.-] run, a
+# whitespace block, a fence line -- and an unclosed inline span backtracks
+# within one start: 3.1 s on 20k characters of "a/b.b.b...", ~100 s on 100k,
+# with no timeout on this Stop hook. Each alternative below is searched by a
+# scan that is linear for exactly its text; edit a pattern, re-prove its scan.
+_INLINE_END = re.compile(r"[`\n]")
+_INLINE_MARK = re.compile(r"(?i)\$env:|https?://|--?[a-z]|[a-z]:\\|/[\w.-]")
+_WORD_HEAD = re.compile(r"(?i)\b[a-z]")
+_WORD_RUN = re.compile(r"[\w.-]*")
+_WORD_FLAG = re.compile(r"(?i)\s+(?:--?[a-z][\w-]*|https?://\S+|[a-z]:\\\S+|/[\w.-]+)")
+_LINE_START = re.compile(r"(?m)^")
+_LINE_LEAD = re.compile(r"\s*")
+_PROMPT = re.compile(r"(?i)(?:ps>\s*|\$\s+)\S+")
+
+
+def _scan_plain(message: str, rx: re.Pattern):
+    """Linear as it is: only a literal `$env:` can start it."""
+
+    def find(pos: int):
+        match = rx.search(message, pos)
+        return match.start() if match else None
+
+    return find
+
+
+def _scan_fences(message: str, rx: re.Pattern):
+    """An opener needs a newline after it and a closer after that newline.
+
+    A later opener has no nearer newline and no later closer, so the first
+    opener from pos decides for every one after it.
+    """
+    last_fence = message.rfind("```")
+    newline = -1
+
+    def find(pos: int):
+        nonlocal newline
+        opener = message.find("```", pos)
+        if opener < 0:
+            return None
+        if newline < opener + 3:  # else the newline found last is still the next one
+            newline = message.find("\n", opener + 3)
+        return opener if 0 <= newline < last_fence else None
+
+    return find
+
+
+def _scan_inline(message: str, rx: re.Pattern):
+    """A span runs to the first backtick or newline after its opener.
+
+    It matches when that is a backtick and a mark lies in between; no mark
+    holds a backtick or a newline, so no two openers read the same stretch.
+    """
+
+    def find(pos: int):
+        while (opener := message.find("`", pos)) >= 0:
+            end = _INLINE_END.search(message, opener + 1)
+            if end is None:
+                return None
+            if end.group() == "`" and _INLINE_MARK.search(message, opener + 1, end.start()):
+                return opener
+            pos = end.start()
+        return None
+
+    return find
+
+
+def _scan_word_flags(message: str, rx: re.Pattern):
+    """Every start inside one [\\w.-] run reaches the same run end.
+
+    Only what follows that end decides ("(?:\\.exe)?" lies inside the run),
+    so a run that fails is skipped whole instead of retried per letter.
+    """
+
+    def find(pos: int):
+        while head := _WORD_HEAD.search(message, pos):
+            end = _WORD_RUN.match(message, head.end()).end()
+            if _WORD_FLAG.match(message, end):
+                return head.start()
+            pos = end
+        return None
+
+    return find
+
+
+def _scan_prompts(message: str, rx: re.Pattern):
+    """Line starts inside one whitespace block reach the same first
+    printable character, which alone decides."""
+
+    def find(pos: int):
+        while pos <= len(message) and (line := _LINE_START.search(message, pos)):
+            text = _LINE_LEAD.match(message, line.start()).end()
+            if _PROMPT.match(message, text):
+                return line.start()
+            pos = max(text, line.start() + 1)
+        return None
+
+    return find
+
+
+# Alternation order is match priority, as in the joined regex below. A scan
+# gets the message and its alternative's regex and returns find(pos): the
+# leftmost start >= pos where that alternative matches, or None.
+_SHAPE_SCANS = {
+    r"```(?:powershell|pwsh|bash|shell|cmd|python)?[^\n]*\n[\s\S]*?```": _scan_fences,
+    r"`[^`\n]*(?:\$env:|https?://|--?[a-z]|[a-z]:\\|/[\w.-])[^`\n]*`": _scan_inline,
+    r"\$env:[a-z_]\w*\s*=": _scan_plain,
+    r"\b[a-z][\w.-]*(?:\.exe)?\s+"
+    r"(?:--?[a-z][\w-]*|https?://\S+|[a-z]:\\\S+|/[\w.-]+)": _scan_word_flags,
+    r"^\s*(?:ps>\s*|\$\s+)\S+": _scan_prompts,
+}
+_SHAPE_ALTERNATIVES = tuple(
+    (re.compile("(?im)" + pattern), scan) for pattern, scan in _SHAPE_SCANS.items()
 )
+# The definition the scans reproduce; only the self-test runs it directly.
+_COMMAND_HANDOFF_SHAPE = re.compile(r"(?im)(?:" + "|".join(_SHAPE_SCANS) + ")")
+
+
+def find_command_shapes(message: str) -> list[re.Match]:
+    """What _COMMAND_HANDOFF_SHAPE.finditer(message) yields, in linear time.
+
+    finditer takes the leftmost start and, there, the first alternative that
+    matches. Each alternative's next start is kept until a taken shape passes
+    over it, so every scan only moves forward; only a taken shape is matched
+    in full, and taken shapes do not overlap.
+    """
+    finders = [scan(message, rx) for rx, scan in _SHAPE_ALTERNATIVES]
+    ahead = [find(0) for find in finders]
+    shapes = []
+    while any(start is not None for start in ahead):
+        start, first = min((start, i) for i, start in enumerate(ahead) if start is not None)
+        shape = _SHAPE_ALTERNATIVES[first][0].match(message, start)
+        shapes.append(shape)
+        for i, pending in enumerate(ahead):
+            if pending is not None and pending < shape.end():
+                ahead[i] = finders[i](shape.end())
+    return shapes
+
+
 _FIRST_PERSON = re.compile(r"(?i)\b(?:i|we|я|мы)\b")
 _SECOND_PERSON = re.compile(
     r"(?i)\b(?:you|user|operator|admin|customer|human|person|вы|вам|вас|ты|тебе|тебя|"
@@ -529,7 +659,7 @@ def agent_capable_user_homework(
     ]
     command_shapes = [
         match
-        for match in _COMMAND_HANDOFF_SHAPE.finditer(message)
+        for match in find_command_shapes(message)
         if not agent_owns_phrase(message, match.start())
         and shape_is_instruction(message, match.start(), match.end())
     ]
@@ -692,8 +822,9 @@ def _self_test() -> int:
 
     Twelve of these hand a command over and must stay caught; six only name
     one and must not fire. Without the mandatory-red half, loosening the
-    detector would be indistinguishable from breaking it. The last check
-    bounds masking time on a long unbroken run.
+    detector would be indistinguishable from breaking it. Every case also
+    holds the linear shape scan to the regex it replaces. The last checks
+    bound time on long unbroken runs: masking, and the whole hand-off check.
     """
     run_ru = "запусти"
     cases = [
@@ -745,7 +876,10 @@ def _self_test() -> int:
     ]
     fails = []
     for label, text, want in cases:
-        shapes = list(_COMMAND_HANDOFF_SHAPE.finditer(text))
+        shapes = find_command_shapes(text)
+        reference = [m.span() for m in _COMMAND_HANDOFF_SHAPE.finditer(text)]
+        if [s.span() for s in shapes] != reference:
+            fails.append(f"{label}: shape scan disagrees with the regex")
         if not shapes:
             fails.append(f"{label}: no command shape matched at all")
             continue
@@ -767,6 +901,19 @@ def _self_test() -> int:
     _mask_code(long_run)
     if time.perf_counter() - started > 1.0:  # quadratic scan took ~97 s here
         fails.append("masking a 100k unbroken run is not linear")
+    # Through the same call the Stop hook makes; the control proves that call
+    # reaches the shape scan rather than returning before it.
+    prompt = "Настрой всё и запусти авторизацию."
+    control = "Остался один шаг: `claude auth login --claudeai`."
+    if agent_capable_user_homework(control, [prompt], {}) != "`claude auth login --claudeai`":
+        fails.append("timed path does not reach the command-shape scan")
+    path_run = "a/" + "b." * 50_000
+    started = time.perf_counter()
+    verdict = agent_capable_user_homework(path_run, [prompt], {})
+    if time.perf_counter() - started > 1.0:  # the shape regex alone took ~100 s here
+        fails.append("the hand-off check on a 100k path-like run is not linear")
+    if verdict is not None:
+        fails.append(f"a bare path-like run was read as a hand-off: {verdict[:40]!r}")
     for f in fails:
         print("FAIL:", f)
     print("stop-phrase-guard self-test:", "FAILED" if fails else "ok")
