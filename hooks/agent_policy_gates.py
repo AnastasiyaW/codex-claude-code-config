@@ -49,6 +49,8 @@ WRITES = re.compile(
     r"git\s+(?:checkout|restore)\b)", re.I)
 TEST_RUN = re.compile(r"-m\s+(?:unittest|pytest)\b|\bpytest\b")
 FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+# Commands only the owner may start: her prompt must name them (like a human-owned file).
+OWNER_COMMANDS = ("--reset-review-rounds",)
 
 
 # ---------- repo and policy ----------
@@ -61,16 +63,17 @@ def windows_path(text: str) -> Path:
 
 
 def repo_root(start: Path) -> Path | None:
+    """The nearest folder with a `.git` (directory, or file in a worktree).
+
+    A walk, not `git rev-parse`: under load git outran its 5 s timeout, the hook
+    failed open, and a human-owned file went unprotected (25.09, hook suite)."""
     probe = start if start.is_dir() else start.parent
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent
-    try:
-        out = subprocess.run(["git", "-C", str(probe), "rev-parse", "--show-toplevel"],
-                             capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    top = out.stdout.strip()
-    return Path(top).resolve() if out.returncode == 0 and top else None
+    for folder in (probe, *probe.parents):
+        if (folder / ".git").exists():
+            return folder.resolve()
+    return None
 
 
 def load_policy(root: Path | None) -> dict | None:
@@ -110,17 +113,18 @@ def on_prompt(event: dict) -> None:
     if policy is None:
         return
     words = PASTED.sub(" ", str(event.get("prompt", "")))
-    record = {"root": str(root), "paths": named_in(words, protected(policy)), "at": time.time()}
+    record = {"root": str(root), "paths": named_in(words, protected(policy)),
+              "commands": [c for c in OWNER_COMMANDS if c in words], "at": time.time()}
     UNLOCKS.mkdir(parents=True, exist_ok=True)
     unlock_file(event.get("session_id", "")).write_text(json.dumps(record), encoding="utf-8")
 
 
-def unlocked(event: dict, root: Path, rel: str) -> bool:
+def unlocked(event: dict, root: Path, rel: str, field: str = "paths") -> bool:
     path = unlock_file(event.get("session_id", ""))
     if not path.is_file():
         return False
     record = json.loads(path.read_text(encoding="utf-8"))
-    return record.get("root") == str(root) and rel in record.get("paths", [])
+    return record.get("root") == str(root) and rel in record.get(field, [])
 
 
 def refuse_owned(rel: str, how: str) -> None:
@@ -139,6 +143,8 @@ def guard_file_tool(event: dict) -> None:
     target = windows_path(raw)
     if UNLOCKS.resolve() in target.resolve().parents:
         block("Unlock records are written only by the prompt hook, from the owner's own words.")
+    if "quality-review" in target.parts and ".git" in target.parts:
+        block("Review rounds are written only by scripts/quality_gates.py.")
     root = repo_root(target)
     policy = load_policy(root)
     if policy is None:
@@ -148,9 +154,23 @@ def guard_file_tool(event: dict) -> None:
         refuse_owned(rel, event.get("tool_name", ""))
 
 
+def guard_owner_commands(event: dict, command: str, root: Path) -> None:
+    """The review-round reset is the owner's decision after she found a root cause;
+    an agent resetting it would restart the very loop the limit exists to break."""
+    for owner_command in OWNER_COMMANDS:
+        if owner_command in command and not unlocked(event, root, owner_command, "commands"):
+            log("BLOCK", HOOK, "owner-command", owner_command, command[:200])
+            block(f"`{owner_command}` is the owner's call (docs/agent-quality.md: ESCALATE). "
+                  "Report the ESCALATE and its root cause to her; if she asks for the reset, "
+                  "her message names the flag and this turn is unlocked for it.")
+
+
 def guard_command_writes(event: dict, command: str, root: Path, policy: dict) -> None:
-    if "human-owned-unlocks" in command.lower():
+    low = command.lower()
+    if "human-owned-unlocks" in low:
         block("Unlock records are written only by the prompt hook, from the owner's own words.")
+    if "quality-review" in low and WRITES.search(command):
+        block("Review rounds are written only by scripts/quality_gates.py.")
     for rel in named_in(command, protected(policy)):
         name = re.escape(rel.rsplit("/", 1)[-1])
         near = re.search(rf"{WRITES.pattern}[^\n|;&]*{name}|{name}[^\n|;&]*(>>?)", command, re.I)
@@ -161,17 +181,19 @@ def guard_command_writes(event: dict, command: str, root: Path, policy: dict) ->
 # ---------- gh pr create ----------
 
 def added_lines(root: Path, base: str, ignore: list[str]) -> int | None:
-    out = subprocess.run(["git", "-C", str(root), "diff", "--numstat", f"origin/{base}...HEAD"],
-                         capture_output=True, text=True, timeout=30)
+    """-z: without it git quotes non-ASCII names, and "иконка.svg" escaped "*.svg"."""
+    out = subprocess.run(["git", "-C", str(root), "diff", "-z", "--numstat", f"origin/{base}...HEAD"],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     if out.returncode:
         return None
-    total = 0
-    for line in out.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) == 3 and parts[0].isdigit():
-            name = parts[2].split(" => ")[-1].rstrip("}")
-            if not any(fnmatch.fnmatch(Path(name).name, pat) for pat in ignore):
-                total += int(parts[0])
+    tokens, total, i = out.stdout.split("\0"), 0, 0
+    while i < len(tokens) and tokens[i]:
+        added, _deleted, name = tokens[i].split("\t", 2)
+        if not name:  # a rename: old and new names follow as their own tokens
+            name, i = tokens[i + 2], i + 2
+        i += 1
+        if added.isdigit() and not any(fnmatch.fnmatch(Path(name).name, pat) for pat in ignore):
+            total += int(added)
     return total
 
 
@@ -263,6 +285,7 @@ def on_tool(event: dict) -> None:
         return
     pr_gate(command, root, policy)
     widget_test_gate(command, cwd, root, policy)
+    guard_owner_commands(event, command, root)
     guard_command_writes(event, command, root, policy)
 
 

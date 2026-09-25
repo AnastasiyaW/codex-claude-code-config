@@ -14,6 +14,7 @@ HOOK = Path(__file__).resolve().parents[1] / "agent_policy_gates.py"
 POLICY = {
     "human_owned": ["AGENTS.md", "docs/INCIDENTS.md", ".github/agent-policy.json"],
     "pr_max_added_lines": 20,
+    "pr_size_ignore": ["*.svg"],
     "pr_required_sections": ["## Зачем", "## Кто за что отвечает", "## Проверка"],
     "widget_test_paths": ["tools/widget-common"],
 }
@@ -135,6 +136,30 @@ class PrCreateTest(Gates):
     def test_no_description_at_all_is_refused(self) -> None:
         self.commit_lines(5)
         self.assertIn("no description", self.bash("gh pr create --fill"))
+
+    def test_an_ignored_file_with_a_non_ascii_name_is_not_counted(self) -> None:
+        # Quoted by git without -z, "иконка.svg" did not match "*.svg" (review 25.09).
+        (self.root / "иконка.svg").write_text("<svg/>\n" * 30, encoding="utf-8")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "icon")
+        self.assertEqual(self.bash(f'gh pr create --title t --body-file "{self.body_file(GOOD_BODY)}"'),
+                         "allow")
+
+
+class OwnerCommandsTest(Gates):
+    RESET = "python scripts/ci_local.py --reset-review-rounds"
+
+    def test_the_review_round_reset_is_the_owners_call(self) -> None:
+        self.prompt("почини тесты")
+        self.assertIn("owner", self.bash(self.RESET))
+        self.prompt("нашла причину, сбрось счётчик: --reset-review-rounds")
+        self.assertEqual(self.bash(self.RESET), "allow")
+
+    def test_the_rounds_file_is_not_written_by_hand(self) -> None:
+        rounds = self.root / ".git" / "quality-review" / "rounds.json"
+        self.assertTrue(self.hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                                   "tool_input": {"file_path": str(rounds)}}).startswith("block:"))
+        self.assertTrue(self.bash(f"echo '{{}}' > {rounds.as_posix()}").startswith("block:"))
 
 
 class WidgetTestsTest(Gates):
