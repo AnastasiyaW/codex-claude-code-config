@@ -38,6 +38,9 @@ class Gates(unittest.TestCase):
         (self.root / ".github" / "agent-policy.json").write_text(json.dumps(POLICY), encoding="utf-8")
         (self.root / "AGENTS.md").write_text("# agents\n", encoding="utf-8")
         (self.root / "README.md").write_text("# readme\n", encoding="utf-8")
+        (self.root / ".github" / "pull_request_template.md").write_text(
+            "## Зачем\n\n<!-- why -->\n\n## Кто за что отвечает\n\n| Сущность | Отвечает за |\n"
+            "|---|---|\n|  |  |\n\n## Проверка\n\n<!-- what ran -->\n", encoding="utf-8")
         git(self.root, "init", "-q", "-b", "master")
         git(self.root, "config", "user.email", "t@example.invalid")
         git(self.root, "config", "user.name", "t")
@@ -137,6 +140,12 @@ class PrCreateTest(Gates):
         self.commit_lines(5)
         self.assertIn("no description", self.bash("gh pr create --fill"))
 
+    def test_the_untouched_template_is_refused(self) -> None:
+        self.commit_lines(5)
+        template = self.root / ".github" / "pull_request_template.md"
+        verdict = self.bash(f'gh pr create --title t --body-file "{template}"')
+        self.assertIn("(empty)", verdict)
+
     def test_an_ignored_file_with_a_non_ascii_name_is_not_counted(self) -> None:
         # Quoted by git without -z, "иконка.svg" did not match "*.svg" (review 25.09).
         (self.root / "иконка.svg").write_text("<svg/>\n" * 30, encoding="utf-8")
@@ -155,11 +164,27 @@ class OwnerCommandsTest(Gates):
         self.prompt("нашла причину, сбрось счётчик: --reset-review-rounds")
         self.assertEqual(self.bash(self.RESET), "allow")
 
-    def test_the_rounds_file_is_not_written_by_hand(self) -> None:
-        rounds = self.root / ".git" / "quality-review" / "rounds.json"
-        self.assertTrue(self.hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
-                                   "tool_input": {"file_path": str(rounds)}}).startswith("block:"))
-        self.assertTrue(self.bash(f"echo '{{}}' > {rounds.as_posix()}").startswith("block:"))
+    def test_other_spellings_of_the_reset_are_the_owners_call_too(self) -> None:
+        # python -c "... q.reset_rounds(...)" reset the rounds past the flag check (review 25.09).
+        self.prompt("почини тесты")
+        self.assertIn("owner", self.bash('python -c "import quality_gates as q; q.reset_rounds(0)"'))
+        self.assertIn("owner", self.bash("gh pr comment 5 --body '<!-- quality-review-reset -->'"))
+
+
+class WriteShapesTest(Gates):
+    """Review 25.09: writes the guard missed, and a read it refused."""
+
+    def test_a_python_write_is_refused_and_a_read_with_stderr_redirect_is_not(self) -> None:
+        self.prompt("почини тесты")
+        self.assertTrue(self.bash("python -c \"open('AGENTS.md','w').write('')\"").startswith("block:"))
+        self.assertEqual(self.bash("grep -n x AGENTS.md 2>/dev/null"), "allow")
+
+    def test_a_patch_that_touches_a_human_owned_doc_is_refused(self) -> None:
+        self.prompt("почини тесты")
+        patch = self.root / "change.diff"
+        patch.write_text("--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1 @@\n-# agents\n+# x\n",
+                         encoding="utf-8")
+        self.assertTrue(self.bash("git apply change.diff").startswith("block:"))
 
 
 class WidgetTestsTest(Gates):
@@ -171,6 +196,12 @@ class WidgetTestsTest(Gates):
         self.assertEqual(self.bash("python scripts/ci_local.py --job widgets"), "allow")
         self.assertEqual(self.bash("python scripts/hidden_run.py --cwd tools/widget-common -- "
                                    "python -m unittest test_desk"), "allow")
+
+    def test_a_test_file_run_directly_is_refused_and_staging_it_is_not(self) -> None:
+        # `python test_desk.py` ran unittest.main() on the owner's screen (review 25.09).
+        self.assertIn("hidden_run.py", self.bash("cd tools/widget-common && python test_desk.py"))
+        self.assertIn("hidden_run.py", self.bash("cd tools/widget-common && python -munittest test_desk"))
+        self.assertEqual(self.bash("git add tools/widget-common/test_desk.py"), "allow")
 
     def test_other_tests_are_not_touched(self) -> None:
         self.assertEqual(self.bash("cd bot && python -m pytest -q"), "allow")

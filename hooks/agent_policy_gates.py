@@ -43,14 +43,17 @@ POLICY = Path(".github") / "agent-policy.json"
 UNLOCKS = Path.home() / ".claude" / "state" / "human-owned-unlocks"
 PASTED = re.compile(r"<pasted_content\b[^>]*>.*?</pasted_content\b[^>]*>", re.S | re.I)
 CD_PREFIX = re.compile(r"""^\s*(?:cd|Set-Location)\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)""", re.I)
-WRITES = re.compile(
-    r"(>>?|\btee\b|\bsed\s+-i|Set-Content|Add-Content|Out-File|Copy-Item|Move-Item|"
-    r"Rename-Item|Remove-Item|\bcp\b|\bmv\b|\brm\b|write_text|WriteAllText|"
-    r"git\s+(?:checkout|restore)\b)", re.I)
-TEST_RUN = re.compile(r"-m\s+(?:unittest|pytest)\b|\bpytest\b")
+WRITES = (r"(?:\btee\b|\bsed\s+-i|Set-Content|Add-Content|Out-File|Copy-Item|Move-Item|"
+          r"Rename-Item|Remove-Item|\bcp\b|\bmv\b|\brm\b|\bunlink\b|\bdel\b|os\.remove|"
+          r"write_text|write_bytes|WriteAllText|git\s+(?:checkout|restore)\b)")
+# A redirect INTO the file; `2>/dev/null` next to a read is not a write (review 25.09).
+REDIRECT = r"(?<![0-9&])>>?\s*[\"']?[^\s\"'|;&]*"
+TEST_RUN = re.compile(r"-m\s*(?:unittest|pytest)\b|\bpytest\b|python\S*\s+(?:-\S+\s+)*\S*test_\w+\.py")
 FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-# Commands only the owner may start: her prompt must name them (like a human-owned file).
-OWNER_COMMANDS = ("--reset-review-rounds",)
+# Commands only the owner may start: her prompt must name the flag. The other
+# spellings reach the same reset without it (review 25.09: python -c ... reset_rounds).
+OWNER_COMMAND = "--reset-review-rounds"
+OWNER_SPELLINGS = (OWNER_COMMAND, "reset_rounds(", "quality-review-reset")
 
 
 # ---------- repo and policy ----------
@@ -114,7 +117,7 @@ def on_prompt(event: dict) -> None:
         return
     words = PASTED.sub(" ", str(event.get("prompt", "")))
     record = {"root": str(root), "paths": named_in(words, protected(policy)),
-              "commands": [c for c in OWNER_COMMANDS if c in words], "at": time.time()}
+              "commands": [OWNER_COMMAND] if OWNER_COMMAND in words else [], "at": time.time()}
     UNLOCKS.mkdir(parents=True, exist_ok=True)
     unlock_file(event.get("session_id", "")).write_text(json.dumps(record), encoding="utf-8")
 
@@ -143,8 +146,6 @@ def guard_file_tool(event: dict) -> None:
     target = windows_path(raw)
     if UNLOCKS.resolve() in target.resolve().parents:
         block("Unlock records are written only by the prompt hook, from the owner's own words.")
-    if "quality-review" in target.parts and ".git" in target.parts:
-        block("Review rounds are written only by scripts/quality_gates.py.")
     root = repo_root(target)
     policy = load_policy(root)
     if policy is None:
@@ -157,24 +158,43 @@ def guard_file_tool(event: dict) -> None:
 def guard_owner_commands(event: dict, command: str, root: Path) -> None:
     """The review-round reset is the owner's decision after she found a root cause;
     an agent resetting it would restart the very loop the limit exists to break."""
-    for owner_command in OWNER_COMMANDS:
-        if owner_command in command and not unlocked(event, root, owner_command, "commands"):
-            log("BLOCK", HOOK, "owner-command", owner_command, command[:200])
-            block(f"`{owner_command}` is the owner's call (docs/agent-quality.md: ESCALATE). "
-                  "Report the ESCALATE and its root cause to her; if she asks for the reset, "
-                  "her message names the flag and this turn is unlocked for it.")
+    spelling = next((s for s in OWNER_SPELLINGS if s in command), None)
+    if spelling and not unlocked(event, root, OWNER_COMMAND, "commands"):
+        log("BLOCK", HOOK, "owner-command", spelling, command[:200])
+        block(f"Resetting review rounds (`{spelling}`) is the owner's call (docs/agent-quality.md: "
+              "ESCALATE). Report the ESCALATE and its root cause to her; if she asks for the reset, "
+              f"her message names `{OWNER_COMMAND}` and this turn is unlocked for it.")
 
 
-def guard_command_writes(event: dict, command: str, root: Path, policy: dict) -> None:
-    low = command.lower()
-    if "human-owned-unlocks" in low:
+def patched_paths(command: str, cwd: Path) -> list[str]:
+    """Files a `git apply`/`git am` in the command would change, read from the patch:
+    the command itself never names them (review 25.09)."""
+    found = []
+    for match in re.finditer(r"git\s+(?:apply|am)\b([^\n|;&]*)", command):
+        for arg in match.group(1).split():
+            patch = windows_path(arg)
+            patch = patch if patch.is_absolute() else cwd / patch
+            if patch.is_file():
+                text = patch.read_text(encoding="utf-8", errors="replace")
+                found += re.findall(r"^\+\+\+ b/(\S+)", text, re.M)
+    return [path.lower() for path in found]
+
+
+def writes_to(command: str, rel: str) -> bool:
+    """A write verb and the file in one command segment, a redirect into it, or open(..., 'w')."""
+    name = re.escape(rel.rsplit("/", 1)[-1])
+    return bool(re.search(rf"{WRITES}[^\n|;&]*{name}|{name}[^\n|;&]*{WRITES}|{REDIRECT}{name}"
+                          rf"|open\([^)]*{name}[^)]*,\s*[\"'][wax]", command, re.I))
+
+
+def guard_command_writes(event: dict, command: str, cwd: Path, root: Path, policy: dict) -> None:
+    if "human-owned-unlocks" in command.lower():
         block("Unlock records are written only by the prompt hook, from the owner's own words.")
-    if "quality-review" in low and WRITES.search(command):
-        block("Review rounds are written only by scripts/quality_gates.py.")
-    for rel in named_in(command, protected(policy)):
-        name = re.escape(rel.rsplit("/", 1)[-1])
-        near = re.search(rf"{WRITES.pattern}[^\n|;&]*{name}|{name}[^\n|;&]*(>>?)", command, re.I)
-        if near and not unlocked(event, root, rel):
+    owned = protected(policy)
+    targets = [rel for rel in named_in(command, owned) if writes_to(command, rel)]
+    targets += [rel for rel in patched_paths(command, cwd) if rel in owned]
+    for rel in targets:
+        if not unlocked(event, root, rel):
             refuse_owned(rel, command[:200])
 
 
@@ -215,6 +235,37 @@ def pr_body(args: list[str], root: Path) -> str | None:
     return None
 
 
+def sections(body: str) -> dict[str, list[str]]:
+    """`#`/`##` heading -> its lines, comments and blanks dropped.
+    Same rule as the repo's scripts/quality_gates.py (sections / missing_sections)."""
+    text = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    found: dict[str, list[str]] = {}
+    current = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if re.match(r"#{1,2}\s", line):
+            current = line
+            found[current] = []
+        elif current is not None and line:
+            found[current].append(line)
+    return found
+
+
+def unfilled(body: str, required: list[str], template: str) -> list[str]:
+    """Required sections absent or holding only the template's own lines: the untouched
+    template passed `gh pr create` (review 25.09)."""
+    have = sections(body)
+    stock = {line for lines in sections(template).values() for line in lines}
+    missing = []
+    for section in required:
+        heading = next((h for h in have if h.startswith(section)), None)
+        if heading is None:
+            missing.append(section)
+        elif all(line in stock for line in have[heading]):
+            missing.append(f"{section} (empty)")
+    return missing
+
+
 def pr_gate(command: str, root: Path, policy: dict) -> None:
     found = re.search(r"\bgh\s+pr\s+create\b(.*)", command, re.S)
     if not found:
@@ -236,8 +287,9 @@ def pr_gate(command: str, root: Path, policy: dict) -> None:
         problems.append("no description: pass --body-file written from "
                         ".github/pull_request_template.md")
     else:
-        lines = {line.strip() for line in body.splitlines()}
-        missing = [s for s in required if not any(line.startswith(s) for line in lines)]
+        template_path = root / ".github" / "pull_request_template.md"
+        template = template_path.read_text(encoding="utf-8") if template_path.is_file() else ""
+        missing = unfilled(body, required, template)
         if missing:
             problems.append("the description lacks " + ", ".join(missing))
     if problems:
@@ -286,7 +338,7 @@ def on_tool(event: dict) -> None:
     pr_gate(command, root, policy)
     widget_test_gate(command, cwd, root, policy)
     guard_owner_commands(event, command, root)
-    guard_command_writes(event, command, root, policy)
+    guard_command_writes(event, command, cwd, root, policy)
 
 
 def main() -> None:
