@@ -28,6 +28,7 @@ Reference: https://github.com/anthropics/claude-code/issues/42796
 """
 from __future__ import annotations
 
+import bisect
 import contextlib
 import functools
 import importlib.util
@@ -646,12 +647,28 @@ def asks_for_decision(masked: str, start: int, end: int) -> bool:
     the command over. English permission questions name their subject ("Should
     I run ...") and are cleared by agent_owns_phrase; a bare English verb in a
     question does not tell who acts, so it does not count here.
+
+    Sentence bounds are found once per message and the verdict once per
+    sentence: scanning the whole sentence for every command in it made one long
+    question with 2000 commands take 13 s (audit 2026-09-25).
     """
-    tail = _SENTENCE_BREAK.search(masked, end)
-    if tail is None or tail.group() != "?":
+    breaks = _sentence_breaks(masked)
+    after = bisect.bisect_left(breaks, end)
+    if after == len(breaks) or masked[breaks[after]] != "?":
         return False
-    head = max(masked.rfind(mark, 0, start) for mark in ".!?\n") + 1
-    sentence = masked[head:tail.end()]
+    before = bisect.bisect_left(breaks, start) - 1
+    head = breaks[before] + 1 if before >= 0 else 0
+    return _question_leaves_act_to_agent(masked, head, breaks[after] + 1)
+
+
+@functools.lru_cache(maxsize=4)  # one message, split once for all its commands
+def _sentence_breaks(masked: str) -> tuple[int, ...]:
+    return tuple(m.start() for m in _SENTENCE_BREAK.finditer(masked))
+
+
+@functools.lru_cache(maxsize=256)  # one verdict per question sentence
+def _question_leaves_act_to_agent(masked: str, head: int, tail: int) -> bool:
+    sentence = masked[head:tail]
     if _ASKS_READER_TO_ACT.search(sentence):
         return False
     return not any(
@@ -892,6 +909,14 @@ def main() -> int:
     return 0
 
 
+# One question listing many commands. Audit 2026-09-25: 2000 of them took 13.4 s
+# when every command rescanned its whole sentence.
+QUESTION_RUN = 2000
+# Measured 2026-09-25 on this machine: 0.08 s warm, 0.42 s cold when linear;
+# 18.6 s when quadratic. The limit sits about 6x from each.
+QUESTION_RUN_LIMIT = 3.0
+
+
 def _self_test() -> int:
     """Prove the handoff detector still separates describing from assigning.
 
@@ -1004,6 +1029,13 @@ def _self_test() -> int:
         fails.append("the hand-off check on a 100k path-like run is not linear")
     if verdict is not None:
         fails.append(f"a bare path-like run was read as a hand-off: {verdict[:40]!r}")
+    many = "Удалить " + ", ".join(f"`rm -f /tmp/x{i}.log`" for i in range(QUESTION_RUN)) + "?"
+    started = time.perf_counter()
+    verdict = agent_capable_user_homework(many, [prompt], {})
+    if time.perf_counter() - started > QUESTION_RUN_LIMIT:
+        fails.append(f"one question with {QUESTION_RUN} commands is not judged in linear time")
+    if verdict is not None:
+        fails.append(f"a long permission question was read as a hand-off: {verdict[:40]!r}")
     fails.extend(_self_test_active_request())
     for f in fails:
         print("FAIL:", f)
