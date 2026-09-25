@@ -28,12 +28,15 @@ Reference: https://github.com/anthropics/claude-code/issues/42796
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import importlib.util
+import io
 import json
 import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -472,6 +475,21 @@ def final_assistant_message(event: dict, transcript_path: str | None) -> str:
     return get_final_assistant_message(transcript_path)
 
 
+def _harness_row(obj: dict) -> bool:
+    """True for a role=user row that the transcript itself marks as not typed.
+
+    Hook feedback, skill bodies, delivery notices and compaction summaries carry
+    isMeta / isCompactSummary; task notifications and peer messages carry their
+    own origin.kind. A Stop that took one as the active request could never find
+    its evidence-bound work order: measured 2026-09-25, of 2797 such rows in
+    sessions with a ledger only three delivery notices were ever recorded, and
+    the ledger's envelope now excludes those too.
+    """
+    origin = obj.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    return bool(obj.get("isMeta") or obj.get("isCompactSummary")) or kind not in (None, "", "human")
+
+
 def get_user_messages(transcript_path: str | None) -> list[str]:
     """Return all user text newest-first for intent routing across data continuations."""
     if not transcript_path:
@@ -493,7 +511,7 @@ def get_user_messages(transcript_path: str | None) -> list[str]:
         except json.JSONDecodeError:
             continue
         role = obj.get("role") or obj.get("message", {}).get("role")
-        if role != "user":
+        if role != "user" or _harness_row(obj):
             continue
         content = obj.get("content") or obj.get("message", {}).get("content")
         if isinstance(content, str):
@@ -512,8 +530,20 @@ def get_user_messages(transcript_path: str | None) -> list[str]:
 
 
 def resolve_user_intent(user_messages: list[str], classifier) -> tuple[str, str]:
-    """Find the newest intent-bearing prompt, skipping intervening data and chatter."""
+    """Find the newest intent-bearing prompt, skipping intervening data and chatter.
+
+    A harness envelope is skipped before it is classified: it reads as a request
+    ("Stop hook feedback: ... execute every ... step"), but no work order can
+    carry its text. Measured 2026-09-25 in session 339952f5: the guard took its
+    own feedback as the request and blocked four Stops over a task that was
+    correctly BLOCKED_EXTERNAL on the owner's deletion approval.
+    """
     for prompt in user_messages:
+        # The ledger records the typed text after host-prepended context; binding
+        # compares prompts exactly, so both sides strip the same context.
+        prompt = classifier.strip_host_context(prompt)
+        if not prompt or classifier.MACHINE_PROMPT_ENVELOPE.match(prompt):
+            continue
         if _EXPLICIT_TUTORIAL_REQUEST.search(prompt):
             return "tutorial", prompt
         _, actionable = classifier.classify_prompt(prompt)
@@ -572,6 +602,17 @@ _PATH_SHAPE = re.compile(
     r"^(?:[a-z]:[/\\]|[/~.]|[^/\\]*://)|[/\\].*[/\\]|[/\\][^/\\]*\.\w+$",
     re.IGNORECASE,
 )
+# A question hands a command over only when it asks the reader to act. Measured
+# 2026-09-25: "**Остановить тестовую базу `ops-test-pg-claude` на рабочей VM?**",
+# a request for the owner's "да" before a deletion, was blocked as homework
+# because the window reached "до вас" in the previous list item.
+_SENTENCE_BREAK = re.compile(r"[.!?\n]")
+_ASKS_READER_TO_ACT = re.compile(
+    r"(?i)\b(?:(?:can|could|would|will)\s+you|please|можете|можешь|сможете|сможешь|"
+    r"могли\s+бы|мог\s+бы|могла\s+бы|пожалуйста)\b"
+)
+# "запустить?"/"запустим?" leave the act with the agent; "запустите?"/"запустишь?" do not.
+_AGENT_ACTS_FORM = re.compile(r"(?i)(?:ть|ти|м)$")
 
 
 def _blank(match: re.Match) -> str:
@@ -597,16 +638,44 @@ def _mask_code(message: str) -> str:
     return _TOKEN.sub(_blank_path, message)
 
 
+def asks_for_decision(masked: str, start: int, end: int) -> bool:
+    """True when the span's own sentence is a question that leaves the act to the agent.
+
+    Asking the owner "Остановить `x`?" is how a deletion gets its explicit
+    approval; "Можете запустить `x --y`?" or "Запустите `x --y`?" still hands
+    the command over. English permission questions name their subject ("Should
+    I run ...") and are cleared by agent_owns_phrase; a bare English verb in a
+    question does not tell who acts, so it does not count here.
+    """
+    tail = _SENTENCE_BREAK.search(masked, end)
+    if tail is None or tail.group() != "?":
+        return False
+    head = max(masked.rfind(mark, 0, start) for mark in ".!?\n") + 1
+    sentence = masked[head:tail.end()]
+    if _ASKS_READER_TO_ACT.search(sentence):
+        return False
+    return not any(
+        _RUSSIAN_DIRECTIVE.search(verb.group(0))
+        and not _AGENT_ACTS_FORM.search(verb.group(0))
+        for verb in _INSTRUCTION_VERB.finditer(sentence)
+    )
+
+
 def shape_is_instruction(message: str, start: int, end: int) -> bool:
     """True when a command-shaped span is actually being assigned to someone.
 
     The window is the surrounding sentence, where an instruction puts either
     its addressee ("you", "вам") or its imperative ("run", "запусти"). A span
-    with neither is being described, not handed over.
+    with neither is being described, not handed over; a span inside a question
+    that asks for a decision is not handed over either.
     """
     left = max(0, start - 180)
     right = min(len(message), end + 80)
     masked = _mask_code(message)
+    # A fence introduced by a question is left to the window: "Не работает?"
+    # above a command block hands that command over.
+    if not message.startswith("```", start) and asks_for_decision(masked, start, end):
+        return False
     if message.startswith("```", start):
         # A fenced block judged as the shape keeps its own words; a block the
         # agent ran and shows as evidence is cleared by agent_owns_phrase.
@@ -714,6 +783,20 @@ def scan_phrases(message: str) -> list[tuple[str, str]]:
     return hits
 
 
+# Also the text the harness echoes back as a role=user "Stop hook feedback:" row.
+HOMEWORK_REASON = (
+    "Agent-owned work was handed back to the user: the active request asks for an "
+    "outcome, while the final message tells the user to copy, paste, or run an "
+    "available machine operation. Read the supplied message/file/image data and "
+    "execute every reversible in-scope machine step yourself. If an OTP, CAPTCHA, "
+    "physical confirmation, or other human-only input remains, first run the machine "
+    "prefix, report the observed waiting prompt, and request only that minimal input. "
+    "A real inaccessible environment must bind the exact work order to an evidence-backed "
+    "durable BLOCKED_EXTERNAL state; Blocker/Access inventory/Needed authority/Recheck "
+    "labels in prose alone do not count."
+)
+
+
 def main() -> int:
     # Read Stop hook input from stdin (JSON with transcript path, session, etc)
     try:
@@ -777,15 +860,7 @@ def main() -> int:
     user_homework = "agent_capable_user_homework" in by_cat
     credential_refusal = "private_credential_refusal" in by_cat
     reason = (
-        "Agent-owned work was handed back to the user: the active request asks for an "
-        "outcome, while the final message tells the user to copy, paste, or run an "
-        "available machine operation. Read the supplied message/file/image data and "
-        "execute every reversible in-scope machine step yourself. If an OTP, CAPTCHA, "
-        "physical confirmation, or other human-only input remains, first run the machine "
-        "prefix, report the observed waiting prompt, and request only that minimal input. "
-        "A real inaccessible environment must bind the exact work order to an evidence-backed "
-        "durable BLOCKED_EXTERNAL state; Blocker/Access inventory/Needed authority/Recheck "
-        "labels in prose alone do not count."
+        HOMEWORK_REASON
         if user_homework
         else (
             "Private-context credential refusal: this Claude/Codex working chat is inside "
@@ -820,9 +895,9 @@ def main() -> int:
 def _self_test() -> int:
     """Prove the handoff detector still separates describing from assigning.
 
-    Twelve of these hand a command over and must stay caught; six only name
-    one and must not fire. Without the mandatory-red half, loosening the
-    detector would be indistinguishable from breaking it. Every case also
+    Sixteen of these hand a command over and must stay caught; eight only name
+    one or ask for a decision and must not fire. Without the mandatory-red half,
+    loosening the detector would be indistinguishable from breaking it. Every case also
     holds the linear shape scan to the regex it replaces. The last checks
     bound time on long unbroken runs: masking, and the whole hand-off check.
     """
@@ -873,6 +948,21 @@ def _self_test() -> int:
         ("addressed to a person",
          "тебе нужно `claude auth login --claudeai`",
          True),
+        # 2026-09-25: a yes/no question asks for a decision. The first list item
+        # puts "вас" inside the old window of the second, which is what fired.
+        ("permission questions before deletions",
+         "1. **Удалить `D:\\x\\.git\\index.lock`?** Пока он есть, до вас не доедут звуки.\n"
+         "2. **Остановить тестовую базу `ops-test-pg-claude` на рабочей VM?** "
+         "Тесты закончены; при остановке контейнер удалится сам.", False),
+        ("infinitive question leaves the act to the agent",
+         f"{run_ru.capitalize()}ть `npm run build --prod` сейчас?", False),
+        ("question asking the reader to act",
+         f"Можете {run_ru}ть `claude auth login --claudeai`?", True),
+        ("russian imperative inside a question",
+         f"{run_ru.capitalize()}те `claude auth login --claudeai`, хорошо?", True),
+        ("english request question", "Could you run `claude auth login --claudeai`?", True),
+        ("question after the command is not its sentence",
+         f"{run_ru.capitalize()}те `claude auth login --claudeai`. Получилось?", True),
     ]
     fails = []
     for label, text, want in cases:
@@ -914,10 +1004,96 @@ def _self_test() -> int:
         fails.append("the hand-off check on a 100k path-like run is not linear")
     if verdict is not None:
         fails.append(f"a bare path-like run was read as a hand-off: {verdict[:40]!r}")
+    fails.extend(_self_test_active_request())
     for f in fails:
         print("FAIL:", f)
     print("stop-phrase-guard self-test:", "FAILED" if fails else "ok")
     return 1 if fails else 0
+
+
+def _self_test_active_request() -> list[str]:
+    """Harness text above a real prompt must not become the active request.
+
+    Each envelope below is itself classified as a request (checked, else the
+    case proves nothing), and each sat newest in session 339952f5. The real
+    prompt arrives as the host writes it, after a prepended reminder. The
+    binding case goes through the real ledger capture: without a work order the
+    hand-off must fire, and with an evidence-bound BLOCKED_EXTERNAL order for
+    the real prompt it must not.
+    """
+    fails = []
+    classifier = load_user_task_guard()
+    real = ("I hit my usage limit while you were working, but it has reset now. "
+            "Please continue from where you left off.")
+    typed = ("<system-reminder>\nThe user started your suggested background task task_0.\n"
+             "</system-reminder>\n\n" + real)
+    feedback = "Stop hook feedback: " + HOMEWORK_REASON
+    envelopes = (
+        feedback,
+        "[Cross-session delivery notice] Your message to another session was held for the "
+        "recipient user's approval; resend it and fix the guard.",
+        "<system-reminder> The user started your suggested background task; run it and "
+        "fix the guard. </system-reminder>",
+    )
+    for envelope in envelopes:
+        label = envelope[:28]
+        if not classifier.classify_prompt(envelope)[1]:
+            fails.append(f"control: {label!r} is no longer read as a request")
+        if resolve_user_intent([envelope, typed], classifier) != ("action", real):
+            fails.append(f"{label!r} above the real prompt became the active request")
+
+    def row(text: str, **marks) -> str:
+        return json.dumps({"type": "user", **marks, "message": {"role": "user", "content": text}})
+
+    with tempfile.TemporaryDirectory(prefix="stop-phrase-guard-") as tmp:
+        transcript = Path(tmp) / "session.jsonl"
+        transcript.write_text("\n".join((
+            row(typed, origin={"kind": "human"}),
+            row("Base directory for this skill: run the checks and fix what fails.", isMeta=True),
+            row("<task-notification> finished; continue </task-notification>",
+                origin={"kind": "task-notification"}),
+            row("Fix the guard and push it.", origin={"kind": "peer", "from": "uds:x"}),
+            row("This session is being continued from a previous conversation. Continue the "
+                "fix.", isCompactSummary=True),
+            row(feedback, isMeta=True),
+        )) + "\n", encoding="utf-8")
+        users = get_user_messages(str(transcript))
+        if users != [typed.strip()]:
+            fails.append("rows the transcript marks as not typed reached intent routing")
+        if resolve_user_intent(users, classifier) != ("action", real):
+            fails.append("a typed prompt after host-prepended context was not the request")
+
+        root = Path(tmp) / "repo"
+        (root / ".git").mkdir(parents=True)
+        event = {"session_id": "stop-phrase-guard-self-test"}
+        handoff = "Остался один шаг: `claude auth login --claudeai`."
+        here = Path.cwd()
+        os.chdir(root)
+        try:
+            unbound = agent_capable_user_homework(handoff, [feedback, typed], event)
+            with contextlib.redirect_stdout(io.StringIO()):
+                classifier.user_prompt({**event, "prompt": typed}, root)
+            requests = classifier.task_requests(root, event["session_id"])
+            if [r.get("prompt") for r in requests] != [real]:
+                fails.append("the ledger did not record the typed prompt after host context")
+                return fails
+            task_id = requests[0]["task_id"]
+            (classifier.task_root(root, task_id) / "receipt.md").write_text(
+                "owner approval pending\n", encoding="utf-8")
+            state_file = classifier.state_path(root, task_id)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            state.update(status="BLOCKED_EXTERNAL", evidence=["receipt.md"],
+                         blocker="deletion waits for the owner's explicit yes",
+                         recheck="owner answers in chat")
+            state_file.write_text(json.dumps(state), encoding="utf-8")
+            bound = agent_capable_user_homework(handoff, [feedback, typed], event)
+        finally:
+            os.chdir(here)
+    if unbound is None:
+        fails.append("control: the hand-off is not caught without a work order")
+    if bound is not None:
+        fails.append("an evidence-bound BLOCKED_EXTERNAL order for the real prompt was ignored")
+    return fails
 
 
 if __name__ == "__main__":

@@ -62,10 +62,24 @@ STOP_CONTINUATION_MAX_AGE = dt.timedelta(hours=2)
 # so role alone is not a provenance boundary (observed with <task-notification>
 # on 2026-09-01).  Keep this list to explicit runtime envelopes; a general XML
 # prompt remains valid user input.
+# The text prefixes below are envelopes too. Measured 2026-09-25: transcript
+# provenance never matched at capture time in Claude Desktop (raw_event_uuid
+# empty on every record), so a cross-session delivery notice and a peer's
+# message were recorded as user tasks (REQ-56389FB1F08F, REQ-4AB253FDD594)
+# although their rows carry isMeta / origin.kind=peer.
 MACHINE_PROMPT_ENVELOPE = re.compile(
-    r"^\s*<(?:task-notification|subagent-notification|heartbeat|system-reminder|"
-    r"local-command-caveat|command-message|command-name|automation|scheduled-task)(?:\s|>)",
+    r"^\s*(?:<(?:task-notification|subagent-notification|heartbeat|system-reminder|"
+    r"local-command-caveat|command-message|command-name|automation|scheduled-task|"
+    r"cross-session-message)(?:\s|>)|\[Cross-session delivery notice\]|Stop hook feedback:)",
     re.IGNORECASE,
+)
+# Context the host prepends to a typed prompt, closed before the typed text.
+# Measured 2026-09-25: all 8 captured prompts opening with "<system-reminder>The
+# user started your suggested background task ...</system-reminder>" went on
+# with a typed request ("процесс идет?"), and 121 human rows in 300 transcripts
+# have this shape; judged whole, the envelope above dropped each of them.
+LEADING_HOST_CONTEXT = re.compile(
+    r"^(?:\s*<system-reminder>[\s\S]*?</system-reminder>)+\s*", re.IGNORECASE
 )
 TRANSCRIPT_TAIL_LIMIT = 16 * 1024 * 1024
 TRANSCRIPT_RECORD_LIMIT = 512
@@ -242,6 +256,11 @@ def machine_prompt_reason(event: dict[str, Any], prompt: str) -> str | None:
     if origin_kind:
         return f"explicit origin.kind={origin_kind}"
     return None
+
+
+def strip_host_context(prompt: str) -> str:
+    """The typed prompt without host context prepended to it; empty if there is none."""
+    return LEADING_HOST_CONTEXT.sub("", prompt, count=1).strip()
 
 
 def event_prompt(event: dict[str, Any]) -> str:
@@ -1073,7 +1092,7 @@ def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
     if not task_capture_enabled():
         return 0
     event = with_transcript_provenance(event)
-    prompt = event_prompt(event)
+    prompt = strip_host_context(event_prompt(event))
     if prompt and machine_prompt_reason(event, prompt):
         return 0
     if not prompt:

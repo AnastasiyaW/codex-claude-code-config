@@ -222,7 +222,19 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
             "<heartbeat><automation_id>x</automation_id><instructions>check and run</instructions></heartbeat>",
             "<system-reminder>fix the failing test</system-reminder>",
             '<scheduled-task name="nightly">run the audit</scheduled-task>',
+            # 2026-09-25: recorded as REQ-56389FB1F08F / REQ-4AB253FDD594 because
+            # the transcript row carrying isMeta / origin.kind=peer was not yet
+            # readable when the prompt hook ran.
+            "[Cross-session delivery notice] Your message to another session was held "
+            "for the recipient user's approval; resend it and fix the guard.",
+            '<cross-session-message from="uds:x" from-name="peer">fix the guard</cross-session-message>',
+            # This guard's own Stop reason, echoed back; read as a request on its own.
+            "Stop hook feedback: A durable user task or measured reconciliation gap has no "
+            "evidence-bound terminal state. Continue the work; then save its local receipt "
+            "and state.json result.",
         ):
+            # Control: each would be recorded without its envelope.
+            self.assertTrue(guard.classify_prompt(prompt)[1], prompt)
             self.assertIsNone(self.invoke_prompt({
                 "prompt": prompt,
                 "session_id": "session-a",
@@ -231,6 +243,24 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
                 "origin_kind": "human",
             }))
         self.assertFalse((self.root / ".agent" / "user-tasks").exists())
+
+    def test_typed_prompt_after_host_context_is_recorded_without_it(self) -> None:
+        # Measured 2026-09-25: the host prepends this reminder to a typed prompt
+        # ("процесс идет?"); judged whole, the envelope dropped the request.
+        typed = "процесс идет? проверь и исправь обвязку"
+        prompt = (
+            "<system-reminder>\nThe user started your suggested background task task_0.\n"
+            "</system-reminder>\n\n" + typed
+        )
+        self.assertIsNotNone(self.invoke_prompt({"prompt": prompt, "session_id": "session-a"}))
+        self.assertEqual(self.request()["prompt"], typed)
+
+    def test_bracketed_human_paste_is_still_a_user_task(self) -> None:
+        # The delivery-notice envelope is one exact harness phrase; a pasted chat
+        # export opens with a bracket too and must still be recorded.
+        prompt = "[9/14/2026 2:42 PM] Igor: сделай второй кликабельный вариант"
+        self.assertIsNotNone(self.invoke_prompt({"prompt": prompt, "session_id": "session-a"}))
+        self.assertEqual(self.request()["prompt"], prompt)
 
     def test_documented_hook_payload_uses_transcript_origin(self) -> None:
         prompt = "проверь и исправь обвязку"
