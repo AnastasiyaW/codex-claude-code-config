@@ -56,7 +56,9 @@ CLOCK_SKEW = 2.0
 # Name fragments of programs that may hold a git lock: the git CLI and git GUIs /
 # libgit2 hosts (TortoiseGitProc, GitHub Desktop, GitKraken, SmartGit, lazygit ...
 # all contain "git"), plus clients without "git" in the name.
-OWNER_NAME_HINTS = ("git", "sourcetree", "devenv", "fork")
+# WSL / Docker hosts are included because a git inside them is invisible here; while
+# they run, removal is refused (conservative).
+OWNER_NAME_HINTS = ("git", "sourcetree", "devenv", "fork", "wsl", "vmmem", "docker")
 
 
 def _git(repo: Path, *args: str) -> str | None:
@@ -156,11 +158,17 @@ def remove_checked(lock: Path, snap: tuple[int, int, int]) -> str | None:
     except FileNotFoundError:
         return "lock vanished before removal"
     tomb = lock.with_name(f"{lock.name}.stale-{os.getpid()}-{time.time_ns()}")
-    os.rename(lock, tomb)  # atomic; the tombstone name no longer ends in .lock
+    try:
+        os.rename(lock, tomb)  # atomic; the tombstone name no longer ends in .lock
+    except OSError as exc:  # e.g. WinError 32: an invisible owner holds it open
+        return f"lock held open, not removed ({exc!r})"
     if _identity(tomb.stat()) != snap:
-        # a new lock was created between the check and the rename: give it back
+        # a new lock was created between the check and the rename: give it back.
+        # link+unlink, not rename: rename on POSIX would overwrite a lock created
+        # in that instant; link fails instead.
         try:
-            os.rename(tomb, lock)
+            os.link(tomb, lock)
+            tomb.unlink()
         except OSError as exc:
             return f"renamed a NEW lock and could not restore it ({exc!r}); tombstone: {tomb}"
         return "a new lock appeared between check and removal; restored"

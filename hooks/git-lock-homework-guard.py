@@ -109,6 +109,8 @@ def stale_locks(message: str, cwd, procs_fn=None) -> list[str]:
     now = time.time()
     out = []
     for lock in locks:
+        if gsl.on_remote_fs(lock):
+            continue  # the tool refuses network/WSL locks; do not demand what it won't do
         state, detail = gsl.classify_lock(lock, procs, now, gsl.DEFAULT_MIN_AGE)
         if state == "STALE":
             out.append(f"{lock} ({detail})")
