@@ -53,6 +53,7 @@ from safety_common import (  # noqa: E402
     any_match,
     bash_command,
     block,
+    executable_text,
     log,
     read_event,
 )
@@ -82,6 +83,9 @@ DESTRUCTIVE_INTENT = [
     r"\brobocopy\b.*\/(?:move|mov)\b",
     r"\brclone\s+move\b",
     r"\bfind\s+\S+.*-delete\b",
+    # cmd.exe deletes reached through a wrapper; a bare `rd`/`del` as the first
+    # word of a segment is caught structurally by decide(), not by this list
+    r"\bcmd(?:\.exe)?\s+/[ck]\s+.*\b(?:rd|rmdir|del|erase)\b",
     r"\bmkfs\.[a-z0-9]+\s+/dev/",
     r"\bdd\s+if=\S+\s+of=/dev/[sh]d[a-z]",
     r"\bshred\s+",
@@ -244,46 +248,161 @@ SAFE_TARGET_PATTERNS = [
     r"\.rej(\s|$|/)",         # patch reject
 ]
 
+# Temporary files may be removed without asking (owner directive 2026-09-26:
+# "временные файлы можно удалять без разрешения, а то они копятся").
+# Temporary = strictly inside an OS temp root (from the OS, not a list: on this
+# machine TEMP is D:\tmp), or a target whose OWN name is one that a tool generates
+# for scratch. A human-chosen name like `.tmp-notes` is not proof (review
+# 2026-09-26), and a matching name higher up the path whitelists nothing.
+# simplification: `tmp` + 8 [a-z0-9_] can collide with a real folder such as
+# `tmpservers1`; tighten to a sibling check if that ever happens.
+TEMP_NAME_PATTERNS = [
+    r"^tmp[a-z0-9_]{8}$",                        # tempfile.mkdtemp() default names
+    r"^pytest-of-[^/]+$",                        # pytest basetemp
+]
+DELETE_COMMANDS = {"rm", "rmdir", "remove-item", "ri", "del", "erase", "rd"}
+# Remove-Item parameters without a value; any other -Param consumes the next token.
+PS_SWITCHES = {"recurse", "r", "force", "whatif", "verbose", "confirm"}
+PS_PATH_PARAMS = {"path", "literalpath", "lp", "pspath"}
+
+
+def _norm(target: str) -> str:
+    s = target.strip().strip("'\"").replace("\\", "/")
+    m = re.match(r"^/([a-zA-Z])(?=/|$)", s)  # git-bash /d/tmp -> D:/tmp
+    if m:
+        s = f"{m.group(1).upper()}:{s[2:] or '/'}"
+    return s
+
+
+def _temp_roots() -> list[str]:
+    import os
+    import tempfile
+    raw = {tempfile.gettempdir(), os.environ.get("TEMP", ""), os.environ.get("TMP", ""),
+           "/tmp", "/var/tmp", "/private/tmp"}
+    return sorted({_norm(r).rstrip("/").lower() for r in raw if r})
+
+
+def is_temp_target(target: str) -> bool:
+    t = _norm(target).rstrip("/")
+    low = t.lower()
+    if any(low.startswith(root + "/") and len(low) > len(root) + 1 for root in _temp_roots()):
+        return True
+    parent, _, last = t.rpartition("/")
+    if not any(re.match(p, last, re.IGNORECASE) for p in TEMP_NAME_PATTERNS):
+        return False
+    # the name counts only where tools actually drop it: directly in a repo root
+    # (pytest basetemp, tempfile in cwd), not anywhere on disk (review round 2)
+    return bool(parent) and (Path(parent) / ".git").exists()
+
+
 def is_target_safe(target: str) -> bool:
-    """Check if a single rm target matches a safe pattern."""
+    """One delete target is routine build/cache/temp. Imported by dev_artifact_sweep."""
+    t = _norm(target)
+    if not t or re.search(r"[$%`]", t):   # unexpanded variable: target unknown
+        return False
+    if "/../" in f"/{t}/":                 # traversal out of a safe dir
+        return False
+    if re.match(r"^[A-Za-z]{2,}:", t):     # PowerShell provider (HKCU:, Env:, Cert:)
+        return False
+    if is_temp_target(t):
+        return True
     for pat in SAFE_TARGET_PATTERNS:
-        if re.search(pat, target, re.IGNORECASE):
+        if re.search(pat, t, re.IGNORECASE):
             return True
     return False
 
 
-def extract_rm_targets(cmd: str) -> list[str]:
-    """Pull non-flag arguments from an rm-like command. Best-effort tokenize."""
-    # Strip comment lines (bypass markers etc) before tokenizing
-    cmd_no_comments = re.sub(r"#[^\n]*", "", cmd)
-    try:
-        tokens = shlex.split(cmd_no_comments, posix=True)
+def delete_targets(segment: str) -> list[str] | None:
+    """Targets of an rm / Remove-Item segment, or None if the segment is not a delete."""
+    try:  # posix=False: posix mode would eat Windows backslashes
+        toks = [t.strip("'\"") for t in shlex.split(re.sub(r"(?m)#[^\n]*", "", segment), posix=False)]
     except ValueError:
-        return []
+        return None
+    while toks and toks[0].lower() in {"sudo", "command", "&"}:
+        toks = toks[1:]
+    if not toks:
+        return None
+    verb = toks[0].lower().rsplit("/", 1)[-1].removesuffix(".exe")
+    if verb not in DELETE_COMMANDS:
+        return None
     targets: list[str] = []
-    rm_seen = False
-    for tok in tokens:
-        if tok in ("rm", "rmdir") or tok.endswith("/rm") or tok.endswith("/rmdir"):
-            rm_seen = True
-            continue
-        if not rm_seen:
-            continue
-        if tok.startswith("-"):
-            continue
-        # Stop at shell metacharacters that bash split would have caught earlier
-        if tok in (";", "&&", "||", "|", "&"):
-            rm_seen = False
-            continue
-        targets.append(tok)
+    rest = toks[1:]
+    i = 0
+    end_of_flags = False
+    while i < len(rest):
+        tok = rest[i]
+        if not end_of_flags and tok == "--":
+            end_of_flags = True
+        elif not end_of_flags and tok.startswith("-") and len(tok) > 1:
+            name = tok[1:].lower()
+            if name in PS_PATH_PARAMS and i + 1 < len(rest):
+                targets.extend(x for x in rest[i + 1].split(",") if x)
+                i += 1
+            elif name in PS_SWITCHES or ":" in name or name.startswith("-"):
+                pass  # value-less switch, -Confirm:$false, --recursive
+            elif verb in {"rm", "rmdir"} and name.isalpha() and len(name) <= 3:
+                pass  # POSIX rm -rf / -r / -f
+            elif i + 1 < len(rest):
+                i += 1  # -ErrorAction SilentlyContinue: skip the value
+        else:
+            targets.extend(x for x in tok.split(",") if x)
+        i += 1
     return targets
 
 
-def all_targets_safe(cmd: str) -> bool:
-    """For rm-like commands: True if every non-flag arg is in safe whitelist."""
-    targets = extract_rm_targets(cmd)
-    if not targets:
-        return False
-    return all(is_target_safe(t) for t in targets)
+def split_segments(text: str) -> list[str]:
+    """Split on && || ; | newline, but never inside '...' or "..." (a commit
+    message saying "step; del old" is not a del command - review round 2)."""
+    out: list[str] = []
+    buf: list[str] = []
+    quote = None
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            buf.append(c)
+            if c == quote:
+                quote = None
+        elif c in "'\"":
+            quote = c
+            buf.append(c)
+        elif text.startswith(("&&", "||"), i):
+            out.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        elif c in ";|\n":
+            out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(c)
+        i += 1
+    out.append("".join(buf))
+    return out
+
+
+def decide(cmd: str) -> tuple[bool, str | None]:
+    """(allowed, hit). Every destructive segment must delete routine targets only.
+
+    A segment is destructive when it matches DESTRUCTIVE_INTENT OR its command
+    word is a delete verb (rm without -r, del, rd, ri, erase): review 2026-09-26
+    found those verbs passing untouched because no pattern named them.
+    """
+    whole_hit = any_match(cmd, DESTRUCTIVE_INTENT, command=True)
+    flagged = False
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        if not seg:
+            continue
+        targets = delete_targets(seg)
+        seg_hit = any_match(seg, DESTRUCTIVE_INTENT)
+        if targets is None and not seg_hit:
+            continue
+        flagged = True
+        if not targets or not all(is_target_safe(t) for t in targets):
+            return False, seg_hit or "delete-command-word"
+    if whole_hit and not flagged:
+        return False, whole_hit  # a hit no single segment carries: stay closed
+    return True, whole_hit or ("delete-command-word" if flagged else None)
 
 
 def main() -> None:
@@ -294,15 +413,12 @@ def main() -> None:
     if not cmd:
         allow()
 
-    # Step 1: any destructive intent?
-    hit = any_match(cmd, DESTRUCTIVE_INTENT, command=True)
-    if not hit:
-        allow()
-
-    # Step 2: rm-like command on only-safe targets — allow silently
-    is_rm_like = bool(re.search(r"\b(rm|rmdir)\b", cmd))
-    if is_rm_like and all_targets_safe(cmd):
-        log("INFO", "require_human_confirmation", "safe-target", hit, cmd[:200])
+    # No destructive intent, or every destructive segment deletes only routine
+    # build/cache/temp targets -> allow silently.
+    allowed, hit = decide(cmd)
+    if allowed:
+        if hit:
+            log("INFO", "require_human_confirmation", "safe-target", hit, cmd[:200])
         allow()
 
     log("BLOCK", "require_human_confirmation", "approval-interface-unavailable", hit, cmd[:300])
@@ -328,5 +444,64 @@ def main() -> None:
     )
 
 
+def self_test() -> int:
+    """Negative controls: every must-block case blocks, every temp/build delete passes."""
+    import tempfile
+    tmp = tempfile.gettempdir()
+    allow_cases = [
+        "rm -rf /tmp/x",
+        f"rm -rf {tmp}/claude-scratch/abc",
+        f'Remove-Item -Recurse -Force "{tmp}\\claude\\x"',
+        f"Remove-Item -LiteralPath '{tmp}\\a.txt' -ErrorAction SilentlyContinue",
+        "rm -rf C:/Users/AiD/Desktop/Claude_code/tmp0c9bxbq2",
+        "rm -rf C:/Users/AiD/Desktop/Claude_code/pytest-of-AiD",
+        "rm -rf build && rm -rf dist",
+        f"del {tmp}\\stale.txt",
+        'git commit -m "step; del old; rm tmp"',                  # quoted text is not a command
+        "echo 'a | rm -rf /data'",
+        "cat > s.sh <<'EOF'\nrm -rf /home/user/project\nEOF",   # heredoc body is not executed
+        "ls -la",
+    ]
+    block_cases = [
+        f"rm -rf {tmp}",                                   # the temp root itself
+        f"rm -rf {tmp}/../Users",                           # traversal
+        "rm -rf $TMPDIR/x",                                 # unexpanded variable
+        "Remove-Item -Recurse -Force C:\\Users\\AiD\\Desktop\\project",
+        "rm -rf /tmp/x && git reset --hard",                # piggy-backed destructive op
+        "rm -rf build; DROP TABLE users",
+        "Remove-Item HKCU:\\Software\\tmp12345678",         # registry provider
+        f"Remove-Item {tmp}\\x, D:\\data",                   # one unsafe target in a list
+        "Remove-Item -Path D:\\data -ErrorAction SilentlyContinue",
+        "rm -rf /home/user/.tmpfiles/../../etc",            # traversal through a temp name
+        "rm -rf ~/project",
+        # review 2026-09-26 round 1: delete verbs no pattern named
+        "ri -Recurse -Force C:\\Users\\AiD\\Desktop\\project",
+        "del -Recurse -Force C:\\Users\\AiD\\Desktop\\project",
+        "rd /s /q C:\\Users\\AiD\\important",
+        "del /s /q C:\\Users\\AiD\\important",
+        "erase C:\\data\\file.txt",
+        "cmd /c rd /s /q C:\\Users\\AiD\\important",
+        "rm C:\\data\\important.txt",
+        "rm -f secret.key",
+        "Get-ChildItem C:\\data | Remove-Item",
+        # a scratch-looking NAME is not proof when a human chose it
+        "rm -rf /home/user/.tmp-notes",
+        "rm -rf /home/user/.tmp-notes/important",
+        "rm -rf /srv/data/.temp-backups",
+        "rm -rf /home/user/tmpabcdefgh/important",           # name above the target
+        "rm -rf C:/work/tmpservers1",                        # mkdtemp-like name outside a repo root
+        "git commit -m 'ok'; del C:\\data\\x",               # real del after a quoted message
+    ]
+    fails = [f"should allow: {c}" for c in allow_cases if not decide(c)[0]]
+    fails += [f"should block: {c}" for c in block_cases if decide(c)[0]]
+    for f in fails:
+        print("SELF-TEST FAIL:", f)
+    print(f"SCANNED: allow={len(allow_cases)} block={len(block_cases)}")
+    print("SELF-TEST", "PASS" if not fails else "FAIL")
+    return 0 if not fails else 1
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        sys.exit(self_test())
     main()
