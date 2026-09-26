@@ -65,22 +65,51 @@ def write_script(path, exit_code, marker):
 
 hook = load_hook()
 
-print("=== portable_argv leaves every non-shell command alone ===")
+print("=== portable_argv: bare program names ===")
 here = Path.cwd()
 for cmd in (["npm", "test", "--silent"], ["pytest", "--tb=short", "-q"],
-            ["go", "test", "./..."], ["cargo", "test", "--quiet"], []):
-    check(f"untouched: {cmd or '[]'}", hook.portable_argv(list(cmd), here), cmd)
+            ["go", "test", "./..."], ["cargo", "test", "--quiet"]):
+    got = hook.portable_argv(list(cmd), here)
+    resolved = shutil.which(cmd[0])
+    if os.name == "nt" and resolved:
+        # CreateProcess appends only .exe to a bare name, so `npm` (npm.cmd) raised
+        # WinError 2 and the gate blocked every Stop on a suite that never ran.
+        check(f"windows: {cmd[0]} resolved to its PATH entry", got, [resolved, *cmd[1:]])
+    else:
+        check(f"untouched: {cmd}", got, cmd)
+check("untouched: []", hook.portable_argv([], here), [])
+# Nothing on PATH: keep the command, so the failure says what is really missing.
+missing = ["no-such-runner-3f9c2a", "test"]
+check("unresolvable bare name untouched", hook.portable_argv(list(missing), here), missing)
 
-# Measured, not assumed: on Windows a .cmd and a .bat run fine through subprocess,
-# so touching them would be a change with no defect behind it.
-for cmd in (["run-tests.cmd"], ["ci\\suite.bat"]):
+# Measured, not assumed: on Windows a .cmd and a .bat given by path run fine through
+# subprocess, so touching them would be a change with no defect behind it.
+for cmd in (["ci\\suite.bat"], ["./tools/run.cmd"]):
     check(f"untouched: {cmd}", hook.portable_argv(list(cmd), here), cmd)
+
+print("\n=== detect_test_command returns a runnable path, not a bare name ===")
+with tempfile.TemporaryDirectory() as td:
+    proj = Path(td)
+    (proj / "package.json").write_text('{"scripts": {"test": "x"}}', encoding="utf-8")
+    detected = hook.detect_test_command(proj)
+    if shutil.which("npm"):
+        check("npm detected", detected[1] if detected else None, "npm test")
+        check("npm argv[0] is the resolved path", detected[0][0], shutil.which("npm"))
+    else:
+        check("no npm on PATH: nothing detected", detected, None)
 
 print("\n=== a shell command is made runnable, and only on Windows ===")
 routed = hook.portable_argv(["./init.sh", "--fast"], here)
-if os.name == "nt" and shutil.which("bash"):
+if os.name == "nt" and hook.windows_bash():
     check("windows: bash is prepended", routed[0].lower().endswith("bash.exe"), True)
     check("windows: arguments survive", routed[1:], ["./init.sh", "--fast"])
+    # System32\bash.exe is the WSL launcher: without a distro the script never runs,
+    # and the gate read that launch failure as a red suite. Git's bash must win.
+    git_exe = shutil.which("git")
+    git_root = Path(git_exe).resolve().parent.parent if git_exe else None
+    if git_root and (git_root / "bin" / "bash.exe").is_file():
+        check("windows: Git's bash is chosen over the WSL launcher",
+              Path(routed[0]).parent.name.lower() not in ("system32", "windowsapps"), True)
     # Windows filenames are case-insensitive, so INIT.SH is a real file that fails
     # with the same WinError 193. Matching only the lowercase spelling would leave
     # the hole open for the one nobody thinks to test.
@@ -96,7 +125,7 @@ elif os.name == "nt":
 else:
     check("posix: untouched, the OS can exec it", routed, ["./init.sh", "--fast"])
 
-if os.name == "nt" and not shutil.which("bash"):
+if os.name == "nt" and not hook.windows_bash():
     print("\nSHELL TEST COMMAND:", "PASS" if not failures else "FAIL")
     for f in failures:
         print("  -", f)
@@ -137,6 +166,44 @@ with tempfile.TemporaryDirectory() as td:
     # is reporting its own failure to launch as a test verdict.
     check("the reason carries the script's output", "SUITE-RAN-RED" in reason, True)
     check("the reason is not 'unavailable'", "unavailable" in reason, False)
+
+if shutil.which("npm") and shutil.which("node"):
+    # The same distinction through the auto-detected npm path, with the real npm: on
+    # Windows it is npm.cmd, and before the fix the gate never managed to launch it.
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "npmproj"
+        (repo / "src").mkdir(parents=True)
+        (repo / ".claude").mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "t@example.com")
+        git(repo, "config", "user.name", "t")
+        (repo / "README.md").write_text("# t\n", encoding="utf-8")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "init")
+        os.utime(repo / ".claude", (0, 0))
+
+        env = dict(os.environ)
+        env["CLAUDE_REVIEW_EVIDENCE"] = str(Path(td) / "evidence.jsonl")
+        env.pop("CLAUDE_SKIP_TEST_GATE", None)
+        (repo / "src" / "util.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
+
+        def npm_suite(code, marker):
+            script = f"node -e \"console.log('{marker}');process.exit({code})\""
+            (repo / "package.json").write_text(
+                json.dumps({"name": "p", "version": "1.0.0", "scripts": {"test": script}}),
+                encoding="utf-8")
+
+        print("\n=== auto-detected npm test exits 0: the gate lets the session close ===")
+        npm_suite(0, "NPM-RAN-GREEN")
+        blocked, reason = fire(repo, env)
+        check("green npm suite does not block", blocked, False)
+
+        print("\n=== auto-detected npm test exits 1: the gate still blocks, on npm's output ===")
+        npm_suite(1, "NPM-RAN-RED")
+        blocked, reason = fire(repo, env)
+        check("red npm suite blocks", blocked, True)
+        check("the reason carries npm's output", "NPM-RAN-RED" in reason, True)
+        check("the reason is not 'unavailable'", "unavailable" in reason, False)
 
 print("\nSHELL TEST COMMAND:", "PASS" if not failures else "FAIL")
 for f in failures:
