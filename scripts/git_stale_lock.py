@@ -75,6 +75,18 @@ def live_git_processes() -> list[tuple[int, str, float]]:
     return out
 
 
+def classify_lock(lock: Path, procs, now: float, min_age: float) -> tuple[str, str]:
+    """('STALE'|'YOUNG'|'OWNED', detail). Shared with hooks/git-lock-homework-guard.py."""
+    mtime = lock.stat().st_mtime
+    age = now - mtime
+    owners = [(pid, n) for pid, n, ct in procs if ct <= mtime + CLOCK_SKEW]
+    if age < min_age:
+        return "YOUNG", f"age {age:.0f}s < {min_age:.0f}s (may be in use)"
+    if owners:
+        return "OWNED", f"age {age:.0f}s but possible owners alive: {owners}"
+    return "STALE", f"age {age:.0f}s, no git process older than it"
+
+
 def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes) -> int:
     gdir = git_dir(repo)
     if gdir is None:
@@ -95,19 +107,14 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes) -
     verdict = 0
     removed = []
     for lock in locks:
-        mtime = lock.stat().st_mtime
-        age = now - mtime
-        owners = [(pid, n) for pid, n, ct in procs if ct <= mtime + CLOCK_SKEW]
-        if age < min_age:
-            print(f"REFUSE: {lock} age {age:.0f}s < {min_age:.0f}s (may be in use)")
+        state, detail = classify_lock(lock, procs, now, min_age)
+        if state != "STALE":
+            print(f"REFUSE: {lock} {detail}")
             verdict = 1
             continue
-        if owners:
-            print(f"REFUSE: {lock} age {age:.0f}s but possible owners alive: {owners}")
-            verdict = 1
-            continue
+        age = now - lock.stat().st_mtime
         if not remove:
-            print(f"STALE: {lock} age {age:.0f}s, no git process older than it (dry run; add --remove)")
+            print(f"STALE: {lock} {detail} (dry run; add --remove)")
             continue
         lock.unlink()
         if lock.exists():
