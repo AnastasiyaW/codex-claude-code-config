@@ -306,7 +306,17 @@ def main() -> None:
         allow()
 
     log("BLOCK", "require_human_confirmation", "approval-interface-unavailable", hit, cmd[:300])
+    # A leftover git lock is the one deletion an agent can settle itself: the
+    # tool below proves "no owner" (age + no older git process) before unlinking.
+    lock_hint = ""
+    if re.search(r"\.lock\b", cmd, re.IGNORECASE):
+        lock_hint = (
+            "Если это зависший git-лок (.git/index.lock и т.п.), не удаляй его rm. "
+            "Выполни: python ~/.claude/claude-code-config/scripts/git_stale_lock.py <repo> --remove "
+            "— он удалит лок только при доказанном отсутствии владельца и проверит git status.\n\n"
+        )
     block(
+        lock_hint +
         "Эта операция destructive и заблокирована.\n\n"
         f"Detected pattern: /{hit}/\n\n"
         "Текущий hook API не передаёт проверяемую запись одобрения от user. "
