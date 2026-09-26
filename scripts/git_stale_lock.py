@@ -56,9 +56,11 @@ CLOCK_SKEW = 2.0
 # Name fragments of programs that may hold a git lock: the git CLI and git GUIs /
 # libgit2 hosts (TortoiseGitProc, GitHub Desktop, GitKraken, SmartGit, lazygit ...
 # all contain "git"), plus clients without "git" in the name.
-# WSL / Docker hosts are included because a git inside them is invisible here; while
-# they run, removal is refused (conservative).
-OWNER_NAME_HINTS = ("git", "sourcetree", "devenv", "fork", "wsl", "vmmem", "docker")
+# Docker hosts are included because a git inside a container is invisible here;
+# while they run, removal is refused (conservative). WSL is judged by state, not by
+# the name `vmmem`: that process is also every Hyper-V VM's memory host, and on a
+# machine without WSL it named a false owner forever (measured 2026-09-26).
+OWNER_NAME_HINTS = ("git", "sourcetree", "devenv", "fork", "docker")
 
 
 def _git(repo: Path, *args: str) -> str | None:
@@ -110,6 +112,118 @@ def on_remote_fs(path: Path) -> bool:
     # simplification: POSIX network mounts are not detected; add a statfs check if
     # this ever runs on NFS/SMB-mounted repos on Linux/macOS
     return False
+
+
+class Unverifiable(RuntimeError):
+    """A place an owner could hide could not be enumerated: not green (review 2026-09-26)."""
+
+
+def _run(argv: list[str]) -> tuple[int, str]:
+    try:
+        r = subprocess.run(argv, capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Unverifiable(f"{argv[0]} did not run: {exc!r}") from exc
+    # wsl.exe prints UTF-16; strip NULs so plain text survives either encoding
+    return r.returncode, (r.stdout + r.stderr).decode("utf-8", "replace").replace("\0", "")
+
+
+def _wsl_running() -> list[str]:
+    """Running WSL distributions. Only an explicit "not installed" counts as none."""
+    code, text = _run(["wsl.exe", "--list", "--running", "--quiet"])
+    if "not installed" in text.lower():
+        return []
+    if code == 0:
+        return text.split()
+    if "no running distributions" in text.lower():
+        return []
+    raise Unverifiable(f"wsl.exe --list --running exited {code}: {text.strip()[:120]}")
+
+
+LANMAN = r"SYSTEM\CurrentControlSet\Services\LanmanServer"
+
+
+def _disk_shares() -> list[tuple[str, str]]:
+    """(name, path) of every disk share: user shares from the registry, plus the
+    automatic admin shares X$ for each fixed drive unless AutoShareWks=0.
+
+    Registry, not `net share` (text wraps and localises) and not PowerShell
+    (measured 2026-09-26: no answer within 60 s on this machine).
+    """
+    import ctypes
+    import string
+    import winreg
+    shares: list[tuple[str, str]] = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, LANMAN + r"\Shares") as key:
+            i = 0
+            while True:
+                try:
+                    name, value, _kind = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                i += 1
+                fields = dict(f.split("=", 1) for f in value if "=" in f) if isinstance(value, list) else {}
+                if fields.get("Path") and fields.get("Type", "0") == "0":  # 0 = disk share
+                    shares.append((name, fields["Path"]))
+    except FileNotFoundError:
+        pass  # no user shares defined
+    except OSError as exc:
+        raise Unverifiable(f"cannot read {LANMAN}\\Shares: {exc!r}") from exc
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, LANMAN + r"\Parameters") as key:
+            auto = winreg.QueryValueEx(key, "AutoShareWks")[0]
+    except FileNotFoundError:
+        auto = 1  # absent = default = admin shares on
+    except OSError as exc:
+        raise Unverifiable(f"cannot read AutoShareWks: {exc!r}") from exc
+    if auto:
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        for i, letter in enumerate(string.ascii_uppercase):
+            root = f"{letter}:\\"
+            if mask >> i & 1 and ctypes.windll.kernel32.GetDriveTypeW(root) == 3:  # DRIVE_FIXED
+                shares.append((f"{letter}$", root))
+    return shares
+
+
+def _covers(share_path: str, target: str) -> bool:
+    root = share_path.replace("/", "\\").lower().rstrip("\\") + "\\"
+    return (target.replace("/", "\\").lower().rstrip("\\") + "\\").startswith(root)
+
+
+def invisible_owner_hosts(path: Path, *, trust_admin_shares: bool = False) -> list[str]:
+    """Places a lock owner could live that this process table cannot see.
+
+    Raises Unverifiable when a place could not be enumerated. Admin shares (C$ ...)
+    count too: a VM or remote host with admin credentials holds files through
+    them as System, which no name hint catches. `trust_admin_shares` is the
+    owner's declared fact that no VM/remote uses them for repos (settings file,
+    see load_trust()).
+    """
+    hosts = []
+    if os.name != "nt":
+        return hosts
+    running = _wsl_running()
+    if running:
+        hosts.append(f"WSL distributions running: {running}")
+    target = str(path.resolve())
+    for name, share_path in _disk_shares():
+        if name.endswith("$") and trust_admin_shares:
+            continue
+        if _covers(share_path, target):
+            hosts.append(f"share {name} -> {share_path}")
+    return hosts
+
+
+TRUST_FILE = Path.home() / ".claude" / "state" / "git-lock-trust.json"
+
+
+def load_trust() -> bool:
+    """Owner-declared: no VM/remote host reaches repos through admin shares."""
+    import json as _json
+    try:
+        return bool(_json.loads(TRUST_FILE.read_text(encoding="utf-8")).get("trust_admin_shares"))
+    except (OSError, ValueError):
+        return False
 
 
 def live_git_processes() -> list[tuple[int, str, float]]:
@@ -178,7 +292,13 @@ def remove_checked(lock: Path, snap: tuple[int, int, int]) -> str | None:
     return None
 
 
-def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes) -> int:
+def _real_hidden(dirs: list[Path]) -> list[str]:
+    trust = load_trust()
+    return [h for d in dirs for h in invisible_owner_hosts(d, trust_admin_shares=trust)]
+
+
+def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
+        hidden_fn=_real_hidden) -> int:
     dirs = git_dirs(repo)
     if not dirs:
         print(f"UNKNOWN: {repo} is not a git repository")
@@ -191,6 +311,14 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes) -
     remote = [str(d) for d in dirs if on_remote_fs(d)]
     if remote:
         print(f"REFUSE: git dir on a network/WSL filesystem {remote}; owners there are not visible here")
+        return 1
+    try:
+        hidden = hidden_fn(dirs)
+    except Unverifiable as exc:
+        print(f"UNKNOWN: cannot rule out an invisible owner: {exc}")
+        return 2
+    if hidden:
+        print(f"REFUSE: a lock owner could be invisible from here: {hidden}")
         return 1
     try:
         procs = procs_fn()
@@ -243,6 +371,13 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes) -
 def self_test() -> int:
     """Negative controls: every red case must come back red, the green one green."""
     failures = []
+    module_run = globals()["run"]
+
+    def run(repo_, remove, min_age, procs_fn, hidden_fn=lambda dirs: []):
+        # the real share/WSL enumeration is exercised by its own cases below;
+        # here the temp repo's disk may itself be shared (D:\ is, on this machine)
+        return module_run(repo_, remove, min_age, procs_fn, hidden_fn)
+
     with tempfile.TemporaryDirectory() as td:
         repo = Path(td) / "r"
         repo.mkdir()
@@ -295,6 +430,18 @@ def self_test() -> int:
 
         if run(Path(td), True, 600, no_procs) != 2:
             failures.append("non-repo was not UNKNOWN")
+
+        stale_lock()  # an invisible-owner host (share / WSL) -> refuse, keep the lock
+        if run(repo, True, 600, no_procs, lambda dirs: ["share C$ -> C:\\"]) != 1 or not lock.exists():
+            failures.append("lock under a share was not refused")
+
+        def cannot_enumerate(dirs):
+            raise Unverifiable("registry denied")
+        if run(repo, True, 600, no_procs, cannot_enumerate) != 2 or not lock.exists():
+            failures.append("share enumeration failure was not UNKNOWN")
+
+    if not _covers("D:\\", "D:/x/y") or _covers("C:\\HomeShare", "C:/HomeShareX/y"):
+        failures.append("share prefix match wrong (drive root / sibling name)")
 
     for f in failures:
         print(f"SELF-TEST FAIL: {f}")

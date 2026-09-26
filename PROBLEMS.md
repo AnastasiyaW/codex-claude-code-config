@@ -140,3 +140,9 @@ actor-critic spiral this change was reviewed against. Needs its own case and rev
 **Recheck**: build the parser behind `executable_text`, add every command above to
 `human-confirmation-guard.py --self-test` (group 1 must-block, group 2 must-allow), and run
 all command-guard self-tests.
+
+Same class, `agent_policy_gates.commit_invocations` (review round 2, 2026-09-26): after the
+fixed cases (newline, backslash paths, redirections, cd/Set-Location carry, env/VAR= prefixes)
+a commit hidden in `bash -c "git commit"`, `sh -c`, `powershell -c`, or a git alias
+(`git ci`) is still not seen, so the commit check does not run for it. One shared parser
+closes both guards; recheck adds those commands to `test_agent_policy_commit_gate.py`.

@@ -316,6 +316,155 @@ def widget_test_gate(command: str, cwd: Path, root: Path, policy: dict) -> None:
               f"`python scripts/hidden_run.py --cwd {hit} -- <python> -m unittest <test>`.")
 
 
+# ---------- commit checks ----------
+
+# git global options that take a value (`git -C dir commit`, `git -c k=v commit`)
+GIT_GLOBAL_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+# commit options whose value is the next token (or the rest of a short cluster)
+COMMIT_VALUE_LONG = {"--message", "--file", "--author", "--date", "--reuse-message", "--reedit-message",
+                     "--fixup", "--squash", "--template", "--cleanup", "--trailer", "--pathspec-from-file"}
+COMMIT_VALUE_SHORT = set("mFCct")
+# Total time the checks may take; the hook entry's own timeout in settings.json is above it.
+COMMIT_CHECK_BUDGET = 240
+
+
+def _drop_redirections(seg: list[str]) -> list[str]:
+    """Remove `2>&1`, `>out`, and a bare `>` / `>>` / `<` together with its target."""
+    out, skip = [], False
+    for tok in seg:
+        if skip:
+            skip = False
+            continue
+        if tok in ("(", ")"):
+            continue
+        m = re.match(r"^\d*(?:>>?|<)(&\d+)?(.*)$", tok)
+        if m:
+            skip = not m.group(1) and not m.group(2)  # bare operator: its target is the next token
+            continue
+        out.append(tok)
+    return out
+
+
+def commit_invocations(command: str, cwd: Path) -> list[tuple[Path, bool]]:
+    """(target dir, records the working tree?) for every `git ... commit` in the command.
+
+    Tokens, not a regex over raw text (review 2026-09-26): quoted text never counts,
+    global options are skipped generically, `-C dir` retargets the repo, and
+    `-a` / `--all` / `-i` / `-o` / a pathspec mean git records the working tree.
+    `--dry-run` records nothing.
+    """
+    # posix shlex eats Windows backslashes; a newline separates commands like `;` (review round 2)
+    lex = shlex.shlex(command.replace("\\", "/").replace("\r", ""), posix=True,
+                      punctuation_chars=";&|\n")
+    lex.whitespace_split = True
+    lex.whitespace = " \t"
+    try:
+        tokens = list(lex)
+    except ValueError:
+        return []
+    segments, seg = [], []
+    for tok in tokens:
+        if tok and set(tok) <= set(";&|\n"):
+            segments.append(seg)
+            seg = []
+        else:
+            seg.append(tok)
+    segments.append(seg)
+    found = []
+    here = cwd
+    for seg in segments:
+        seg = _drop_redirections(seg)
+        while seg and (seg[0] in {"env", "time", "command", "nohup"} or re.match(r"^\w+=", seg[0])):
+            seg = seg[1:]
+        if seg and seg[0].lower() in {"cd", "set-location", "pushd"} and len(seg) > 1:
+            step = windows_path(seg[1])
+            here = step if step.is_absolute() else here / step
+            continue
+        if not seg or Path(seg[0]).name.lower() not in {"git", "git.exe"}:
+            continue
+        target, i = here, 1
+        while i < len(seg) and seg[i].startswith("-"):
+            opt = seg[i].split("=", 1)[0]
+            if opt in GIT_GLOBAL_VALUE and "=" not in seg[i]:
+                if opt == "-C" and i + 1 < len(seg):
+                    step = windows_path(seg[i + 1])
+                    target = step if step.is_absolute() else target / step
+                i += 2
+            else:
+                i += 1
+        if i >= len(seg) or seg[i] != "commit":
+            continue
+        args = seg[i + 1:]
+        if "--dry-run" in args:
+            continue
+        worktree, j = False, 0
+        while j < len(args):
+            a = args[j]
+            if a == "--":
+                worktree = worktree or j + 1 < len(args)
+                break
+            if a.startswith("--"):
+                name = a.split("=", 1)[0]
+                if name in {"--all", "--include", "--only"}:
+                    worktree = True
+                if name in COMMIT_VALUE_LONG and "=" not in a:
+                    j += 1
+            elif a.startswith("-") and len(a) > 1:
+                for k, ch in enumerate(a[1:]):
+                    if ch in "aio":
+                        worktree = True
+                    if ch in COMMIT_VALUE_SHORT:
+                        if k == len(a) - 2:
+                            j += 1  # value is the next token
+                        break      # value is the rest of this cluster
+            else:
+                worktree = True  # a pathspec: git commits those files from the working tree
+            j += 1
+        found.append((target, worktree))
+    return found
+
+
+def commit_gate(command: str, cwd: Path) -> None:
+    """Run the target repo's `commit_checks` on exactly what this commit records.
+
+    Adopted 2026-09-26 (the same CTO post: the hardest checks sit at commit time,
+    so slop is seen before review, not after). `--staged` judges the index; when
+    git records the working tree (-a, -i, -o, pathspec) the check gets
+    `--base HEAD` instead. Any non-zero exit blocks, including 2 (tool missing):
+    a check that could not run is not a pass.
+    """
+    deadline = time.monotonic() + COMMIT_CHECK_BUDGET
+    for target, worktree in commit_invocations(command, cwd):
+        root = repo_root(target)
+        policy = load_policy(root)
+        checks = (policy or {}).get("commit_checks") or []
+        for check in checks:
+            _run_commit_check(check, root, worktree, deadline)
+
+
+def _run_commit_check(check: list[str], root: Path, worktree: bool, deadline: float) -> None:
+    argv = [sys.executable if part == "python" else part for part in check]
+    if worktree and "--staged" in argv:
+        at = argv.index("--staged")
+        argv[at:at + 1] = ["--base", "HEAD"]  # the working tree is what gets recorded
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        block(f"Commit checks exceeded {COMMIT_CHECK_BUDGET}s before `{' '.join(check)}` ran; "
+              "a check that did not run is not a pass.")
+    try:
+        result = subprocess.run(argv, cwd=str(root), capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=remaining)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        log("BLOCK", HOOK, "commit-check-error", " ".join(check), repr(err)[:200])
+        block(f"Commit check `{' '.join(check)}` could not run ({err!r}); "
+              "a check that did not run is not a pass.")
+    if result.returncode != 0:
+        tail = "\n".join((result.stdout or result.stderr).strip().splitlines()[-15:])
+        log("BLOCK", HOOK, "commit-check", " ".join(check), tail[:300])
+        block(f"Commit check `{' '.join(check)}` failed (exit {result.returncode}):\n{tail}\n\n"
+              "Fix the code (split the function / flatten the nesting) and commit again.")
+
+
 # ---------- entry ----------
 
 def on_tool(event: dict) -> None:
@@ -331,6 +480,7 @@ def on_tool(event: dict) -> None:
     if prefix:
         target = windows_path(prefix.group(1))
         cwd = target if target.is_absolute() else cwd / target
+    commit_gate(command, cwd)  # resolves its own target repo (`git -C other commit`)
     root = repo_root(cwd)
     policy = load_policy(root)
     if policy is None:
