@@ -254,7 +254,8 @@ _EXPLICIT_TUTORIAL_REQUEST = re.compile(
 # with no timeout on this Stop hook. Each alternative below is searched by a
 # scan that is linear for exactly its text; edit a pattern, re-prove its scan.
 _INLINE_END = re.compile(r"[`\n]")
-_INLINE_MARK = re.compile(r"(?i)\$env:|https?://|--?[a-z]|[a-z]:\\|/[\w.-]")
+# A flag starts its token: the "-code" in `claude-code-config` is part of a name.
+_INLINE_MARK = re.compile(r"(?i)\$env:|https?://|(?<![\w-])--?[a-z]|[a-z]:\\|/[\w.-]")
 _WORD_HEAD = re.compile(r"(?i)\b[a-z]")
 _WORD_RUN = re.compile(r"[\w.-]*")
 _WORD_FLAG = re.compile(r"(?i)\s+(?:--?[a-z][\w-]*|https?://\S+|[a-z]:\\\S+|/[\w.-]+)")
@@ -352,7 +353,7 @@ def _scan_prompts(message: str, rx: re.Pattern):
 # leftmost start >= pos where that alternative matches, or None.
 _SHAPE_SCANS = {
     r"```(?:powershell|pwsh|bash|shell|cmd|python)?[^\n]*\n[\s\S]*?```": _scan_fences,
-    r"`[^`\n]*(?:\$env:|https?://|--?[a-z]|[a-z]:\\|/[\w.-])[^`\n]*`": _scan_inline,
+    r"`[^`\n]*(?:\$env:|https?://|(?<![\w-])--?[a-z]|[a-z]:\\|/[\w.-])[^`\n]*`": _scan_inline,
     r"\$env:[a-z_]\w*\s*=": _scan_plain,
     r"\b[a-z][\w.-]*(?:\.exe)?\s+"
     r"(?:--?[a-z][\w-]*|https?://\S+|[a-z]:\\\S+|/[\w.-]+)": _scan_word_flags,
@@ -944,6 +945,13 @@ def _self_test() -> int:
          "описания лежат в `data\\export\\pin-text.jsonl`", False),
         ("word inside a quoted filename",
          "отчёт лежит в `docs/REVIEW-AND-BOARDS-RUN.md`", False),
+        # 2026-09-26: a hyphen inside a word is no longer a flag, so the two
+        # cases above have no shape. These keep a real flag or drive path to
+        # go on exercising the same grammar.
+        ("past tense before a real flag",
+         f"вчера {run_ru}ли прогон на сервере `build-rev --once`", False),
+        ("verb inside a quoted drive path",
+         "описания лежат в `D:\\data\\export\\pin-text.jsonl`", False),
         ("russian imperative", f"{run_ru} `claude auth login --claudeai`", True),
         ("russian plural imperative",
          f"{run_ru}те `claude auth login --claudeai`", True),
@@ -996,7 +1004,9 @@ def _self_test() -> int:
         if [s.span() for s in shapes] != reference:
             fails.append(f"{label}: shape scan disagrees with the regex")
         if not shapes:
-            fails.append(f"{label}: no command shape matched at all")
+            # A describing case with no shape is not flagged; a hand-off must have one.
+            if want:
+                fails.append(f"{label}: no command shape matched at all")
             continue
         got = any(shape_is_instruction(text, s.start(), s.end()) for s in shapes)
         if got != want:
@@ -1036,6 +1046,27 @@ def _self_test() -> int:
         fails.append(f"one question with {QUESTION_RUN} commands is not judged in linear time")
     if verdict is not None:
         fails.append(f"a long permission question was read as a hand-off: {verdict[:40]!r}")
+    # Measured 2026-09-26: a finished report naming a hyphenated repo was
+    # blocked because "-code" inside `claude-code-config` read as a flag and a
+    # "тебе" nearby read as its addressee. The prompt quotes another agent's
+    # hand-off, which makes the request an action. The control keeps a real
+    # flag in the same sentence so the case still reaches the shape scan.
+    quoted = ("Ответ другого агента:\n```\nrm \"C:/x/.git/index.lock\"\n```\n"
+              "это нужно сделать тебе в своём терминале. Разберись.")
+    for label, text, want in (
+        ("a hyphenated repo name in a report",
+         "Правки закоммичены в `claude-code-config` (99dadf9). "
+         "Тебе больше ничего делать не нужно.", None),
+        ("control: a flag in the same report",
+         "Правки закоммичены в `claude-code-config --force` (99dadf9). "
+         "Тебе больше ничего делать не нужно.", "`claude-code-config --force`"),
+    ):
+        shapes = [m.span() for m in find_command_shapes(text)]
+        if shapes != [m.span() for m in _COMMAND_HANDOFF_SHAPE.finditer(text)]:
+            fails.append(f"{label}: shape scan disagrees with the regex")
+        got = agent_capable_user_homework(text, [quoted], {})
+        if got != want:
+            fails.append(f"{label}: expected {want!r}, got {got!r}")
     fails.extend(_self_test_active_request())
     for f in fails:
         print("FAIL:", f)
