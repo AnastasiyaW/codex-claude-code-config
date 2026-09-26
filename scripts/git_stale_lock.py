@@ -11,22 +11,28 @@ from the command text alone a stale lock and a lock held right now by a live git
 look the same - deleting the second corrupts the index.
 
 This tool supplies the missing proof instead of a whitelist entry. A lock is
-removed only if BOTH hold:
+removed only if ALL hold:
 
-1. age >= --min-age (default 600 s). git holds its locks for the duration of one
-   operation, i.e. seconds.
-2. no running git-family process started before the lock's mtime. A process that
-   started after the lock existed cannot own it: it would have failed to create
-   it. mtime >= creation time, so "started <= mtime" is the conservative side.
+1. the git dir is on a local disk (UNC / \\\\wsl$ / mapped network drive -> refuse:
+   owners there are invisible to this machine's process table);
+2. mtime is not in the future (clock skew makes the age meaningless);
+3. age >= --min-age (default 600 s). git holds most locks for one operation;
+   `git commit` holds index.lock while its editor is open, hence the owner test;
+4. no possible owner is running: a process whose name suggests a git client
+   (OWNER_NAME_HINTS) or whose name / start time cannot be read, started before
+   the lock's mtime. A process that started after the lock existed could not
+   have created it; mtime >= creation, so "started <= mtime" is conservative.
 
-After removal it re-checks that the file is gone and that `git status` exits 0
-(index readable). It never repairs a damaged index.
+Removal is identity-checked against the classified file (mtime_ns, size, inode):
+the lock is renamed to a tombstone, the tombstone is re-checked, and only then
+deleted; a lock that appeared in between is put back. Afterwards the tool checks
+the file is gone and `git status` exits 0. It never repairs a damaged index.
 
-Exit codes (three states, see rules/absence-of-signal.md):
-  0  nothing stale, or every stale lock removed and verified (dry-run: report only)
-  1  a lock exists but removal is refused (too young / possible owner) or the
-     post-check failed
+Exit codes (see rules/absence-of-signal.md):
+  0  nothing stale, or every stale lock removed and verified
+  1  a lock exists but removal is refused, or the post-check failed
   2  UNKNOWN: not a git repo, or processes could not be enumerated
+  3  dry run found stale locks (nothing removed; re-run with --remove)
 
 Usage:
   python git_stale_lock.py [REPO] [--remove] [--min-age SECONDS]
@@ -43,16 +49,42 @@ import time
 from pathlib import Path
 
 # 10 min: git holds a lock for one operation (seconds); 600 s leaves two orders of
-# magnitude of margin, also for libgit2-based GUIs that do not appear as git.exe.
+# magnitude of margin. Long holders (commit editor) are caught by the owner test.
 DEFAULT_MIN_AGE = 600
 # Filesystem mtime vs process create_time come from different clocks; allow skew.
 CLOCK_SKEW = 2.0
+# Name fragments of programs that may hold a git lock: the git CLI and git GUIs /
+# libgit2 hosts (TortoiseGitProc, GitHub Desktop, GitKraken, SmartGit, lazygit ...
+# all contain "git"), plus clients without "git" in the name.
+OWNER_NAME_HINTS = ("git", "sourcetree", "devenv", "fork")
+
+
+def _git(repo: Path, *args: str) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    except OSError:
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
 
 def git_dir(repo: Path) -> Path | None:
-    r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--absolute-git-dir"],
-                       capture_output=True, text=True)
-    return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+    out = _git(repo, "rev-parse", "--absolute-git-dir")
+    return Path(out) if out else None
+
+
+def git_dirs(repo: Path) -> list[Path]:
+    """The repo's git dir plus, for a linked worktree, the shared common dir."""
+    gdir = git_dir(repo)
+    if gdir is None:
+        return []
+    dirs = [gdir]
+    common = _git(repo, "rev-parse", "--git-common-dir")
+    if common:
+        cpath = Path(common) if Path(common).is_absolute() else (repo / common)
+        cpath = cpath.resolve()
+        if cpath != gdir.resolve():
+            dirs.append(cpath)
+    return dirs
 
 
 def find_locks(gdir: Path) -> list[Path]:
@@ -64,39 +96,94 @@ def find_locks(gdir: Path) -> list[Path]:
     return sorted(locks)
 
 
+def on_remote_fs(path: Path) -> bool:
+    s = str(path)
+    if s.startswith("\\\\") or s.startswith("//"):
+        return True  # UNC, including \\wsl$ and \\wsl.localhost
+    if os.name == "nt":
+        import ctypes
+        drive = os.path.splitdrive(s)[0]
+        # 4 = DRIVE_REMOTE (mapped network share)
+        return bool(drive) and ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") == 4
+    # simplification: POSIX network mounts are not detected; add a statfs check if
+    # this ever runs on NFS/SMB-mounted repos on Linux/macOS
+    return False
+
+
 def live_git_processes() -> list[tuple[int, str, float]]:
-    """(pid, name, create_time) of every running git-family process. Raises on failure."""
+    """(pid, name, create_time) of every process that could own a git lock.
+
+    psutil puts None for a field it may not read (AccessDenied) instead of
+    raising. Unreadable must not look like absent: such a process counts as a
+    possible owner, with start time 0.0 = older than any lock.
+    """
     import psutil
     out = []
     for p in psutil.process_iter(["pid", "name", "create_time"]):
-        name = (p.info.get("name") or "").lower()
-        if name.startswith("git") and p.info.get("create_time"):
-            out.append((p.info["pid"], name, float(p.info["create_time"])))
+        name = p.info.get("name")
+        ct = p.info.get("create_time")
+        if name is None or any(h in name.lower() for h in OWNER_NAME_HINTS):
+            out.append((p.info["pid"], (name or "<unreadable>").lower(), float(ct) if ct else 0.0))
     return out
 
 
+def _identity(st: os.stat_result) -> tuple[int, int, int]:
+    return (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+
+
 def classify_lock(lock: Path, procs, now: float, min_age: float) -> tuple[str, str]:
-    """('STALE'|'YOUNG'|'OWNED', detail). Shared with hooks/git-lock-homework-guard.py."""
-    mtime = lock.stat().st_mtime
+    """('STALE'|'YOUNG'|'OWNED'|'SKEWED'|'GONE', detail). Shared with the Stop hook."""
+    try:
+        mtime = lock.stat().st_mtime
+    except FileNotFoundError:
+        return "GONE", "lock no longer exists"
     age = now - mtime
-    owners = [(pid, n) for pid, n, ct in procs if ct <= mtime + CLOCK_SKEW]
+    if age < -CLOCK_SKEW:
+        return "SKEWED", f"mtime is {-age:.0f}s in the future (clock skew; age meaningless)"
     if age < min_age:
         return "YOUNG", f"age {age:.0f}s < {min_age:.0f}s (may be in use)"
+    owners = [(pid, n) for pid, n, ct in procs if ct <= mtime + CLOCK_SKEW]
     if owners:
-        return "OWNED", f"age {age:.0f}s but possible owners alive: {owners}"
-    return "STALE", f"age {age:.0f}s, no git process older than it"
+        return "OWNED", f"age {age:.0f}s but possible owners alive: {owners[:5]}"
+    return "STALE", f"age {age:.0f}s, no possible owner older than it"
+
+
+def remove_checked(lock: Path, snap: tuple[int, int, int]) -> str | None:
+    """Delete `lock` only if it is still the file that was classified. Error text or None."""
+    try:
+        if _identity(lock.stat()) != snap:
+            return "lock changed since it was checked"
+    except FileNotFoundError:
+        return "lock vanished before removal"
+    tomb = lock.with_name(f"{lock.name}.stale-{os.getpid()}-{time.time_ns()}")
+    os.rename(lock, tomb)  # atomic; the tombstone name no longer ends in .lock
+    if _identity(tomb.stat()) != snap:
+        # a new lock was created between the check and the rename: give it back
+        try:
+            os.rename(tomb, lock)
+        except OSError as exc:
+            return f"renamed a NEW lock and could not restore it ({exc!r}); tombstone: {tomb}"
+        return "a new lock appeared between check and removal; restored"
+    tomb.unlink()
+    if tomb.exists():
+        return f"tombstone still exists after unlink: {tomb}"
+    return None
 
 
 def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes) -> int:
-    gdir = git_dir(repo)
-    if gdir is None:
+    dirs = git_dirs(repo)
+    if not dirs:
         print(f"UNKNOWN: {repo} is not a git repository")
         return 2
-    locks = find_locks(gdir)
-    print(f"SCANNED: git_dir={gdir} locks={len(locks)}")
+    locks = sorted({p for d in dirs for p in find_locks(d)})
+    print(f"SCANNED: git_dirs={[str(d) for d in dirs]} locks={len(locks)}")
     if not locks:
         print("OK: no lock files")
         return 0
+    remote = [str(d) for d in dirs if on_remote_fs(d)]
+    if remote:
+        print(f"REFUSE: git dir on a network/WSL filesystem {remote}; owners there are not visible here")
+        return 1
     try:
         procs = procs_fn()
     except Exception as exc:  # cannot prove absence of an owner -> not green
@@ -105,24 +192,33 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes) -
 
     now = time.time()
     verdict = 0
+    stale_seen = 0
     removed = []
     for lock in locks:
+        try:
+            snap = _identity(lock.stat())
+        except FileNotFoundError:
+            print(f"GONE: {lock}")
+            continue
         state, detail = classify_lock(lock, procs, now, min_age)
+        if state == "GONE":
+            print(f"GONE: {lock}")
+            continue
         if state != "STALE":
             print(f"REFUSE: {lock} {detail}")
             verdict = 1
             continue
-        age = now - lock.stat().st_mtime
+        stale_seen += 1
         if not remove:
             print(f"STALE: {lock} {detail} (dry run; add --remove)")
             continue
-        lock.unlink()
-        if lock.exists():
-            print(f"FAIL: {lock} still exists after unlink")
+        err = remove_checked(lock, snap)
+        if err:
+            print(f"FAIL: {lock}: {err}")
             verdict = 1
             continue
         removed.append(lock)
-        print(f"REMOVED: {lock} (age {age:.0f}s, verified absent)")
+        print(f"REMOVED: {lock} ({detail}; identity-checked, verified absent)")
 
     if removed:
         st = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
@@ -131,6 +227,8 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes) -
             print(f"FAIL: git status exit {st.returncode} after removal: {st.stderr.strip()[:300]}")
             return 1
         print("VERIFIED: git status exit 0 after removal")
+    if verdict == 0 and stale_seen and not remove:
+        return 3
     return verdict
 
 
@@ -145,28 +243,47 @@ def self_test() -> int:
         old = time.time() - 3600
         no_procs = lambda: []  # noqa: E731
 
+        def stale_lock():
+            lock.write_bytes(b"")
+            os.utime(lock, (old, old))
+
         lock.write_bytes(b"")  # fresh lock -> refuse, must survive
         if run(repo, True, 600, no_procs) != 1 or not lock.exists():
             failures.append("fresh lock was not refused")
 
-        os.utime(lock, (old, old))  # old lock, owner started before it -> refuse
+        stale_lock()  # owner started before it -> refuse
         if run(repo, True, 600, lambda: [(1, "git.exe", old - 10)]) != 1 or not lock.exists():
             failures.append("lock with live older owner was not refused")
 
-        # old lock, only a process started AFTER it -> not an owner -> remove
-        if run(repo, True, 600, lambda: [(2, "git.exe", time.time())]) != 0 or lock.exists():
-            failures.append("stale lock with no possible owner was not removed")
+        # unreadable process (name/start None -> recorded as start 0.0) -> refuse
+        if run(repo, True, 600, lambda: [(7, "<unreadable>", 0.0)]) != 1 or not lock.exists():
+            failures.append("unreadable process was not treated as a possible owner")
 
-        lock.write_bytes(b"")  # process enumeration failure -> UNKNOWN, keep file
-        os.utime(lock, (old, old))
+        future = time.time() + 3600  # mtime in the future -> refuse
+        os.utime(lock, (future, future))
+        if run(repo, True, 600, no_procs) != 1 or not lock.exists():
+            failures.append("future mtime was not refused")
 
+        stale_lock()  # enumeration failure -> UNKNOWN, keep file
         def boom():
             raise RuntimeError("no access")
         if run(repo, True, 600, boom) != 2 or not lock.exists():
             failures.append("enumeration failure was not UNKNOWN")
 
-        if run(repo, False, 600, no_procs) != 0 or not lock.exists():
-            failures.append("dry run removed the lock or failed")
+        if run(repo, False, 600, no_procs) != 3 or not lock.exists():
+            failures.append("dry run did not report stale (exit 3) or removed the lock")
+
+        snap = _identity(lock.stat())  # file replaced after classification -> refuse
+        lock.unlink()
+        lock.write_bytes(b"new owner")
+        if remove_checked(lock, snap) is None or not lock.exists():
+            failures.append("a lock replaced after the check was removed")
+
+        stale_lock()  # only a process started AFTER it -> not an owner -> remove
+        if run(repo, True, 600, lambda: [(2, "git.exe", time.time())]) != 0 or lock.exists():
+            failures.append("stale lock with no possible owner was not removed")
+        if list((repo / ".git").glob("index.lock.stale-*")):
+            failures.append("tombstone left behind")
 
         if run(Path(td), True, 600, no_procs) != 2:
             failures.append("non-repo was not UNKNOWN")
