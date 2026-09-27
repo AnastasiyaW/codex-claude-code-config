@@ -579,6 +579,14 @@ def main() -> int:
     if material_problems is not None:
         if material_problems:
             print(f"[pre-push] hash-bound skill material policy BLOCKED — {len(material_problems)} problem(s)", file=sys.stderr)
+            # A count is not a finding. Measured 2026-09-27: this gate refused a push
+            # saying "1 problem(s)" and nothing else, and the actual cause - the live
+            # remote tip was not present locally, so the policy could not enumerate what
+            # would be published - was only recoverable by importing the resolver by hand.
+            # A verdict whose reason has to be guessed is the same defect as a verdict
+            # read out of prose (rules/absence-of-signal.md, point 5).
+            for problem in material_problems:
+                print(f"[pre-push]   - {problem}", file=sys.stderr)
             return 1
         print("[pre-push] hash-bound skill material policy armed", file=sys.stderr)
     else:
