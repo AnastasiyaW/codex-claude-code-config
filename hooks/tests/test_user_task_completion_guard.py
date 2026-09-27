@@ -361,6 +361,27 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.assertEqual(receipt["schema"], guard.TERMINAL_RECEIPT_SCHEMA)
         self.assertEqual(receipt["outcome"], "COMPLETE")
 
+    def test_unchanged_terminal_receipt_is_not_rewritten(self) -> None:
+        # Measured 2026-09-27: every Stop rewrote recorded_at alone, so the tracked
+        # receipts of finished tasks showed as changed after each turn.
+        self.invoke_prompt()
+        evidence = self.receipt()
+        self.write_state(status="COMPLETE", result="обвязка проверена", evidence=[evidence])
+        self.assertIsNone(self.invoke_stop())
+        path = self.state_path().parent / "terminal-receipt.json"
+        first = path.read_bytes()
+        later = "2099-01-01T00:00:00Z"
+        with mock.patch.object(guard, "now_utc", return_value=later):
+            self.assertIsNone(self.invoke_stop())
+        self.assertEqual(path.read_bytes(), first)
+        # Control: a changed binding is recorded again, with its own time.
+        self.write_state(status="COMPLETE", result="обвязка проверена заново", evidence=[evidence])
+        with mock.patch.object(guard, "now_utc", return_value=later):
+            self.assertIsNone(self.invoke_stop())
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["recorded_at"], later)
+        self.assertEqual(receipt["state_sha256"], hashlib.sha256(self.state_path().read_bytes()).hexdigest())
+
     def test_external_blocker_requires_receipt_and_named_recheck(self) -> None:
         self.invoke_prompt()
         evidence = self.receipt()

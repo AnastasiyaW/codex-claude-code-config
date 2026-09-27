@@ -120,6 +120,13 @@ HIGH_RISK_MARKERS = (
 )
 IGNORED_PATH_PARTS = {".git", "node_modules", "dist", "build", ".venv", "__pycache__"}
 IGNORED_CONFIG_PATHS = {".claude/test-policy.json", ".claude/test-command"}
+# Records the agent harness keeps about the work, not the work. The user-task guard
+# writes .agent/user-tasks/<id>/terminal-receipt.json at Stop, and its .json suffix
+# counted as source here, so closing one gate started this one's suite. Measured
+# 2026-09-27: three receipts dirtied per Stop ran a fast suite into its 180 s timeout.
+# Twin of HARNESS_OUTPUT_ROOTS in root-cause-delivery-guard.py, which closed the same
+# class on its side on 2026-08-29; this list adds the transfer contracts.
+HARNESS_RECORD_ROOTS = (".agent/user-tasks/", ".agent/delivery-cases/", ".claude/transfers/")
 
 # Verification depth, on the scope this hook already computes.
 #
@@ -197,6 +204,7 @@ def classify_paths(paths: list[str]) -> ChangeScope:
         for path in paths
         if not _is_ignored_path(path)
         and path.replace("\\", "/").lower() not in IGNORED_CONFIG_PATHS
+        and not path.replace("\\", "/").lower().startswith(HARNESS_RECORD_ROOTS)
     ]
     if not relevant:
         return ChangeScope("docs-only", "no relevant source or test files changed", False)
