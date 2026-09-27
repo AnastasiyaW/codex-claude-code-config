@@ -125,8 +125,12 @@ IGNORED_CONFIG_PATHS = {".claude/test-policy.json", ".claude/test-command"}
 # counted as source here, so closing one gate started this one's suite. Measured
 # 2026-09-27: three receipts dirtied per Stop ran a fast suite into its 180 s timeout.
 # Twin of HARNESS_OUTPUT_ROOTS in root-cause-delivery-guard.py, which closed the same
-# class on its side on 2026-08-29; this list adds the transfer contracts.
-HARNESS_RECORD_ROOTS = (".agent/user-tasks/", ".agent/delivery-cases/", ".claude/transfers/")
+# class on its side on 2026-08-29; this list adds the transfer contracts, in every
+# location transfer-contract-guard.py accepts.
+HARNESS_RECORD_ROOTS = (
+    ".agent/user-tasks/", ".agent/delivery-cases/",
+    ".claude/transfers/", ".agent/transfers/", ".codex/transfers/",
+)
 
 # Verification depth, on the scope this hook already computes.
 #

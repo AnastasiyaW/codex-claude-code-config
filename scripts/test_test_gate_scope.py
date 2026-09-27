@@ -83,6 +83,8 @@ class TestGateScopeTests(unittest.TestCase):
                 ".agent/delivery-cases/api-fix-20260927/case.json",
                 ".agent/delivery-cases/api-fix-20260927/check_api_fix.py",
                 ".claude/transfers/bundle-deploy-to-vps-20260927.json",
+                ".agent/transfers/dataset-sync-20260927.json",
+                ".codex/transfers/release-api-bundle-20260927.json",
                 # a subproject's own contracts, below the Git root
                 "webapp/.claude/transfers/ui-export-20260927.json",
             ):
@@ -92,7 +94,8 @@ class TestGateScopeTests(unittest.TestCase):
             result = self.run_gate(root, {"fast": [sys.executable, "-c", marker]})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stdout.strip(), "", result.stdout + result.stderr)
-            self.assertFalse((root / "fast.marker").exists())
+            # stderr names the scope whenever the gate runs a suite
+            self.assertFalse((root / "fast.marker").exists(), result.stderr)
 
     def test_high_risk_runs_fast_and_integration_commands(self) -> None:
         with tempfile.TemporaryDirectory(prefix="test-gate-high-risk-") as raw:
