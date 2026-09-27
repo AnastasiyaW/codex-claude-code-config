@@ -73,6 +73,25 @@ class TestGateScopeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertFalse((root / "fast.marker").exists())
 
+    def test_harness_records_do_not_execute_configured_fast_command(self) -> None:
+        # Measured 2026-09-27: terminal receipts the user-task guard rewrote at Stop
+        # read as source here and ran a fast suite until its 180 s timeout.
+        with tempfile.TemporaryDirectory(prefix="test-gate-harness-") as raw:
+            root = Path(raw)
+            for record in (
+                ".agent/user-tasks/REQ-0123456789AB/terminal-receipt.json",
+                ".agent/delivery-cases/api-fix-20260927/case.json",
+                ".agent/delivery-cases/api-fix-20260927/check_api_fix.py",
+                ".claude/transfers/bundle-deploy-to-vps-20260927.json",
+            ):
+                (root / record).parent.mkdir(parents=True, exist_ok=True)
+                (root / record).write_text("{}", encoding="utf-8")
+            marker = "from pathlib import Path; Path('fast.marker').write_text('ran')"
+            result = self.run_gate(root, {"fast": [sys.executable, "-c", marker]})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.strip(), "", result.stdout + result.stderr)
+            self.assertFalse((root / "fast.marker").exists())
+
     def test_high_risk_runs_fast_and_integration_commands(self) -> None:
         with tempfile.TemporaryDirectory(prefix="test-gate-high-risk-") as raw:
             root = Path(raw)

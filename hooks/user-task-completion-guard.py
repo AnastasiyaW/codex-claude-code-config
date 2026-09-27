@@ -1046,6 +1046,11 @@ def record_terminal_receipt(
     The archive ledger reads this small receipt rather than treating a hand-edited
     ``state.json.status`` as completion. A later state edit changes its hash and
     requires the guard to validate it again before the projection closes.
+
+    An unchanged binding is not written again, so ``recorded_at`` stays the time it
+    was first recorded. Measured 2026-09-27: refreshing only that field on every Stop
+    left the tracked receipts of finished tasks modified after each turn, and the
+    test gate ran a fast suite for them.
     """
     task_id = nonempty(request.get("task_id"), "request task_id")
     state_file = state_path(root, task_id)
@@ -1059,14 +1064,21 @@ def record_terminal_receipt(
         child_coverage = "LIMITED"
     else:
         child_coverage = "NOT_APPLICABLE"
-    write_json_atomic(terminal_receipt_path(root, task_id), {
+    binding = {
         "schema": TERMINAL_RECEIPT_SCHEMA,
         "task_id": task_id,
         "outcome": outcome,
         "state_sha256": hashlib.sha256(state_bytes).hexdigest(),
         "child_coverage": child_coverage,
-        "recorded_at": now_utc(),
-    })
+    }
+    receipt_file = terminal_receipt_path(root, task_id)
+    try:
+        previous = load_json(receipt_file)
+    except ValueError:
+        previous = {}
+    if all(previous.get(key) == value for key, value in binding.items()):
+        return
+    write_json_atomic(receipt_file, {**binding, "recorded_at": now_utc()})
 
 
 def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
