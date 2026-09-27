@@ -197,6 +197,14 @@ def _is_ignored_path(path: str) -> bool:
     return bool(set(Path(path).parts) & IGNORED_PATH_PARTS)
 
 
+def _is_harness_record(path: str) -> bool:
+    # At any depth, not only at the Git root: the transfer guard roots itself at the
+    # nearest directory holding .claude or .agent, so a subproject keeps its contracts
+    # below the Git root (measured 2026-09-27: 18 such contracts in one repository).
+    normal = "/" + path.replace("\\", "/").lower()
+    return any("/" + root in normal for root in HARNESS_RECORD_ROOTS)
+
+
 def classify_paths(paths: list[str]) -> ChangeScope:
     """Classify a Git-visible change set without running repository code."""
     relevant = [
@@ -204,7 +212,7 @@ def classify_paths(paths: list[str]) -> ChangeScope:
         for path in paths
         if not _is_ignored_path(path)
         and path.replace("\\", "/").lower() not in IGNORED_CONFIG_PATHS
-        and not path.replace("\\", "/").lower().startswith(HARNESS_RECORD_ROOTS)
+        and not _is_harness_record(path)
     ]
     if not relevant:
         return ChangeScope("docs-only", "no relevant source or test files changed", False)

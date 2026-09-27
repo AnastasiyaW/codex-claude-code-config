@@ -83,6 +83,8 @@ class TestGateScopeTests(unittest.TestCase):
                 ".agent/delivery-cases/api-fix-20260927/case.json",
                 ".agent/delivery-cases/api-fix-20260927/check_api_fix.py",
                 ".claude/transfers/bundle-deploy-to-vps-20260927.json",
+                # a subproject's own contracts, below the Git root
+                "webapp/.claude/transfers/ui-export-20260927.json",
             ):
                 (root / record).parent.mkdir(parents=True, exist_ok=True)
                 (root / record).write_text("{}", encoding="utf-8")
