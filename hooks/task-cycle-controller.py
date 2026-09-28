@@ -699,6 +699,9 @@ def register_reconciliation_gap(
         "satisfaction_receipts": satisfaction_receipts,
         "registered_findings": [finding["finding_id"] for finding in findings],
     }
+    owner_session = os.environ.get("CLAUDE_SESSION_ID", "").strip()
+    if owner_session:
+        registration["owner_session_id"] = owner_session
     if not findings:
         write_json_atomic(receipt_path, registration)
         return {

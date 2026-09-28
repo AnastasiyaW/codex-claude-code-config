@@ -913,22 +913,55 @@ def assess_reconciliation_observation(task_dir: Path, observation_path: Path) ->
     return "has no controller registration receipt"
 
 
-def assess_reconciliation_observations(root: Path) -> list[str]:
-    """Find measured observations that were never converted into durable work."""
+def reconciliation_owner(task_dir: Path, observation_path: Path) -> str:
+    """Return a registration owner only when it binds this exact observation."""
+    relative = observation_path.relative_to(task_dir).as_posix()
+    digest = hashlib.sha256(observation_path.read_bytes()).hexdigest()
+    for registration_path in sorted(observation_path.parent.glob("reconciliation-*-registration.json")):
+        try:
+            registration = load_json(registration_path)
+        except ValueError:
+            continue
+        if (
+            registration.get("schema") == RECONCILIATION_REGISTRATION_SCHEMA
+            and registration.get("observation_evidence") == relative
+            and registration.get("observation_sha256") == digest
+        ):
+            owner = registration.get("owner_session_id")
+            if isinstance(owner, str) and owner.strip():
+                return owner.strip()
+    return ""
+
+
+def assess_reconciliation_observations(root: Path, current_session: str) -> tuple[list[str], list[str]]:
+    """Return current-session defects and audit notes for other durable work.
+
+    A reconciliation observation is global evidence, but a Stop gate is local to
+    one session. Legacy ownerless observations are intentionally deferred to the
+    controller/audit instead of being charged to an arbitrary later chat.
+    """
     evidence_root = root / ".agent" / "tasks"
     if not evidence_root.is_dir():
-        return []
+        return [], []
     unresolved: list[str] = []
+    deferred: list[str] = []
     for observation_path in sorted(evidence_root.glob("*/evidence/reconciliation-*.json")):
         if observation_path.name.endswith("-registration.json"):
             continue
         task_dir = observation_path.parents[1]
+        relative = observation_path.relative_to(root).as_posix()
+        owner = reconciliation_owner(task_dir, observation_path)
+        if not owner:
+            deferred.append(f"{relative} (legacy/unowned reconciliation observation)")
+            continue
+        if owner != current_session:
+            deferred.append(f"{relative} (owner session {owner})")
+            continue
         try:
             defect = assess_reconciliation_observation(task_dir, observation_path)
         except ValueError as exc:
             defect = str(exc)
         if defect:
-            relative = observation_path.relative_to(root).as_posix()
             next_detail = ""
             cycle_path = task_dir / "cycle.json"
             if cycle_path.is_file():
@@ -945,7 +978,7 @@ def assess_reconciliation_observations(root: Path) -> list[str]:
                 except Exception as exc:
                     next_detail = f" controller dispatch failed: {exc}"
             unresolved.append(f"{relative}: {defect}.{next_detail}")
-    return unresolved
+    return unresolved, deferred
 
 
 def assess_items(task_dir: Path, state: dict[str, Any]) -> tuple[str, str]:
@@ -1155,7 +1188,7 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
     root = repo_root(cwd or Path.cwd())
     if root is None:
         return 0
-    unresolved = assess_reconciliation_observations(root)
+    unresolved, deferred = assess_reconciliation_observations(root, _raw_session_id(event))
     for request in task_requests(root, session_id(event)):
         outcome, detail = assess_task(root, request, event)
         if outcome == "INCOMPLETE":
@@ -1168,6 +1201,12 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
             )
         else:
             record_terminal_receipt(root, request, outcome, event)
+    if deferred:
+        sys.stderr.write(
+            "[reconciliation] deferred to owner/controller, not this session: "
+            + " | ".join(deferred)
+            + "\n"
+        )
     if not unresolved:
         return 0
     print(json.dumps({

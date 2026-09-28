@@ -119,8 +119,8 @@ def _event_session(event: dict[str, Any]) -> str:
 
 
 
-def _foreign_and_live(contract: dict[str, Any], current_session: str) -> str:
-    """Owner id when this record belongs to a different, still-live session.
+def _foreign_owner(contract: dict[str, Any], current_session: str) -> str:
+    """Owner id when this record belongs to a different session.
 
     `opened_by` counts too. The stamp writes `session_id`, but a record opened by
     hand names its opener in `opened_by` - and reading only one key made those
@@ -130,7 +130,7 @@ def _foreign_and_live(contract: dict[str, Any], current_session: str) -> str:
     owner = _text(contract.get("session_id")) or _text(contract.get("opened_by"))
     if not owner or _same_session(owner, current_session):
         return ""
-    return owner if _session_alive(owner) else ""
+    return owner
 
 
 def _stamp_owner(path: Path, contract: dict[str, Any], session_id: str) -> None:
@@ -501,15 +501,17 @@ def _stop_issues(root: Path, current_session: str) -> tuple[list[str], list[str]
             issues.append(f"{path.name}: contract must be a JSON object")
             continue
         schema_errors = _contract_errors(contract)
-        owner = _foreign_and_live(contract, current_session)
+        owner = _foreign_owner(contract, current_session)
         if owner:
-            # Someone else's record, and that someone is still around to finish
-            # it. Note it, never block on it. Ownerless and stale-owner records
-            # fall through and still block, so this is not a silent escape.
+            # A different session owns the record. Note it, never block on it:
+            # an owner can finish and its transcript can age out while its
+            # contract remains the owner's durable work. Liveness is useful
+            # telemetry, not authority to transfer Stop ownership.
             status = _text(contract.get("status"))
             if status in OPEN_STATUSES or schema_errors or _verified_path_errors(contract, root):
+                liveness = "live" if _session_alive(owner) else "stale"
                 deferred.append(
-                    f"{path.name} (status={status or 'unset'}, owner session {owner} still live)"
+                    f"{path.name} (status={status or 'unset'}, owner session {owner} {liveness})"
                 )
             continue
         if schema_errors:
@@ -660,7 +662,7 @@ def _self_test() -> int:
         cases = [
             ("open record owned by me", {"session_id": mine}, True),
             ("open record, owner still live", {"session_id": live}, False),
-            ("open record, owner gone stale", {"session_id": stale}, True),
+            ("open record, owner gone stale", {"session_id": stale}, False),
             ("open record with no owner at all", {}, True),
             ("closed record, owner live", {"session_id": live, "status": "cancelled",
                                            "closure_reason": "c"}, False),
@@ -668,7 +670,7 @@ def _self_test() -> int:
             # only `session_id` made it look ownerless, so one peer's record
             # blocked every other session's Stop instead of only its owner's.
             ("open record, opened_by a live session", {"opened_by": live}, False),
-            ("open record, opened_by a stale session", {"opened_by": stale}, True),
+            ("open record, opened_by a stale session", {"opened_by": stale}, False),
             ("open record, opened_by me", {"opened_by": mine}, True),
         ]
         for label, over, should_block in cases:
@@ -693,12 +695,9 @@ def _self_test() -> int:
         if not _stop_issues(repo, mine)[0]:
             fails.append("verified record without evidence did not block its owner")
 
-        # ...but the same broken record belonging to a LIVE PEER must only be
-        # noted. Regression guard, 2026-08-28: validation errors used to be
-        # folded into the parse failure, so a readable record naming a live owner
-        # never reached the ownership check and wedged unrelated sessions' Stop.
-        # The three controls below must stay red, or this becomes a way to make
-        # any record unblocking by breaking its schema.
+        # ...but a readable broken record belonging to either a live OR stale
+        # peer must only be noted. Ownership, not transcript freshness, scopes
+        # a Stop gate; the peer's durable record still reaches its owner/audit.
         for leftover in transfers.glob("*.json"):
             leftover.unlink()
         put("peer-broken", session_id=live, status="verified")
@@ -711,8 +710,9 @@ def _self_test() -> int:
         for leftover in transfers.glob("*.json"):
             leftover.unlink()
         put("stale-broken", session_id=stale, status="verified")
-        if not _stop_issues(repo, mine)[0]:
-            fails.append("stale peer's broken record did not block")
+        stale_issues, stale_deferred = _stop_issues(repo, mine)
+        if stale_issues or not stale_deferred:
+            fails.append("stale peer's broken record blocked or was not deferred")
 
         for leftover in transfers.glob("*.json"):
             leftover.unlink()
