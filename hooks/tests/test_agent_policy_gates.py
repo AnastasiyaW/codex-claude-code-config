@@ -100,6 +100,19 @@ class HumanOwnedTest(Gates):
         self.assertTrue(self.bash("sed -i 's/a/b/' docs/INCIDENTS.md").startswith("block:"))
         self.assertEqual(self.bash("cat AGENTS.md"), "allow")
 
+    def test_a_codex_apply_patch_to_a_human_owned_doc_is_refused(self) -> None:
+        # Codex names the files only in the patch headers, relative to its cwd.
+        def patch(*files: str) -> str:
+            body = "*** Begin Patch\n" + "".join(
+                f"*** Update File: {f}\n@@\n-x\n+y\n" for f in files) + "*** End Patch\n"
+            return self.hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+                              "tool_input": {"command": body}})
+        self.prompt("почини тесты")
+        self.assertEqual(patch("README.md"), "allow")
+        self.assertTrue(patch("README.md", "docs/INCIDENTS.md").startswith("block:"))
+        self.prompt("допиши в docs/INCIDENTS.md разбор")
+        self.assertEqual(patch("docs/INCIDENTS.md"), "allow")
+
     def test_the_unlock_records_cannot_be_forged_by_the_agent(self) -> None:
         forged = self.home / ".claude" / "state" / "human-owned-unlocks" / "s1.json"
         self.assertTrue(self.hook({"hook_event_name": "PreToolUse", "tool_name": "Write",

@@ -13,6 +13,8 @@ does *during* the work that CI sees too late or not at all:
     owner's screen (25.09: «окна чата открываются и закрываются по кругу»).
 
 Only repos that declare a policy are affected; elsewhere the hook is silent.
+Wired the same way on Codex (~/.codex/hooks.json), where file edits arrive as
+`apply_patch` and name their files only in the patch headers.
 
 Human-owned documents. The hook cannot verify a human's approval (same limit as
 human-confirmation-guard), but UserPromptSubmit carries the human's own words: a
@@ -49,7 +51,12 @@ WRITES = (r"(?:\btee\b|\bsed\s+-i|Set-Content|Add-Content|Out-File|Copy-Item|Mov
 # A redirect INTO the file; `2>/dev/null` next to a read is not a write (review 25.09).
 REDIRECT = r"(?<![0-9&])>>?\s*[\"']?[^\s\"'|;&]*"
 TEST_RUN = re.compile(r"-m\s*(?:unittest|pytest)\b|\bpytest\b|python\S*\s+(?:-\S+\s+)*\S*test_\w+\.py")
-FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
+# Codex edits files through apply_patch: no file_path, the targets are the patch's
+# section headers (same parse as root-cause-delivery-guard and happyin-seams-gate).
+PATCH_FILE = re.compile(r"(?m)^\*\*\* (?:Add|Update|Delete) File: (?P<path>.+?)\s*$")
+# Read by scripts/check_harness_parity.py: the tools this hook acts on, both harnesses.
+HARNESS_ACCEPTED_TOOLS = FILE_TOOLS | {"Bash", "PowerShell"}
 # Commands only the owner may start: her prompt must name the flag. The other
 # spellings reach the same reset without it (review 25.09: python -c ... reset_rounds).
 OWNER_COMMAND = "--reset-review-rounds"
@@ -138,21 +145,27 @@ def refuse_owned(rel: str, how: str) -> None:
           "exact edit, her message names the file and this turn is unlocked for it.")
 
 
-def guard_file_tool(event: dict) -> None:
+def edited_files(event: dict) -> list[Path]:
+    """Files a Claude file tool or a Codex apply_patch is about to change."""
     tool_input = event.get("tool_input", {})
-    raw = file_path(tool_input) or str(tool_input.get("notebook_path", ""))
-    if not raw:
-        return
-    target = windows_path(raw)
-    if UNLOCKS.resolve() in target.resolve().parents:
-        block("Unlock records are written only by the prompt hook, from the owner's own words.")
-    root = repo_root(target)
-    policy = load_policy(root)
-    if policy is None:
-        return
-    rel = relative(root, target)
-    if rel in protected(policy) and not unlocked(event, root, rel):
-        refuse_owned(rel, event.get("tool_name", ""))
+    raw = [file_path(tool_input) or str(tool_input.get("notebook_path", ""))]
+    raw += PATCH_FILE.findall(str(tool_input.get("command") or ""))
+    cwd = Path(event.get("cwd") or ".")
+    paths = [windows_path(item) for item in raw if item]
+    return [path if path.is_absolute() else cwd / path for path in paths]
+
+
+def guard_file_tool(event: dict) -> None:
+    for target in edited_files(event):
+        if UNLOCKS.resolve() in target.resolve().parents:
+            block("Unlock records are written only by the prompt hook, from the owner's own words.")
+        root = repo_root(target)
+        policy = load_policy(root)
+        if policy is None:
+            continue
+        rel = relative(root, target)
+        if rel in protected(policy) and not unlocked(event, root, rel):
+            refuse_owned(rel, event.get("tool_name", ""))
 
 
 def guard_owner_commands(event: dict, command: str, root: Path) -> None:

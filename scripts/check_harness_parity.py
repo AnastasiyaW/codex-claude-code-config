@@ -246,9 +246,29 @@ for label, paths in (("claude", wired_paths(CLAUDE_CFG)), ("codex", wired_paths(
             problems.append(f"{label}: wired but missing on disk -- {p}")
 print(f"  checked {len(wired_paths(CLAUDE_CFG) | wired_paths(CODEX_CFG))} paths")
 
+print("\n=== 6. Codex runs only trusted hooks ===")
+# Measured 2026-09-28 on real Codex events: a hook added to hooks.json is skipped
+# until the owner approves it (config.toml [hooks.state.'<file>:<event>:<group>:<handler>']
+# trusted_hash), so wiring alone did not fire. Trust is the owner's decision, not a
+# wiring defect, so it is reported, not failed; a missing record still means "cannot fire".
+# simplification: checks that a record exists, not that its hash matches the current entry.
+codex_toml = HOME / ".codex" / "config.toml"
+trusted = set(re.findall(r"hooks\.json:([a-z_]+:\d+:\d+)'\]",
+                         codex_toml.read_text(encoding="utf-8") if codex_toml.is_file() else ""))
+untrusted = [f"{event}[{group.get('matcher') or '*'}] "
+             + " ".join(re.findall(r"([\w.\-]+\.py)", hook.get("command", "")))
+             for event, groups in (json.loads(CODEX_CFG.read_text(encoding="utf-8-sig")).get("hooks") or {}).items()
+             for g, group in enumerate(groups)
+             for h, hook in enumerate(group.get("hooks", []))
+             if f"{re.sub(r'(?<!^)(?=[A-Z])', '_', event).lower()}:{g}:{h}" not in trusted]
+for item in untrusted:
+    print(f"  WARN not trusted yet, Codex skips it until approved in /hooks: {item}")
+print(f"  untrusted Codex handlers: {len(untrusted)}")
+
 if problems:
     print(f"\nPROBLEMS ({len(problems)}):")
     for p in problems:
         print(f"  - {p}")
     sys.exit(1)
-print("\nOK: both harnesses wire the same hooks to the same triggers, and each can fire.")
+print("\nOK: both harnesses wire the same hooks to the same triggers, and each can fire"
+      + (f" once the {len(untrusted)} untrusted Codex handler(s) above are approved." if untrusted else "."))
