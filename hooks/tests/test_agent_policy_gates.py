@@ -110,6 +110,11 @@ class HumanOwnedTest(Gates):
         self.prompt("почини тесты")
         self.assertEqual(patch("README.md"), "allow")
         self.assertTrue(patch("README.md", "docs/INCIDENTS.md").startswith("block:"))
+        rename = ("*** Begin Patch\r\n*** Update File: README.md\r\n*** Move to: docs/INCIDENTS.md\r\n"
+                  "@@\r\n-x\r\n+y\r\n*** End Patch\r\n")
+        self.assertTrue(self.hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+                                   "tool_input": {"command": rename}}).startswith("block:"),
+                        "renaming a file onto a protected path overwrites it")
         self.prompt("допиши в docs/INCIDENTS.md разбор")
         self.assertEqual(patch("docs/INCIDENTS.md"), "allow")
 

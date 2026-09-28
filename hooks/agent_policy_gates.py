@@ -53,8 +53,9 @@ REDIRECT = r"(?<![0-9&])>>?\s*[\"']?[^\s\"'|;&]*"
 TEST_RUN = re.compile(r"-m\s*(?:unittest|pytest)\b|\bpytest\b|python\S*\s+(?:-\S+\s+)*\S*test_\w+\.py")
 FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
 # Codex edits files through apply_patch: no file_path, the targets are the patch's
-# section headers (same parse as root-cause-delivery-guard and happyin-seams-gate).
-PATCH_FILE = re.compile(r"(?m)^\*\*\* (?:Add|Update|Delete) File: (?P<path>.+?)\s*$")
+# section headers. `*** Move to:` counts too: renaming a file onto a protected path
+# overwrites it (measured 2026-09-28: without it that rename passed the guard).
+PATCH_FILE = re.compile(r"(?m)^[ \t]*\*\*\* (?:(?:Add|Update|Delete) File|Move to): (?P<path>.+?)\s*$")
 # Read by scripts/check_harness_parity.py: the tools this hook acts on, both harnesses.
 HARNESS_ACCEPTED_TOOLS = FILE_TOOLS | {"Bash", "PowerShell"}
 # Commands only the owner may start: her prompt must name the flag. The other
