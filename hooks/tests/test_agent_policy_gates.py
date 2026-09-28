@@ -102,11 +102,13 @@ class HumanOwnedTest(Gates):
 
     def test_a_codex_apply_patch_to_a_human_owned_doc_is_refused(self) -> None:
         # Codex names the files only in the patch headers, relative to its cwd.
-        def patch(*files: str) -> str:
-            body = "*** Begin Patch\n" + "".join(
+        def body_for(*files: str) -> str:
+            return "*** Begin Patch\n" + "".join(
                 f"*** Update File: {f}\n@@\n-x\n+y\n" for f in files) + "*** End Patch\n"
+
+        def patch(*files: str) -> str:
             return self.hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch",
-                              "tool_input": {"command": body}})
+                              "tool_input": {"command": body_for(*files)}})
         self.prompt("почини тесты")
         self.assertEqual(patch("README.md"), "allow")
         self.assertTrue(patch("README.md", "docs/INCIDENTS.md").startswith("block:"))
@@ -115,6 +117,15 @@ class HumanOwnedTest(Gates):
         self.assertTrue(self.hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch",
                                    "tool_input": {"command": rename}}).startswith("block:"),
                         "renaming a file onto a protected path overwrites it")
+        as_string = json.dumps({"command": body_for("docs/INCIDENTS.md")})
+        self.assertTrue(self.hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+                                   "tool_input": as_string}).startswith("block:"),
+                        "tool_input sent as a JSON string")
+        forged = self.home / ".claude" / "state" / "human-owned-unlocks" / "s1.json"
+        move_in = f"*** Begin Patch\n*** Update File: README.md\n*** Move to: {forged}\n*** End Patch\n"
+        self.assertTrue(self.hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+                                   "tool_input": {"command": move_in}}).startswith("block:"),
+                        "a rename cannot forge an unlock record")
         self.prompt("допиши в docs/INCIDENTS.md разбор")
         self.assertEqual(patch("docs/INCIDENTS.md"), "allow")
 

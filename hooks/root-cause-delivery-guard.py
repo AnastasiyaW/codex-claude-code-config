@@ -436,7 +436,8 @@ def event_prompt(event: dict[str, Any]) -> str:
     return ""
 
 
-PATCH_FILE_RE = re.compile(r"(?m)^\*\*\* (?:Add|Update|Delete) File: (?P<path>.+?)\s*$")
+# `*** Move to:` names a file the patch writes too (a rename target); review 2026-09-28.
+PATCH_FILE_RE = re.compile(r"(?m)^[ \t]*\*\*\* (?:(?:Add|Update|Delete) File|Move to): (?P<path>.+?)\s*$")
 
 
 def apply_patch_paths(event: dict[str, Any], tool_input: dict[str, Any]) -> list[str] | None:

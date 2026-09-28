@@ -147,10 +147,22 @@ def refuse_owned(rel: str, how: str) -> None:
 
 
 def edited_files(event: dict) -> list[Path]:
-    """Files a Claude file tool or a Codex apply_patch is about to change."""
-    tool_input = event.get("tool_input", {})
+    """Files a Claude file tool or a Codex apply_patch is about to change.
+
+    tool_input may arrive as a JSON string or as the bare patch text; reading it
+    only as a dict crashed the hook, and a crashed hook blocks nothing (review 28.09).
+    """
+    tool_input = event.get("tool_input") or {}
+    if isinstance(tool_input, str):
+        try:
+            tool_input = json.loads(tool_input)
+        except ValueError:
+            tool_input = {"command": tool_input}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
     raw = [file_path(tool_input) or str(tool_input.get("notebook_path", ""))]
-    raw += PATCH_FILE.findall(str(tool_input.get("command") or ""))
+    for key in ("command", "input", "patch"):
+        raw += PATCH_FILE.findall(str(tool_input.get(key) or ""))
     cwd = Path(event.get("cwd") or ".")
     paths = [windows_path(item) for item in raw if item]
     return [path if path.is_absolute() else cwd / path for path in paths]
