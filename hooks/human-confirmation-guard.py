@@ -237,15 +237,11 @@ SAFE_TARGET_PATTERNS = [
 
     # Common temp file patterns
     r"\.tmp(\s|$|/)",
-    r"\.bak(\s|$|/)",
     r"\.swp(\s|$|/)",
     r"\.swo(\s|$|/)",
     r"\.pyc(\s|$|/)",
     r"\.DS_Store(\s|$|/)",
     r"Thumbs\.db(\s|$|/)",
-    r"\.log(\s|$|/)",         # log rotations
-    r"\.orig(\s|$|/)",        # merge artifacts
-    r"\.rej(\s|$|/)",         # patch reject
 ]
 
 # Temporary files may be removed without asking (owner directive 2026-09-26:
@@ -488,6 +484,12 @@ def self_test() -> int:
         "rm -rf /home/user/.tmp-notes",
         "rm -rf /home/user/.tmp-notes/important",
         "rm -rf /srv/data/.temp-backups",
+        # Backup, rejected patch, and logs may be the sole human evidence. An
+        # extension alone does not prove a file is regenerable or disposable.
+        "rm -f C:/work/only-copy.bak",
+        "rm -f C:/work/merge.orig",
+        "rm -f C:/work/failed.rej",
+        "rm -f C:/work/audit.log",
         "rm -rf /home/user/tmpabcdefgh/important",           # name above the target
         "rm -rf C:/work/tmpservers1",                        # mkdtemp-like name outside a repo root
         "git commit -m 'ok'; del C:\\data\\x",               # real del after a quoted message
