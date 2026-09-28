@@ -296,6 +296,34 @@ def load_policy_commands(cwd: Path) -> dict[str, list[str]]:
     return commands
 
 
+def windows_bash() -> str | None:
+    """The bash that can run a repository's `.sh` on Windows.
+
+    `shutil.which("bash")` usually answers `C:\\Windows\\System32\\bash.exe`: the
+    WSL launcher, which System32 puts ahead of Git on PATH. Without an installed
+    distro it exits 1 with "execvpe(/bin/bash) failed" and the script never runs;
+    a red verdict that is really a launch failure. Git for Windows ships the bash
+    these scripts are written for, next to the `git` the gate already needs, so
+    prefer it and keep the WSL launcher only as the last resort.
+    """
+    found = shutil.which("bash")
+    if found:
+        parent = Path(found).parent.name.lower()
+        if parent not in ("system32", "windowsapps"):
+            return found
+    git = shutil.which("git")
+    if git:
+        git_dir = Path(git).resolve().parent
+        # <root>\cmd\git.exe or <root>\mingw64\bin\git.exe
+        roots = (git_dir.parent, git_dir.parent.parent)
+        for root in roots:
+            for rel in (("bin", "bash.exe"), ("usr", "bin", "bash.exe")):
+                candidate = root.joinpath(*rel)
+                if candidate.is_file():
+                    return str(candidate)
+    return found
+
+
 def portable_argv(cmd: list[str], cwd: Path) -> list[str]:
     """Make a POSIX-authored test command runnable on Windows.
 
@@ -318,13 +346,22 @@ def portable_argv(cmd: list[str], cwd: Path) -> list[str]:
     The suffix is matched case-insensitively: Windows filenames are, so `INIT.SH`
     is a real file that fails exactly like `init.sh`. Matching only the lowercase
     form would leave the hole open for the spelling nobody thinks to test.
+
+    A bare program name (`npm test` in `.claude/test-command` or a policy) is the
+    same trap from the other side: CreateProcess appends only `.exe`, so `npm`,
+    `pnpm` and `yarn`, which are `.cmd` shims, raise WinError 2. Such a name is
+    replaced by the path `shutil.which` resolves through PATHEXT; if nothing
+    resolves, the command stays untouched for the same honest "cannot run".
     """
     if os.name != "nt" or not cmd:
         return cmd
     exe = cmd[0]
     if not exe.lower().endswith(".sh"):
-        return cmd
-    bash = shutil.which("bash")
+        if "/" in exe or "\\" in exe:
+            return cmd
+        resolved = shutil.which(exe)
+        return [resolved, *cmd[1:]] if resolved else cmd
+    bash = windows_bash()
     if not bash:
         return cmd
     # Forward slashes: bash reads its argument as a POSIX path, and cwd is
@@ -403,14 +440,18 @@ def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
         try:
             pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
             if "test" in pkg.get("scripts", {}):
-                if (cwd / "pnpm-lock.yaml").exists() and shutil.which("pnpm"):
-                    return (["pnpm", "test"], "pnpm test")
-                if (cwd / "yarn.lock").exists() and shutil.which("yarn"):
-                    return (["yarn", "test"], "yarn test")
-                if (cwd / "bun.lockb").exists() and shutil.which("bun"):
-                    return (["bun", "test"], "bun test")
-                if shutil.which("npm"):
-                    return (["npm", "test", "--silent"], "npm test")
+                # Run the path `which` found, not the bare name: on Windows npm,
+                # pnpm and yarn are .cmd shims, and CreateProcess only appends
+                # .exe to a bare name, so ["npm", ...] dies with WinError 2 and
+                # the gate blocks every Stop on a suite that never ran.
+                if (cwd / "pnpm-lock.yaml").exists() and (exe := shutil.which("pnpm")):
+                    return ([exe, "test"], "pnpm test")
+                if (cwd / "yarn.lock").exists() and (exe := shutil.which("yarn")):
+                    return ([exe, "test"], "yarn test")
+                if (cwd / "bun.lockb").exists() and (exe := shutil.which("bun")):
+                    return ([exe, "test"], "bun test")
+                if exe := shutil.which("npm"):
+                    return ([exe, "test", "--silent"], "npm test")
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -444,14 +485,14 @@ def detect_test_command(cwd: Path) -> tuple[list[str], str] | None:
 
     has_tests_dir = _dir_has_test_files(cwd / "tests") or _dir_has_test_files(cwd / "test")
 
-    if (has_pytest_ini or has_pyproject_pytest or has_tests_dir) and shutil.which("pytest"):
-        return (["pytest", "--tb=short", "-q"], "pytest")
+    if (has_pytest_ini or has_pyproject_pytest or has_tests_dir) and (exe := shutil.which("pytest")):
+        return ([exe, "--tb=short", "-q"], "pytest")
 
-    if (cwd / "Cargo.toml").exists() and shutil.which("cargo"):
-        return (["cargo", "test", "--quiet"], "cargo test")
+    if (cwd / "Cargo.toml").exists() and (exe := shutil.which("cargo")):
+        return ([exe, "test", "--quiet"], "cargo test")
 
-    if (cwd / "go.mod").exists() and shutil.which("go"):
-        return (["go", "test", "./..."], "go test")
+    if (cwd / "go.mod").exists() and (exe := shutil.which("go")):
+        return ([exe, "test", "./..."], "go test")
 
     return None
 
