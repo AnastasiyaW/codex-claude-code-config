@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """PreToolUse: fail closed for destructive intent until the host can prove approval.
 
-Universal "human-in-the-loop" gate for any operation that removes / drops /
-deletes / terminates / overwrites. Replaces narrow catastrophic-only check
+Universal "human-in-the-loop" gate for any irreversible operation that removes /
+drops / deletes / terminates / overwrites. Replaces narrow catastrophic-only check
 with broad destructive-intent detection, plus a safe-target whitelist so
 routine cleanup (build/, dist/, node_modules/, /tmp/, .cache/) doesn't
 prompt the user.
@@ -178,8 +178,10 @@ DESTRUCTIVE_INTENT = [
     r"\bip\s+link\s+(delete|del)\b",
     r"\bip\s+route\s+(flush|delete|del)\b",
 
-    # Communication APIs (irreversible)
-    r"\bgh\s+pr\s+close\b",
+    # Communication APIs. `gh pr close` without `-d` / `--delete-branch`
+    # preserves the branch and GitHub supports reopening the pull request, so it
+    # is reversible project state, not deletion.
+    r"\bgh\s+pr\s+close\b[^|;&\n]*\s(?:-d|--delete-branch)\b",
     r"\bgh\s+issue\s+close\b",
 
     # IAM / permissions

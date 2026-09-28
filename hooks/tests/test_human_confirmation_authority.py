@@ -77,6 +77,13 @@ class HumanConfirmationAuthorityTests(unittest.TestCase):
         decision, output = invoke("rm -rf build", session_id="session-a")
         self.assertIsNone(decision, output)
 
+    def test_pr_close_is_reversible_but_pr_delete_is_not(self) -> None:
+        decision, output = invoke("gh pr close 6 --repo owner/repo", session_id="session-a")
+        self.assertIsNone(decision, output)
+        self.assert_blocked("gh pr close 6 --delete-branch --repo owner/repo", session_id="session-a")
+        self.assert_blocked("gh pr close 6 -d --repo owner/repo", session_id="session-a")
+        self.assert_blocked("gh pr delete 6 --repo owner/repo", session_id="session-a")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
