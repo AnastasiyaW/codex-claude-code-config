@@ -31,8 +31,8 @@ status - the gate must print that BOTH legs ran, not merely that Agent A was cle
 
 Two files, different content:
 
-    C:\Users\AiD\.claude\claude-code-config\hooks\root-cause-delivery-guard.py   49704 bytes  <- WIRED
-    C:\Users\AiD\.claude\hooks\root-cause-delivery-guard.py                        42960 bytes
+    %USERPROFILE%\.claude\claude-code-config\hooks\root-cause-delivery-guard.py   49704 bytes  <- WIRED
+    %USERPROFILE%\.claude\hooks\root-cause-delivery-guard.py                         42960 bytes
 
 `settings.json` names only the first, so the fix above went there and the second is 6.7 KB behind.
 Deliberately not copied into: duplicating a guard is a known failure in this codebase - two copies
@@ -123,7 +123,7 @@ behaviours are identical at the previous HEAD; `031ff27` neither opened nor clos
    `(rm C:\data\x)`, `{ rm x; }`, `if ...; then rm x; fi`, `xargs rm`, `find ... -exec rm {} +`,
    `env`/`nohup`/`busybox rm`, `\rm`, `bash -c "rm ..."`, `powershell -c "del ..."`,
    `iex "ri ..."`, `unlink`, `python -c "shutil.rmtree(...)"`. Old SAFE_TARGET_PATTERNS are
-   searched anywhere in the path, so `C:/Users/AiD/dist` or `.../data.bak/stuff` also pass.
+   searched anywhere in the path, so `%USERPROFILE%/dist` or `.../data.bak/stuff` also pass.
 2. False blocks: a destructive word inside a quoted argument of a non-printing command
    (`git commit -m "... Remove-Item ..."`) blocks, because `executable_text` only strips
    quotes of printing commands. Measured 2026-09-26 on this very commit's message.

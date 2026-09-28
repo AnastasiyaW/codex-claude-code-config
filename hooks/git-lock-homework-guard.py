@@ -144,7 +144,7 @@ def self_test() -> int:
             fails.append("possibly-owned lock blocked")
         if stale_locks("All done, tests green.", str(repo), none):
             fails.append("message without a lock blocked")
-        if _normalize("/c/Users/x/.git/index.lock", None) != Path("C:/Users/x/.git/index.lock"):
+        if _normalize("/c/agent-home/x/.git/index.lock", None) != Path("C:/agent-home/x/.git/index.lock"):
             fails.append("git-bash /c/ path not normalized")
         lock.unlink()
         if stale_locks(quoted, None, none):

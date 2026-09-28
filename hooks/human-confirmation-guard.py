@@ -444,45 +444,46 @@ def self_test() -> int:
     """Negative controls: every must-block case blocks, every temp/build delete passes."""
     import tempfile
     tmp = tempfile.gettempdir()
+    repo_root = Path(__file__).resolve().parents[1]
     allow_cases = [
         "rm -rf /tmp/x",
         f"rm -rf {tmp}/claude-scratch/abc",
         f'Remove-Item -Recurse -Force "{tmp}\\claude\\x"',
         f"Remove-Item -LiteralPath '{tmp}\\a.txt' -ErrorAction SilentlyContinue",
-        "rm -rf C:/Users/AiD/Desktop/Claude_code/tmp0c9bxbq2",
-        "rm -rf C:/Users/AiD/Desktop/Claude_code/pytest-of-AiD",
+        f"rm -rf {repo_root.as_posix()}/tmp0c9bxbq2",
+        f"rm -rf {repo_root.as_posix()}/pytest-of-sandbox",
         "rm -rf build && rm -rf dist",
         f"del {tmp}\\stale.txt",
         'git commit -m "step; del old; rm tmp"',                  # quoted text is not a command
         "echo 'a | rm -rf /data'",
-        "cat > s.sh <<'EOF'\nrm -rf /home/user/project\nEOF",   # heredoc body is not executed
+        "cat > s.sh <<'EOF'\nrm -rf /workspace/sample/project\nEOF",   # heredoc body is not executed
         "ls -la",
     ]
     block_cases = [
         f"rm -rf {tmp}",                                   # the temp root itself
         f"rm -rf {tmp}/../Users",                           # traversal
         "rm -rf $TMPDIR/x",                                 # unexpanded variable
-        "Remove-Item -Recurse -Force C:\\Users\\AiD\\Desktop\\project",
+        "Remove-Item -Recurse -Force C:\\agent-home\\project",
         "rm -rf /tmp/x && git reset --hard",                # piggy-backed destructive op
         "rm -rf build; DROP TABLE users",
         "Remove-Item HKCU:\\Software\\tmp12345678",         # registry provider
         f"Remove-Item {tmp}\\x, D:\\data",                   # one unsafe target in a list
         "Remove-Item -Path D:\\data -ErrorAction SilentlyContinue",
-        "rm -rf /home/user/.tmpfiles/../../etc",            # traversal through a temp name
+        "rm -rf /workspace/sample/.tmpfiles/../../etc",     # traversal through a temp name
         "rm -rf ~/project",
         # review 2026-09-26 round 1: delete verbs no pattern named
-        "ri -Recurse -Force C:\\Users\\AiD\\Desktop\\project",
-        "del -Recurse -Force C:\\Users\\AiD\\Desktop\\project",
-        "rd /s /q C:\\Users\\AiD\\important",
-        "del /s /q C:\\Users\\AiD\\important",
+        "ri -Recurse -Force C:\\agent-home\\project",
+        "del -Recurse -Force C:\\agent-home\\project",
+        "rd /s /q C:\\agent-home\\important",
+        "del /s /q C:\\agent-home\\important",
         "erase C:\\data\\file.txt",
-        "cmd /c rd /s /q C:\\Users\\AiD\\important",
+        "cmd /c rd /s /q C:\\agent-home\\important",
         "rm C:\\data\\important.txt",
         "rm -f secret.key",
         "Get-ChildItem C:\\data | Remove-Item",
         # a scratch-looking NAME is not proof when a human chose it
-        "rm -rf /home/user/.tmp-notes",
-        "rm -rf /home/user/.tmp-notes/important",
+        "rm -rf /workspace/sample/.tmp-notes",
+        "rm -rf /workspace/sample/.tmp-notes/important",
         "rm -rf /srv/data/.temp-backups",
         # Backup, rejected patch, and logs may be the sole human evidence. An
         # extension alone does not prove a file is regenerable or disposable.
@@ -490,7 +491,7 @@ def self_test() -> int:
         "rm -f C:/work/merge.orig",
         "rm -f C:/work/failed.rej",
         "rm -f C:/work/audit.log",
-        "rm -rf /home/user/tmpabcdefgh/important",           # name above the target
+        "rm -rf /workspace/sample/tmpabcdefgh/important",    # name above the target
         "rm -rf C:/work/tmpservers1",                        # mkdtemp-like name outside a repo root
         "git commit -m 'ok'; del C:\\data\\x",               # real del after a quoted message
     ]
