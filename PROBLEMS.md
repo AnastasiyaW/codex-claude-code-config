@@ -118,6 +118,14 @@ after a negated modal), and `Open`/`Запусти` from quoted test inputs insi
 backtick spans ("`Open https://…` returns `'Open'`"). The position rule above covers both;
 the negated modal also belongs among its non-imperative leads.
 
+Same session, second gap: `has_evidence_bound_external_task` looks only under
+`repo_root(Path.cwd())`, so a session whose cwd is a non-git scratch workspace can never
+bind its valid BLOCKED_EXTERNAL order. Measured in
+`.agent/user-tasks/REQ-5B886CC0BC3A/gate-smoke.log`: bound=False from the scratch cwd,
+bound=True from this repo. Smallest split: keep the gate, and when the cwd has no git root,
+also look in the repositories the session actually changed (the transcript's Edit/Write
+paths), never in arbitrary ones.
+
 ## 2026-09-30 15:58 - PUBLIC PUSH BLOCKED: SEMANTIC SCAN CLI OUT OF WEEKLY QUOTA (b10aeb3)
 
 **Status**: missing-dep
