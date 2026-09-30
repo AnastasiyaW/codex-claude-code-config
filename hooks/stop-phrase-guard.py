@@ -210,12 +210,20 @@ _MEASURED_EVIDENCE = re.compile(
     r"механическ|измерен|проверен|подтвержд|наблюдаем",
     re.IGNORECASE,
 )
+# A hyphen ends a \b word, so "open-source", "set-up", "run-time" read as
+# imperatives (measured 2026-09-30). A verb hyphen-joined to a word is a
+# compound, and so is one before a hyphen at all ("open- and closed-source"),
+# except the imperative particle in "запусти-ка". A flag's leading "--" joins
+# nothing, so "--login" still counts. U+2010 and U+2011 are hyphens too.
+_VERB_START = r"(?<!\w)(?<!\w[-\u2010\u2011])"
+_VERB_END = r"(?!\w|[-\u2010\u2011](?!ка\b))"
 _USER_WORK_DIRECTIVE = re.compile(
-    r"(?i)\b(?:выдели(?:те)?|скопируй(?:те)?|вставь(?:те)?|введи(?:те)?|набер(?:и|ите)|"
+    r"(?i)" + _VERB_START +
+    r"(?:выдели(?:те)?|скопируй(?:те)?|вставь(?:те)?|введи(?:те)?|набер(?:и|ите)|"
     r"выполни(?:те)?|запусти(?:те)?|открой(?:те)?|подтверди(?:те)?|пришли(?:те)?|"
     r"используй(?:те)?|установи(?:те)?|настрой(?:те)?|создай(?:те)?|перейди(?:те)?|"
     r"нажми(?:те)?|загрузи(?:те)?|copy|paste|enter|run|execute|open|confirm|send|"
-    r"provide|type|use|set|configure|create|navigate|click|tap|upload)\b"
+    r"provide|type|use|set|configure|create|navigate|click|tap|upload)" + _VERB_END
 )
 _HUMAN_ONLY_DIRECTIVE = re.compile(
     r"(?i)^(?:подтверди(?:те)?|пришли(?:те)?|confirm|send|provide)$"
@@ -577,8 +585,11 @@ def has_evidence_bound_external_task(event: dict, prompt: str, classifier) -> bo
 # Russian verbs keep every assigning form (imperative, infinitive, "ты ...шь",
 # "давайте ...м", imperfective "запускай") and drop only the past tense:
 # "запустили"/"выполнила" report finished work, not an assignment.
+# A verb hyphen-joined to a word ("pre-install", "set-up") is a compound, not
+# a verb: the same _VERB_START/_VERB_END joins as in _USER_WORK_DIRECTIVE.
 _INSTRUCTION_VERB = re.compile(
-    r"(?i)\b(?:run|execute|invoke|launch|paste|enter|type|copy|set|export|"
+    r"(?i)" + _VERB_START +
+    r"(?:run|execute|invoke|launch|paste|enter|type|copy|set|export|"
     r"install|open|visit|click|sign in|log in|login|"
     r"запусти(?:те|ть|шь|м|мте)?|запускай(?:те)?|"
     r"выполни(?:те|ть|шь|м|мте)?|выполняй(?:те)?|"
@@ -587,7 +598,7 @@ _INSTRUCTION_VERB = re.compile(
     r"введи(?:те)?|открой(?:те)?|"
     r"пропиши(?:те)?|"
     r"скопируй(?:те)?|набери(?:те)?|"
-    r"зайди(?:те)?|войди(?:те)?)\b"
+    r"зайди(?:те)?|войди(?:те)?)" + _VERB_END
 )
 # A fence only where it opens a line: a ``` mentioned in prose must not pair
 # with the real fence and blank the sentence between them.
@@ -1065,6 +1076,34 @@ def _self_test() -> int:
         if shapes != [m.span() for m in _COMMAND_HANDOFF_SHAPE.finditer(text)]:
             fails.append(f"{label}: shape scan disagrees with the regex")
         got = agent_capable_user_homework(text, [quoted], {})
+        if got != want:
+            fails.append(f"{label}: expected {want!r}, got {got!r}")
+    # Measured 2026-09-30 (session 12aced49): a finished report was read as a
+    # hand-off because "open" in "open-source" matched as an imperative; a
+    # hyphen is a word boundary, so every such compound did. One case per side
+    # of each regex; the controls keep the same verbs standing alone, or
+    # before the particle "-ка", and those must still be caught.
+    npm = "`npm ci --ignore-scripts`"
+    for label, text, want in (
+        ("open-source in a report",
+         "Нашла три open-source с живым числом звёзд, сравнение в отчёте.", None),
+        ("set-up in a report", "The set-up is finished; the service answers 200.", None),
+        ("auto-open in a report", "The auto-open setting stays on.", None),
+        ("open-source with a non-breaking hyphen",
+         "Нашла три open\u2011source с живым числом звёзд.", None),
+        ("a suspended hyphen", "Both open- and closed-source builds pass.", None),
+        ("pre-install beside a reported command",
+         f"The pre-install hook {npm} returned 0.", None),
+        ("install-time beside a reported command",
+         f"The install-time hook {npm} returned 0.", None),
+        ("control: a bare open with a URL",
+         "Open https://example.com/settings and confirm the token.", "Open"),
+        ("control: a bare install before a command", f"Install {npm} first.", npm),
+        ("control: an imperative with -ка", f"Запусти-ка {npm} у себя.", "Запусти"),
+        ("control: -ка on a verb outside the directive list",
+         f"Пропиши-ка {npm} в пайплайн.", npm),
+    ):
+        got = agent_capable_user_homework(text, [prompt], {})
         if got != want:
             fails.append(f"{label}: expected {want!r}, got {got!r}")
     fails.extend(_self_test_active_request())
