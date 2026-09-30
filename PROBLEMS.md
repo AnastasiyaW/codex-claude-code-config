@@ -112,6 +112,35 @@ to be layered on code nobody has reviewed yet; the WIP owner decides the order.
 above as a mandatory-green case (with a clause-initial "Run `x --y`." control that stays
 red), then apply the position rule.
 
+2026-09-30, while closing `b10aeb3` (hyphen compounds): same class, two more shapes. The
+finished report returned `'run'` from "Agent B of the pre-push scan couldn't run" (a verb
+after a negated modal), and `Open`/`Запусти` from quoted test inputs inside multi-word
+backtick spans ("`Open https://…` returns `'Open'`"). The position rule above covers both;
+the negated modal also belongs among its non-imperative leads.
+
+## 2026-09-30 15:58 - PUBLIC PUSH BLOCKED: SEMANTIC SCAN CLI OUT OF WEEKLY QUOTA (b10aeb3)
+
+**Status**: missing-dep
+
+Same gate and cause as 2026-09-24. Refused twice, the second time captured by machine in
+`.agent/user-tasks/REQ-5B886CC0BC3A/push-refusal.log`:
+
+    [pre-push] Agent A passed, invoking Agent B (Claude semantic)...
+    [pre-push] Agent B: claude CLI found (...\2.1.284\claude.exe) but call failed:
+               You've hit your weekly limit · resets Oct 3, 12pm (Europe/Budapest)
+    [pre-push] Agent B unavailable (claude CLI missing or timeout) — public push blocked
+
+Not overridden: the owner asked for the gate to be kept.
+
+**What is waiting**: `b10aeb3` "stop-guard: a hyphen-joined verb is a compound, not an
+imperative" (self-test ok on the commit alone and on the live tree; 8/8 single-piece
+reverts red; independent reviewer PROCEED). The hook runs from this working tree, so the
+fix is live locally.
+
+**Recheck**: after 2026-10-03 12:00 Europe/Budapest, `git push origin main`; PASS when
+both agents pass and `origin/main` contains `b10aeb3`. Then close item `push-public-repo`
+of REQ-5B886CC0BC3A.
+
 ## 2026-09-26 14:40 - human-confirmation-guard: deletes hidden in wrappers pass; quoted words false-block
 
 **Status**: arch-decision
