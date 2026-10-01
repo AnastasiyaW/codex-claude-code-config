@@ -129,6 +129,36 @@ class TransferContractTests(unittest.TestCase):
         self.assertIsNone(payload, output)
         self.assertEqual(code, 0, output)
 
+    def test_a_record_saved_with_a_utf8_bom_is_read_not_reported_unreadable(self) -> None:
+        # PowerShell 5.1 `Out-File -Encoding utf8` prefixes a BOM.
+        (self.root / "destination.txt").write_text("same", encoding="utf-8")
+        verified = contract("verified")
+        verified["next_action"] = "none"
+        self.record.write_text(json.dumps(verified), encoding="utf-8-sig")
+        payload, output, code = run_hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root)})
+        self.assertIsNone(payload, output)
+        self.assertEqual(code, 0, output)
+        # ...and reading it does not turn an OPEN record into a pass.
+        self.record.write_text(json.dumps(contract()), encoding="utf-8-sig")
+        payload, output, _ = run_hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root)})
+        self.assertEqual(payload and payload.get("decision"), "block", output)
+        self.assertNotIn("cannot read", output)
+
+    def test_a_user_at_host_destination_written_as_prose_is_remote(self) -> None:
+        verified = contract("verified")
+        verified["next_action"] = "none"
+        verified["destination"] = "root@192.0.2.10 Docker image store only"
+        self.record.write_text(json.dumps(verified), encoding="utf-8")
+        payload, output, code = run_hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root)})
+        self.assertIsNone(payload, output)
+        self.assertEqual(code, 0, output)
+        # A plain relative path that does not exist is still absent.
+        verified["destination"] = "missing-local-dir/file.txt"
+        self.record.write_text(json.dumps(verified), encoding="utf-8")
+        payload, output, _ = run_hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root)})
+        self.assertEqual(payload and payload.get("decision"), "block", output)
+        self.assertIn("destination is absent", output)
+
     def test_verified_record_cannot_claim_unverified_source_cleanup(self) -> None:
         verified = contract("verified", cleanup_planned=True)
         verified["next_action"] = "finish cleanup verification"

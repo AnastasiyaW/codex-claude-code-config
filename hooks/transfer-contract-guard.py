@@ -308,7 +308,7 @@ def _contract_errors(contract: Any, *, pre_transfer: bool = False) -> list[str]:
 
 def _load(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         return None, f"cannot read {path}: {exc}"
     errors = _contract_errors(value)
@@ -375,7 +375,7 @@ def _stamp_written_contract(event: dict[str, Any]) -> bool:
     if path is None or not path.is_file():
         return False
     try:
-        contract = json.loads(path.read_text(encoding="utf-8"))
+        contract = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return False
     if not isinstance(contract, dict):
@@ -416,9 +416,14 @@ def _local_path(value: Any, root: Path) -> Path | None:
     absent" and blocked every later session's Stop. A Windows drive letter is a
     single character, so requiring two or more before the colon keeps a drive
     path such as `C:/work` and `D:\tmp` local.
+
+    `user@host` followed by a space or the end is remote too: records written as
+    prose ("root@192.0.2.10 Docker image store only") were resolved under the
+    repo root and blocked every session's Stop the same way. A local path never has
+    `@` before its first separator.
     """
     raw = _text(value)
-    remote = r"^(?:[a-z]+://|[^\\/\s]+@[^\\/\s:]+:|[a-z0-9][a-z0-9._-]+:[/\\])"
+    remote = r"^(?:[a-z]+://|[^\\/\s]+@[^\\/\s:]+(?::|\s|$)|[a-z0-9][a-z0-9._-]+:[/\\])"
     if not raw or re.match(remote, raw, re.I):
         return None
     try:
@@ -491,7 +496,7 @@ def _stop_issues(root: Path, current_session: str) -> tuple[list[str], list[str]
         # ownership exists to prevent. Measured 2026-08-28: a peer's contract was
         # mid-edit, missing one field, and wedged an unrelated session's Stop.
         try:
-            contract = json.loads(path.read_text(encoding="utf-8"))
+            contract = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
             # Genuinely unreadable: no owner can be read out of it, so it stays
             # everyone's problem until someone repairs it.
@@ -724,12 +729,12 @@ def _self_test() -> int:
         for leftover in transfers.glob("*.json"):
             leftover.unlink()
         path = put("stamp")
-        record = json.loads(path.read_text(encoding="utf-8"))
+        record = json.loads(path.read_text(encoding="utf-8-sig"))
         _stamp_owner(path, record, mine)
-        if json.loads(path.read_text(encoding="utf-8")).get("session_id") != mine:
+        if json.loads(path.read_text(encoding="utf-8-sig")).get("session_id") != mine:
             fails.append("owner was not stamped onto an unowned record")
-        _stamp_owner(path, json.loads(path.read_text(encoding="utf-8")), "someone-else")
-        if json.loads(path.read_text(encoding="utf-8")).get("session_id") != mine:
+        _stamp_owner(path, json.loads(path.read_text(encoding="utf-8-sig")), "someone-else")
+        if json.loads(path.read_text(encoding="utf-8-sig")).get("session_id") != mine:
             fails.append("existing owner was overwritten")
 
         # Writing a contract must establish ownership, whether or not a transfer
