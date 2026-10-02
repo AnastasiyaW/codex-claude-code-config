@@ -183,3 +183,28 @@ fixed cases (newline, backslash paths, redirections, cd/Set-Location carry, env/
 a commit hidden in `bash -c "git commit"`, `sh -c`, `powershell -c`, or a git alias
 (`git ci`) is still not seen, so the commit check does not run for it. One shared parser
 closes both guards; recheck adds those commands to `test_agent_policy_commit_gate.py`.
+
+## 2026-10-02 18:51 - PUBLIC PUSH BLOCKED: CONTAINER-CLEANUP COMMITS NAME A PRIVATE HOST
+
+**Status**: arch-decision
+
+Agent A of the pre-push scan refuses two local commits on `main`: `251e619` "fix: permit
+disposable stopped benchmark containers" and `da002c1` "fix: bind container cleanup to approved
+target". They were `7aa79d8` and `e97d3cc`; on 2026-10-02 local main was replayed onto origin
+after `1acd83d` with a byte-identical tree, so only the hashes changed (old ones stay in the
+reflog).
+
+    [pre-push] Agent A (regex) BLOCKED - 4 finding(s):
+      [pii] pii:private_names in hooks/human-confirmation-guard.py:267, 496, 537, 538
+
+Line 267 is the SSH target constant that the container-cleanup approval matches; 496, 537 and
+538 are self-test commands built on it. A neutral rename would break the approval, so this is
+not a redaction: the binding has to leave the public file - for example into the private
+routing config the scanner already reads, loaded at run time and failing closed when absent.
+Not overridden.
+
+**What is waiting**: `251e619`, `da002c1`. The guard runs from this working tree, so the
+change is live locally; only publication waits.
+
+**Recheck**: after the target moves out of the public file, `git push origin main`; PASS when
+both agents pass and `origin/main` carries the container-cleanup change.
