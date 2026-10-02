@@ -262,6 +262,10 @@ DELETE_COMMANDS = {"rm", "rmdir", "remove-item", "ri", "del", "erase", "rd"}
 # Remove-Item parameters without a value; any other -Param consumes the next token.
 PS_SWITCHES = {"recurse", "r", "force", "whatif", "verbose", "confirm"}
 PS_PATH_PARAMS = {"path", "literalpath", "lp", "pspath"}
+EPHEMERAL_DOCKER_NAME = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.-]*(?:[-_.](?:bench|test|tmp))(?:[-_.]?\d+)?$",
+    re.IGNORECASE,
+)
 
 
 def _norm(target: str) -> str:
@@ -348,6 +352,31 @@ def delete_targets(segment: str) -> list[str] | None:
     return targets
 
 
+def is_ephemeral_docker_rm(segment: str) -> bool:
+    """Allow removal only of plainly temporary containers, never with force.
+
+    `docker rm` without `--force` already fails for a running container. This
+    narrow route is therefore safe for disposable bench/test/tmp containers but
+    retains confirmation for arbitrary container names, forced removal, volumes
+    and every other Docker-destructive operation. The explicit tailscale shape
+    keeps the same rule available for the private workshop VM.
+    """
+    try:
+        toks = [t.strip("'\"") for t in shlex.split(segment, posix=False)]
+    except ValueError:
+        return False
+    if len(toks) >= 3 and toks[:2] == ["docker", "rm"]:
+        targets = toks[2:]
+    elif (len(toks) >= 6 and toks[0:2] == ["tailscale", "ssh"]
+          and toks[3:5] == ["docker", "rm"]):
+        targets = toks[5:]
+    else:
+        return False
+    if not targets or any(target == "--" or target.startswith("-") for target in targets):
+        return False
+    return all(EPHEMERAL_DOCKER_NAME.fullmatch(target) for target in targets)
+
+
 def split_segments(text: str) -> list[str]:
     """Split on && || ; | newline, but never inside '...' or "..." (a commit
     message saying "step; del old" is not a del command - review round 2)."""
@@ -390,6 +419,9 @@ def decide(cmd: str) -> tuple[bool, str | None]:
     flagged = False
     for seg in (s.strip() for s in split_segments(executable_text(cmd))):
         if not seg:
+            continue
+        if is_ephemeral_docker_rm(seg):
+            flagged = True
             continue
         targets = delete_targets(seg)
         seg_hit = any_match(seg, DESTRUCTIVE_INTENT)
@@ -460,6 +492,8 @@ def self_test() -> int:
         "echo 'a | rm -rf /data'",
         "cat > s.sh <<'EOF'\nrm -rf /workspace/sample/project\nEOF",   # heredoc body is not executed
         "ls -la",
+        "docker rm qwen3-8b-bench qwen3-8b-bench2 qwen3vl-4b-bench",
+        "tailscale ssh ws@workshop-vm docker rm qwen3-8b-bench",
     ]
     block_cases = [
         f"rm -rf {tmp}",                                   # the temp root itself
@@ -496,6 +530,9 @@ def self_test() -> int:
         "rm -rf /workspace/sample/tmpabcdefgh/important",    # name above the target
         "rm -rf C:/work/tmpservers1",                        # mkdtemp-like name outside a repo root
         "git commit -m 'ok'; del C:\\data\\x",               # real del after a quoted message
+        "docker rm -f qwen3-8b-bench",
+        "docker rm production-db",
+        "tailscale ssh ws@workshop-vm docker rm --force qwen3-8b-bench",
     ]
     fails = [f"should allow: {c}" for c in allow_cases if not decide(c)[0]]
     fails += [f"should block: {c}" for c in block_cases if decide(c)[0]]
