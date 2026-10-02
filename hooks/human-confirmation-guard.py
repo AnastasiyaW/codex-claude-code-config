@@ -262,10 +262,14 @@ DELETE_COMMANDS = {"rm", "rmdir", "remove-item", "ri", "del", "erase", "rd"}
 # Remove-Item parameters without a value; any other -Param consumes the next token.
 PS_SWITCHES = {"recurse", "r", "force", "whatif", "verbose", "confirm"}
 PS_PATH_PARAMS = {"path", "literalpath", "lp", "pspath"}
-EPHEMERAL_DOCKER_NAME = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9_.-]*(?:[-_.](?:bench|test|tmp))(?:[-_.]?\d+)?$",
-    re.IGNORECASE,
-)
+# Owner approval 2026-10-02 is bound to this remote and this closed set only.
+# Do not turn names such as `production-bench` into a blanket deletion bypass.
+WORKSHOP_VM_SSH_TARGET = "ws@workshop-vm"
+WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS = frozenset({
+    "qwen3-8b-bench",
+    "qwen3-8b-bench2",
+    "qwen3vl-4b-bench",
+})
 
 
 def _norm(target: str) -> str:
@@ -353,28 +357,25 @@ def delete_targets(segment: str) -> list[str] | None:
 
 
 def is_ephemeral_docker_rm(segment: str) -> bool:
-    """Allow removal only of plainly temporary containers, never with force.
+    """Allow exactly the owner-approved stopped-container cleanup, never force.
 
-    `docker rm` without `--force` already fails for a running container. This
-    narrow route is therefore safe for disposable bench/test/tmp containers but
-    retains confirmation for arbitrary container names, forced removal, volumes
-    and every other Docker-destructive operation. The explicit tailscale shape
-    keeps the same rule available for the private workshop VM.
+    This is a one-scope exception: the SSH target and every container name are
+    closed. `docker rm` without `--force` still fails for a running container.
+    All other Docker-destructive routes remain confirmation-required.
     """
     try:
         toks = [t.strip("'\"") for t in shlex.split(segment, posix=False)]
     except ValueError:
         return False
-    if len(toks) >= 3 and toks[:2] == ["docker", "rm"]:
-        targets = toks[2:]
-    elif (len(toks) >= 6 and toks[0:2] == ["tailscale", "ssh"]
-          and toks[3:5] == ["docker", "rm"]):
+    if (len(toks) >= 6 and toks[0:2] == ["tailscale", "ssh"]
+            and toks[2] == WORKSHOP_VM_SSH_TARGET
+            and toks[3:5] == ["docker", "rm"]):
         targets = toks[5:]
     else:
         return False
     if not targets or any(target == "--" or target.startswith("-") for target in targets):
         return False
-    return all(EPHEMERAL_DOCKER_NAME.fullmatch(target) for target in targets)
+    return all(target in WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS for target in targets)
 
 
 def split_segments(text: str) -> list[str]:
@@ -492,8 +493,7 @@ def self_test() -> int:
         "echo 'a | rm -rf /data'",
         "cat > s.sh <<'EOF'\nrm -rf /workspace/sample/project\nEOF",   # heredoc body is not executed
         "ls -la",
-        "docker rm qwen3-8b-bench qwen3-8b-bench2 qwen3vl-4b-bench",
-        "tailscale ssh ws@workshop-vm docker rm qwen3-8b-bench",
+        "tailscale ssh ws@workshop-vm docker rm qwen3-8b-bench qwen3-8b-bench2 qwen3vl-4b-bench",
     ]
     block_cases = [
         f"rm -rf {tmp}",                                   # the temp root itself
@@ -532,6 +532,9 @@ def self_test() -> int:
         "git commit -m 'ok'; del C:\\data\\x",               # real del after a quoted message
         "docker rm -f qwen3-8b-bench",
         "docker rm production-db",
+        "docker rm qwen3-8b-bench",
+        "tailscale ssh ws@production-vm docker rm qwen3-8b-bench",
+        "tailscale ssh ws@workshop-vm docker rm production-bench",
         "tailscale ssh ws@workshop-vm docker rm --force qwen3-8b-bench",
     ]
     fails = [f"should allow: {c}" for c in allow_cases if not decide(c)[0]]
