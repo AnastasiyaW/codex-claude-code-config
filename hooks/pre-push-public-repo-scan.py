@@ -483,7 +483,10 @@ def agent_b_claude(diff: str) -> dict | None:
                 "--system-prompt",
                 AGENT_B_SYSTEM_PROMPT,
                 "--safe-mode",
-                "--restricted",
+                # --safe-mode keeps built-in tools; "" removes every one. The CLI
+                # has no --restricted (2.1.220 rejects it as an unknown option).
+                "--tools",
+                "",
                 "--strict-mcp-config",
                 "--mcp-config",
                 '{"mcpServers":{}}',

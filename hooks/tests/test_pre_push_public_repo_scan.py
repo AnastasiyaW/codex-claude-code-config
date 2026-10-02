@@ -144,12 +144,13 @@ class PublicPushScanTests(unittest.TestCase):
         for flag in (
             "--system-prompt",
             "--safe-mode",
-            "--restricted",
             "--strict-mcp-config",
             "--disable-slash-commands",
             "--no-session-persistence",
         ):
             self.assertIn(flag, command)
+        self.assertEqual("", command[command.index("--tools") + 1])
+        self.assertNotIn("--restricted", command)
         self.assertNotEqual(Path.cwd(), Path(str(observed["cwd"])))
         self.assertEqual(adversarial, observed["payload"]["git_diff"])
         self.assertNotIn(adversarial, MODULE.AGENT_B_SYSTEM_PROMPT)
