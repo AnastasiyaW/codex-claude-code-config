@@ -65,9 +65,10 @@ SIGNALS: list[tuple[str, list[str]]] = [
 
 # Quoted text is a mention, not a statement: a UI title «слишком много попыток»,
 # a screen name or a `file_name` must not read as overload. A stray mark must not
-# pair across a real complaint: directional marks cannot contain their own opener,
-# and " or ` opens only after a non-word character and closes only before one, so
-# the inch mark in 27" opens nothing. Fences follow CommonMark (line-anchored, the
+# pair across a real complaint: directional marks cannot contain an opener and
+# close only before a non-word character (“ also opens “Готово”); " or ` opens
+# only after a non-word character and closes only before one, and " never closes
+# after a digit, so the inch mark in 27" neither opens nor closes a span. Fences follow CommonMark (line-anchored, the
 # closer carries no info string).
 # simplification: inline spans are capped at 80 characters because titles and file
 # names are short; a longer quote is read as prose, as it was before this filter.
@@ -75,9 +76,9 @@ _INLINE = 80
 QUOTED_SPANS = re.compile(
     r"^[ \t]*```[^\n]*\n.*?^[ \t]*```[ \t]*$"
     rf"|«[^«»\n]{{1,{_INLINE}}}»"
-    rf"|„[^„“”\n]{{1,{_INLINE}}}[“”]"
-    rf"|“[^“”\n]{{1,{_INLINE}}}”"
-    rf'|(?<![\w"])"(?=\S)[^"\n]{{1,{_INLINE}}}(?<=\S)"(?![\w"])'
+    rf"|„[^„“”\n]{{1,{_INLINE}}}[“”](?!\w)"
+    rf"|“[^„“”\n]{{1,{_INLINE}}}”(?!\w)"
+    rf'|(?<![\w"])"(?=\S)[^"\n]{{1,{_INLINE}}}(?<=[^\s\d])"(?![\w"])'
     rf"|(?<![\w`])`(?=\S)[^`\n]{{1,{_INLINE}}}(?<=\S)`(?![\w`])",
     re.DOTALL | re.MULTILINE,
 )

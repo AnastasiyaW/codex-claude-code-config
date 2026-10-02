@@ -133,6 +133,8 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             complaint,
             f'Монитор 27" — {complaint} на "VM-2".',
             f"Экран «Повтор без закрытия; {complaint}; экран «Готово» ок.",
+            f"Экран „Повтор; {complaint}; экран “Готово” ок.",
+            f'Монитор "LG; {complaint}; диагональ 27" ок.',
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-complaint-") as raw:
                 payload, output = run_hook(Path(raw), text)
