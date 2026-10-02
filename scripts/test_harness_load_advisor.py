@@ -105,6 +105,47 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             )
             self.assertIsNone(payload, output)
 
+    def test_quoted_ui_string_is_not_overload_feedback(self) -> None:
+        # 2026-10-02 false positive: a screen title in a design-bug report
+        # matched the explicit-feedback pattern "слишком много".
+        title = "слишком много попыток"
+        for quoted in (f"«{title}»", f'"{title}"', f"“{title}”", f"`{title}`"):
+            with self.subTest(quoted=quoted), tempfile.TemporaryDirectory(prefix="harness-quoted-") as raw:
+                root = Path(raw)
+                payload, output = run_hook(
+                    root,
+                    f"Экран 9 {quoted} (rate-limited): кнопка уезжает за край, "
+                    "исправлено в release-сборке.",
+                )
+                self.assertIsNone(payload, output)
+                self.assertFalse((root / "feedback" / "events.jsonl").exists())
+
+    def test_blanked_quote_keeps_its_sentence_end(self) -> None:
+        # Blanking "merge." must not join two sentences into a block->staging match.
+        with tempfile.TemporaryDirectory(prefix="harness-sentence-") as raw:
+            payload, output = run_hook(Path(raw), 'CI блокирует "merge." staging smoke прошёл')
+            self.assertIsNone(payload, output)
+
+    def test_unquoted_complaint_still_blocks(self) -> None:
+        complaint = "харнесс слишком жёсткий, блокирует smoke"
+        # A stray mark on the same line must not pair with a later quote and hide it.
+        for text in (
+            complaint,
+            f'Монитор 27" — {complaint} на "VM-2".',
+            f"Экран «Повтор без закрытия; {complaint}; экран «Готово» ок.",
+        ):
+            with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-complaint-") as raw:
+                payload, output = run_hook(Path(raw), text)
+                self.assertEqual(payload and payload.get("decision"), "block", output)
+
+    def test_yo_spelling_matches_declared_overload(self) -> None:
+        # "жёсткий" must meet the same pattern as "жесткий".
+        with tempfile.TemporaryDirectory(prefix="harness-yo-") as raw:
+            root = Path(raw)
+            payload, output = run_hook(root, "Харнесс слишком жёсткий для обычной проверки.")
+            self.assertEqual(payload and payload.get("decision"), "block", output)
+            self.assertIn("declared-overload", payload["reason"])
+
     def test_staging_policy_cannot_embed_release_only_command(self) -> None:
         with tempfile.TemporaryDirectory(prefix="harness-policy-") as raw:
             root = Path(raw)

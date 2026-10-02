@@ -63,6 +63,32 @@ SIGNALS: list[tuple[str, list[str]]] = [
     ),
 ]
 
+# Quoted text is a mention, not a statement: a UI title «слишком много попыток»,
+# a screen name or a `file_name` must not read as overload. A stray mark must not
+# pair across a real complaint: directional marks cannot contain their own opener,
+# and " or ` opens only after a non-word character and closes only before one, so
+# the inch mark in 27" opens nothing. Fences follow CommonMark (line-anchored, the
+# closer carries no info string).
+# simplification: inline spans are capped at 80 characters because titles and file
+# names are short; a longer quote is read as prose, as it was before this filter.
+_INLINE = 80
+QUOTED_SPANS = re.compile(
+    r"^[ \t]*```[^\n]*\n.*?^[ \t]*```[ \t]*$"
+    rf"|«[^«»\n]{{1,{_INLINE}}}»"
+    rf"|„[^„“”\n]{{1,{_INLINE}}}[“”]"
+    rf"|“[^“”\n]{{1,{_INLINE}}}”"
+    rf'|(?<![\w"])"(?=\S)[^"\n]{{1,{_INLINE}}}(?<=\S)"(?![\w"])'
+    rf"|(?<![\w`])`(?=\S)[^`\n]{{1,{_INLINE}}}(?<=\S)`(?![\w`])",
+    re.DOTALL | re.MULTILINE,
+)
+# Blank a span letter by letter but keep . ? ! and newlines in place, so removing
+# a quote can only delete a match, never join two sentences into a new one.
+_NOT_SENTENCE_MARK = re.compile(r"[^.?!\n]")
+
+
+def _blank_quotes(text: str) -> str:
+    return QUOTED_SPANS.sub(lambda m: _NOT_SENTENCE_MARK.sub(" ", m.group()), text)
+
 META_MARKERS = (
     "[harness_overload]",
     "harness-load-advisor.py",
@@ -105,9 +131,11 @@ def detect(message: str) -> list[str]:
     lowered = message.lower()
     if any(marker in lowered for marker in META_MARKERS):
         return []
+    # ё folds to е so "жёсткий" meets the same pattern as "жесткий".
+    prose = _blank_quotes(lowered).replace("ё", "е")
     hits: list[str] = []
     for name, patterns in SIGNALS:
-        if any(re.search(pattern, lowered, re.IGNORECASE) for pattern in patterns):
+        if any(re.search(pattern, prose, re.IGNORECASE) for pattern in patterns):
             hits.append(name)
     return hits
 
