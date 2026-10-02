@@ -473,7 +473,10 @@ def agent_b_claude(diff: str) -> dict | None:
     # this repository's CLAUDE.md, user hooks, plugins, skills, MCP servers, or
     # filesystem context.  Otherwise instructions in the repository and ambient
     # machine paths can contaminate the verdict (or be hallucinated as diff data).
-    with tempfile.TemporaryDirectory(prefix="public-push-review-") as neutral_cwd:
+    # A claude child can still hold the cwd when the call returns; on Windows the
+    # cleanup then raised WinError 32 after the verdict and blocked a safe push.
+    # The empty folder stays in TEMP; the verdict does not depend on removing it.
+    with tempfile.TemporaryDirectory(prefix="public-push-review-", ignore_cleanup_errors=True) as neutral_cwd:
         r = run(
             [
                 claude,

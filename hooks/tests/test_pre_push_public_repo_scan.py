@@ -114,6 +114,29 @@ class PublicPushScanTests(unittest.TestCase):
         )
         self.assertEqual(0, code, output)
 
+    def test_semantic_verdict_survives_a_handle_left_in_the_neutral_cwd(self) -> None:
+        # A claude child process can still hold its cwd when the call returns;
+        # on Windows that made the temp-dir cleanup raise WinError 32 after a
+        # SAFE verdict, and the scan blocked as an internal error.
+        held = []
+
+        def fake_run(cmd, **kwargs):
+            held.append(open(Path(str(kwargs["cwd"])) / "held.lock", "w", encoding="utf-8"))
+            return MODULE.subprocess.CompletedProcess(
+                cmd, 0, '{"verdict": "SAFE", "reason": "generic"}', ""
+            )
+
+        try:
+            with (
+                patch.object(MODULE, "find_claude_cli", return_value="claude.exe"),
+                patch.object(MODULE, "run", side_effect=fake_run),
+            ):
+                result = MODULE.agent_b_claude("+generic line\n")
+        finally:
+            for handle in held:
+                handle.close()
+        self.assertEqual("SAFE", result["verdict"])
+
     def test_semantic_reviewer_isolated_from_ambient_repo_and_frames_diff_as_data(self) -> None:
         observed: dict[str, object] = {}
 
