@@ -484,6 +484,25 @@ def _transfer_files(root: Path) -> list[Path]:
     return paths
 
 
+def _is_receipt_mapping(path: Path, contract: dict[str, Any], root: Path) -> bool:
+    """Only an explicit non-contract mapping may opt out of the Stop gate.
+
+    `.agent/transfers` also holds reconciliation mappings.  Treating every JSON
+    in that directory as a transfer contract made a mapping with a colliding
+    filename block unrelated sessions.  A malformed or unmarked contract still
+    fails closed; this exemption requires both its location and its explicit
+    non-contract kind.
+    """
+    try:
+        relative = path.resolve().relative_to(root.resolve())
+    except OSError:
+        return False
+    return (
+        relative.parts[:2] == (".agent", "transfers")
+        and _text(contract.get("record_kind")) == "receipt_mapping"
+    )
+
+
 def _stop_issues(root: Path, current_session: str) -> tuple[list[str], list[str]]:
     """Return (blocking issues for this session, notes about other sessions')."""
     issues: list[str] = []
@@ -504,6 +523,8 @@ def _stop_issues(root: Path, current_session: str) -> tuple[list[str], list[str]
             continue
         if not isinstance(contract, dict):
             issues.append(f"{path.name}: contract must be a JSON object")
+            continue
+        if _is_receipt_mapping(path, contract, root):
             continue
         schema_errors = _contract_errors(contract)
         owner = _foreign_owner(contract, current_session)
