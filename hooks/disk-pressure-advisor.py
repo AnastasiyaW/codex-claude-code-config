@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""SessionStart: report reclaimable development artifacts when a disk is tight.
+"""SessionStart: report reclaimable development artifacts when a disk is tight,
+and expired entries of the shared temp registry (``temp_registry.py``) at most daily.
 
 This is advisory, never deletes anything, and fails open.  Claude and Codex use
 the same project stamp so opening both clients does not produce duplicate nags.
@@ -69,9 +70,9 @@ def reclaimable_gb(root: Path) -> float | None:
     return None
 
 
-def nagged_recently(stamp: Path) -> bool:
+def nagged_recently(stamp: Path, cooldown: float = NAG_COOLDOWN_SEC) -> bool:
     try:
-        return (time.time() - stamp.stat().st_mtime) < NAG_COOLDOWN_SEC
+        return (time.time() - stamp.stat().st_mtime) < cooldown
     except OSError:
         return False
 
@@ -112,6 +113,31 @@ def advise(cwd: Path) -> str | None:
     except OSError:
         pass
     return "\n".join(lines)
+
+
+REGISTRY_TOOL = Path.home() / ".claude" / "scripts" / "temp_registry.py"
+REGISTRY_STAMP = Path.home() / ".claude" / "state" / ".temp-registry-advised"
+REGISTRY_COOLDOWN_SEC = 24 * 3600
+
+
+def registry_notice() -> str | None:
+    """Expired entries of the shared temp registry, independent of disk pressure."""
+    if not REGISTRY_TOOL.is_file() or nagged_recently(REGISTRY_STAMP, REGISTRY_COOLDOWN_SEC):
+        return None
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("temp_registry", REGISTRY_TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    count = module.expired_count()
+    if not count:
+        return None
+    try:
+        REGISTRY_STAMP.parent.mkdir(parents=True, exist_ok=True)
+        REGISTRY_STAMP.touch()
+    except OSError:
+        pass
+    return (f"[temp-registry] просрочено временного: {count}. Показать список и id пачки: "
+            "python ~/.claude/scripts/temp_registry.py clean | канон: ~/.claude/scripts/DISK-HYGIENE.md")
 
 
 def self_test() -> int:
@@ -161,6 +187,13 @@ def main() -> int:
             print(message)
     except Exception:
         # A broken advisory must never block the actual session.
+        pass
+    try:
+        if not any(os.environ.get(name, "").strip() for name in SKIP_ENV_VARS):
+            notice = registry_notice()
+            if notice:
+                print(notice)
+    except Exception:
         pass
     return 0
 
