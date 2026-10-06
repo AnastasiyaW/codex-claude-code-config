@@ -18,11 +18,34 @@ therefore remain blocked rather than forge a green result.
 
 Verdict matrix
 ==============
-| destructive intent | target whitelist | host-verifiable approval | result |
+| destructive intent | target whitelist | owner request in transcript | result |
 |---|---|---|---|
 | no                 | n/a              | -              | allow |
 | yes                | all targets safe | -              | allow (silent) |
-| yes                | non-safe target  | unavailable in current hook API | **BLOCK** |
+| plain file delete  | non-safe target  | yes, names every target | allow + audit record |
+| yes                | non-safe target  | absent / other kind of op | **BLOCK** |
+
+Owner request (2026-10-06, owner: "поправь хук, чтобы ты сама удаляла по моей просьбе")
+======================================================================================
+The approval source is the session transcript the HOST writes (event
+`transcript_path`), not anything in the command: the latest entry with
+`type=user`, `origin.kind=human`, not `isMeta`, not a sidechain. Hook feedback,
+task notifications and tool results carry other markers and never count.
+A plain file delete (rm/rmdir/del/rd/erase/Remove-Item, also inside
+`ssh host '...'`, `bash -c`, `powershell -Command`) is allowed when that prompt
+asks to delete (imperative; no negation, "нет", "оставь", no question) and
+EVERY target is named as a whole token: the full absolute path always counts;
+the bare file name (with extension) counts only for a non-recursive delete
+without "из/from" phrasing. The agent's previous answer is consulted only when
+the prompt is a bare go-ahead ("да", "да, удаляй"). Hard limits stay regardless:
+relative paths, globs, variables, @(), UNC, traversal, `.git`, `~/.claude`,
+`.ssh`, system dirs, drive roots, home folders and their direct children,
+registry/providers, `xargs rm`, and any non-file destructive op (DROP, docker,
+git reset, kill...). Any exception inside the guard blocks (fail closed).
+Every allow writes an audit line to
+~/.claude/logs/deletion-approvals.jsonl. Residual risk: the transcript is a
+local file an agent could write to; a command that references the transcript
+itself is refused, file-tool writes to it are out of this hook's reach.
 
 Design notes
 ============
@@ -35,12 +58,12 @@ Design notes
 
 Bypass of *this* hook
 =====================
-There is intentionally no bypass for this hook. Until a host-verifiable
-approval interface exists, destructive ops remain blocked. CI/CD pipelines
-should not run inside Claude Code sessions.
+There is intentionally no bypass marker for this hook: command text is never
+approval. CI/CD pipelines should not run inside Claude Code sessions.
 """
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import sys
@@ -83,6 +106,10 @@ DESTRUCTIVE_INTENT = [
     r"\brobocopy\b.*\/(?:move|mov)\b",
     r"\brclone\s+move\b",
     r"\bfind\s+\S+.*-delete\b",
+    r"\bfind\b.*-exec(?:dir)?\s+\\?(?:rm|rmdir|unlink|shred)\b",   # review 2026-10-06 round 3
+    r"\[(?:system\.)?io\.(?:file|directory)\]::delete\b",
+    r"\bunlink\s+",
+    r"\bxargs\b[^|;&\n]*?\b(?:rm|rmdir|del|shred|unlink)\b",  # targets from stdin (review 2026-10-06)
     # cmd.exe deletes reached through a wrapper; a bare `rd`/`del` as the first
     # word of a segment is caught structurally by decide(), not by this list
     r"\bcmd(?:\.exe)?\s+/[ck]\s+.*\b(?:rd|rmdir|del|erase)\b",
@@ -258,7 +285,10 @@ TEMP_NAME_PATTERNS = [
     r"^tmp[a-z0-9_]{8}$",                        # tempfile.mkdtemp() default names
     r"^pytest-of-[^/]+$",                        # pytest basetemp
 ]
-DELETE_COMMANDS = {"rm", "rmdir", "remove-item", "ri", "del", "erase", "rd"}
+DELETE_COMMANDS = {"rm", "rmdir", "remove-item", "ri", "del", "erase", "rd", "unlink"}
+# Words after which the next word is again a command (grouping, wrappers, script blocks).
+COMMAND_PREFIXES = {"sudo", "command", "&", "{", "(", "then", "do", "else", "time", "nohup", "nice",
+                    "exec", "env", "%", "foreach-object", "foreach", "!", "xargs"}
 # Remove-Item parameters without a value; any other -Param consumes the next token.
 PS_SWITCHES = {"recurse", "r", "force", "whatif", "verbose", "confirm"}
 PS_PATH_PARAMS = {"path", "literalpath", "lp", "pspath"}
@@ -321,14 +351,17 @@ def is_target_safe(target: str) -> bool:
 def delete_targets(segment: str) -> list[str] | None:
     """Targets of an rm / Remove-Item segment, or None if the segment is not a delete."""
     try:  # posix=False: posix mode would eat Windows backslashes
-        toks = [t.strip("'\"") for t in shlex.split(re.sub(r"(?m)#[^\n]*", "", segment), posix=False)]
+        toks = [t.strip("'\"") for t in shlex.split(re.sub(r"(?m)(?:^|(?<=\s))#[^\n]*", "", segment), posix=False)]
     except ValueError:
         return None
-    while toks and toks[0].lower() in {"sudo", "command", "&"}:
+    def norm_word(w: str) -> str:  # \rm, r''m, r`m (PowerShell escape) all run `rm`
+        return re.sub(r"[\\'\"`]", "", w).lower().rsplit("/", 1)[-1].removesuffix(".exe")
+    while toks and (norm_word(toks[0]) in COMMAND_PREFIXES or toks[0].endswith(("{", "("))
+                    or re.fullmatch(r"\w+=\S*|\d+|-\w+", toks[0])):
         toks = toks[1:]
     if not toks:
         return None
-    verb = toks[0].lower().rsplit("/", 1)[-1].removesuffix(".exe")
+    verb = norm_word(toks[0])
     if verb not in DELETE_COMMANDS:
         return None
     targets: list[str] = []
@@ -378,6 +411,64 @@ def is_ephemeral_docker_rm(segment: str) -> bool:
     return all(target in WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS for target in targets)
 
 
+# ssh options that take an argument (OpenSSH 9.x synopsis: -B -b -c -D -E -e -F -I -i -J -L -l
+# -m -O -o -P -p -Q -R -S -W -w). Review 2026-10-06: missing B/P let `ssh -B eth0 host rm ...` through.
+SSH_OPTS_WITH_ARG = set("BbcDEeFIiJLlmOoPpQRSWw")
+REMOTE_WRAPPERS = {"sudo", "nice", "command", "env", "nohup", "exec"}
+UNPARSED = "\x00unparsed-ssh"
+INNER_SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+
+
+def remote_command(segment: str) -> str | None:
+    """The command a `[timeout N] ssh [opts] host CMD` / `tailscale ssh host CMD` segment runs remotely.
+
+    A delete sent over ssh is the same delete: review 2026-10-06 found a plain
+    `ssh host 'rm /data/x'` passing untouched because the segment's command word is ssh.
+    Returns None when the segment is not ssh, UNPARSED when it is ssh we cannot read.
+    """
+    try:
+        toks = shlex.split(segment, posix=True)
+    except ValueError:
+        return UNPARSED if re.match(r"\s*(?:\S*/)?(?:tailscale\s+)?ssh(?:\.exe)?\s", segment) else None
+    i = 0
+    while i < len(toks):
+        if toks[i] == "timeout" and i + 1 < len(toks) and re.fullmatch(r"\d+[smhd]?", toks[i + 1]):
+            i += 2
+        elif toks[i] in REMOTE_WRAPPERS or re.fullmatch(r"\w+=\S*", toks[i]):
+            i += 1
+        else:
+            break
+    word = toks[i].rsplit("/", 1)[-1].lower().removesuffix(".exe") if i < len(toks) else ""
+    if word in INNER_SHELLS and i + 2 < len(toks) and re.fullmatch(r"-[a-z]*c", toks[i + 1]):
+        return toks[i + 2]  # bash -c '<cmd>': the string is the command (review 2026-10-06)
+    if word in {"powershell", "pwsh"}:
+        j = i + 1
+        while j < len(toks) and toks[j].lower() not in {"-c", "-command", "-encodedcommand", "-ec"}:
+            j += 1
+        if j + 1 < len(toks):
+            return UNPARSED if toks[j].lower() in {"-encodedcommand", "-ec"} else " ".join(toks[j + 1:])
+    if i < len(toks) and toks[i] == "tailscale" and toks[i + 1:i + 2] == ["ssh"]:
+        i += 2
+    elif i < len(toks) and toks[i].rsplit("/", 1)[-1].removesuffix(".exe") == "ssh":
+        i += 1
+    else:
+        return None  # ssh only as an argument (rsync -e ssh, which ssh): nothing runs remotely here
+    while i < len(toks) and toks[i].startswith("-") and toks[i] != "--":
+        flags = toks[i][1:]
+        i += 1
+        for pos, c in enumerate(flags):  # combined flags: -Tp 2222, -p2222, -4vi key
+            if c in SSH_OPTS_WITH_ARG:
+                if pos == len(flags) - 1:
+                    i += 1  # the argument is the next token
+                break
+    if i < len(toks) and toks[i] == "--":
+        i += 1
+    if i >= len(toks):
+        return None  # no host: nothing runs remotely
+    rest = toks[i + 1:]  # toks[i] is the host
+    return " ".join(rest) if rest else None
+
+
 def split_segments(text: str) -> list[str]:
     """Split on && || ; | newline, but never inside '...' or "..." (a commit
     message saying "step; del old" is not a del command - review round 2)."""
@@ -387,6 +478,10 @@ def split_segments(text: str) -> list[str]:
     i = 0
     while i < len(text):
         c = text[i]
+        if c == "\\" and quote != "'" and i + 1 < len(text):
+            buf.append(text[i:i + 2])  # \" \; \<newline> are literal to the shell (review 2026-10-06)
+            i += 2
+            continue
         if quote:
             buf.append(c)
             if c == quote:
@@ -409,6 +504,52 @@ def split_segments(text: str) -> list[str]:
     return out
 
 
+def substitutions(text: str) -> list[str]:
+    """Bodies of $(...) and `...` outside single quotes: they execute (review 2026-10-06)."""
+    out: list[str] = []
+    i, quote = 0, None
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c == "'" and quote is None:
+            quote = "'"
+        elif c == '"':
+            quote = None if quote == '"' else '"'
+        elif text.startswith("$(", i):
+            depth, j = 1, i + 2
+            while j < len(text) and depth:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+            out.append(text[i + 2:j - 1])
+            i = j
+            continue
+        elif c == "`":
+            j = text.find("`", i + 1)
+            if j == -1:
+                out.append(text[i + 1:])
+                break
+            out.append(text[i + 1:j])
+            i = j + 1
+            continue
+        i += 1
+    return out
+
+
+def hidden_deletes(segment: str) -> list[str]:
+    """Sub-commands that start with a delete verb in command position inside a segment:
+    `{ rm x; }`, `if true; then rm x`, `& { del x }`, `1 | % { ri x }` (review 2026-10-06 round 3)."""
+    out: list[str] = []
+    pieces = re.split(r"[{}()]|\b(?:then|do|else|time|nohup|exec)\b", segment)
+    for piece in pieces[1:]:
+        if piece.strip() and delete_targets(piece.strip()) is not None:
+            out.append(piece.strip())
+    return out
+
+
 def decide(cmd: str) -> tuple[bool, str | None]:
     """(allowed, hit). Every destructive segment must delete routine targets only.
 
@@ -418,13 +559,36 @@ def decide(cmd: str) -> tuple[bool, str | None]:
     """
     whole_hit = any_match(cmd, DESTRUCTIVE_INTENT, command=True)
     flagged = False
-    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+    for inner in substitutions(cmd):
+        ok, ihit = decide(inner)
+        if not ok:
+            return False, ihit or "substitution-delete"
+        flagged = flagged or bool(ihit)
+    segments = split_segments(executable_text(cmd))
+    if re.search(r"\\[\"']", cmd):
+        # executable_text (shared helper) does not honour \" and would mask `echo \"a; rm x; b\"`
+        # as a quoted echo argument; with escaped quotes present judge the raw split as well.
+        segments += split_segments(cmd)
+    for seg in (s.strip() for s in segments):
         if not seg:
             continue
         if is_ephemeral_docker_rm(seg):
             flagged = True
             continue
+        remote = remote_command(seg)
+        if remote == UNPARSED:
+            return False, "unparsed-remote-or-inner-command"
+        if remote:
+            ok, rhit = decide(remote)
+            if not ok:
+                return False, rhit or "remote-delete"
+            flagged = flagged or bool(rhit)
+            continue
         targets = delete_targets(seg)
+        if targets is None:
+            hidden = hidden_deletes(seg)
+            if hidden:
+                targets = [t for h in hidden for t in (delete_targets(h) or [])] or []
         seg_hit = any_match(seg, DESTRUCTIVE_INTENT)
         if targets is None and not seg_hit:
             continue
@@ -434,6 +598,233 @@ def decide(cmd: str) -> tuple[bool, str | None]:
     if whole_hit and not flagged:
         return False, whole_hit  # a hit no single segment carries: stay closed
     return True, whole_hit or ("delete-command-word" if flagged else None)
+
+
+# ---------------------------------------------------------------------------
+# Owner-requested deletes (see module docstring). Hardened after the 2026-10-06
+# independent review (REJECT): substring naming, relative paths, the agent's own
+# text widening scope, "remove X from file", crash-on-malformed transcript.
+# ---------------------------------------------------------------------------
+# Imperative / infinitive only: "вроде удалила" reports a past deletion, it is not a request.
+DELETE_INTENT = re.compile(
+    r"\b(?:удали(?:те)?|удаляй(?:те)?|удалить|удалим|снеси(?:те)?|снести|сотри(?:те)?|стереть|"
+    r"почисти(?:те)?|очисти(?:те)?|убери(?:те)?|убрать)\b|"
+    r"\bdelete\b|\bremove\b|\brm\b|\bwipe\b|\berase\b", re.IGNORECASE)
+# Anything that makes the request not a plain go-ahead: negation, "keep", "no", a question.
+NOT_A_GO = re.compile(
+    r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:удал|снос|снес|стир|сотр|трог|чист|убир)|"
+    r"\bнельзя\b|\bнет\b|\bоставь|\bпогоди|\bподожди|\bdon'?t\b|\bdo\s+not\b|\bnever\b|\bkeep\b|\bno\b|\?",
+    re.IGNORECASE)
+# "убери X из файла" / "remove the print from train.py" edits a file; only a full path counts then.
+FROM_PHRASE = re.compile(r"\s(?:из|изо|from|out\s+of)\s", re.IGNORECASE)
+# My answer only has to be ABOUT deleting (a proposal "Удалю X - подтверди"); the request must ask.
+DELETE_MENTION = re.compile(r"удал|снес|сотр|стер|почист|очист|delete|remov|\brm\b|wipe|erase", re.IGNORECASE)
+# A bare go-ahead and nothing else: "да", "да, удаляй", "ок!", "yes".
+CONFIRM_ONLY = re.compile(
+    r"\s*(?:да|ага|ок|окей|ok|okay|yes|подтверждаю|удаляй|давай|можно)"
+    r"(?:[\s,]+(?:да|удаляй|давай|можно|ок|ok|yes|подтверждаю))*\s*[.!]*\s*", re.IGNORECASE)
+APPROVAL_LOG = Path.home() / ".claude" / "logs" / "deletion-approvals.jsonl"
+TRANSCRIPT_SCAN_CAP = 64 * 1024 * 1024
+PROTECTED = re.compile(
+    r"(?:^|/)\.(?:claude|codex|ssh|secrets|gnupg|git|agents|config/gh)(?:/|$)|"
+    r"^(?:/etc|/usr|/bin|/sbin|/lib\w*|/boot|/sys|/proc|/dev|/var/lib|/srv/?$)(?:/|$)|"
+    r"^[a-z]:/(?:windows|program files[^/]*|programdata|\.secrets|\$recycle\.bin)(?:/|$)|"
+    r"^[a-z]:/users/[^/]+/appdata/(?:roaming|locallow)(?:/|$)|^/users/[^/]+/library(?:/|$)|"
+    r"^/var/(?:backups|spool|mail)(?:/|$)",
+    re.IGNORECASE)
+
+
+def _entry_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+    return ""
+
+
+def _is_human_prompt(e) -> bool:
+    origin = e.get("origin") if isinstance(e, dict) else None
+    return (isinstance(e, dict) and e.get("type") == "user" and isinstance(origin, dict)
+            and origin.get("kind") == "human" and not e.get("isMeta") and not e.get("isSidechain")
+            and isinstance(e.get("message"), dict))
+
+
+def _tail_entries(path: Path):
+    """Transcript entries newest-first, read from the end in blocks (no full-file parse)."""
+    with path.open("rb") as fh:
+        fh.seek(0, 2)
+        pos, buf, read = fh.tell(), b"", 0
+        while pos > 0 and read < TRANSCRIPT_SCAN_CAP:
+            step = min(1 << 20, pos)
+            pos -= step
+            fh.seek(pos)
+            buf = fh.read(step) + buf
+            read += step
+            lines = buf.split(b"\n")
+            buf = lines[0] if pos > 0 else b""
+            for raw in reversed(lines[1:] if pos > 0 else lines):
+                try:
+                    e = json.loads(raw.decode("utf-8", errors="replace"))
+                except ValueError:
+                    continue
+                if isinstance(e, dict):
+                    yield e
+
+
+def owner_request(transcript_path: str) -> tuple[str, str] | None:
+    """(latest human prompt, my answer right before it) from the host-written transcript."""
+    if not transcript_path:
+        return None
+    p = Path(transcript_path)
+    if not p.is_file():
+        return None
+    prompt, answer = None, []
+    for e in _tail_entries(p):
+        if prompt is None:
+            if _is_human_prompt(e):
+                prompt = _entry_text(e["message"].get("content"))
+                if not prompt.strip():
+                    return None
+            continue
+        if _is_human_prompt(e):
+            break
+        msg = e.get("message")
+        if e.get("type") == "assistant" and not e.get("isSidechain") and isinstance(msg, dict):
+            text = _entry_text(msg.get("content"))
+            if text.strip():
+                answer.append(text)
+                break  # only my last message is what the owner answered
+    return (prompt, "\n".join(answer)) if prompt is not None else None
+
+
+def _is_recursive(verb: str, seg: str) -> bool:
+    """rm -r/-R/-rf/--recursive, Remove-Item -Recurse (any prefix >= -r), del/erase /s, rmdir/rd."""
+    if verb in {"rmdir", "rd"}:
+        return True
+    try:
+        toks = shlex.split(seg, posix=False)[1:]
+    except ValueError:
+        return True
+    for t in toks:
+        t = t.strip("'\"")
+        if verb == "rm" and (t == "--recursive" or (re.fullmatch(r"-[a-zA-Z]{1,4}", t) and "r" in t.lower())):
+            return True
+        if verb in {"remove-item", "ri", "del", "erase"} and (
+                re.fullmatch(r"-r(?:e(?:c(?:u(?:r(?:se?)?)?)?)?)?", t, re.IGNORECASE) or t.lower() == "/s"):
+            return True
+    return False
+
+
+def plain_delete_targets(cmd: str) -> list[tuple[str, bool]] | None:
+    """(target, recursive) for every delete in cmd (ssh unwrapped), or None if any destructive
+    part is something other than a plain file delete (DROP, docker, git, kill, mv...)."""
+    targets: list[tuple[str, bool]] = []
+    if re.search(r"\.claude[\\/]projects[\\/]", cmd, re.IGNORECASE):
+        return None  # never let a command that touches the approval source approve itself
+    if any(delete_targets(x) is not None or any_match(x, DESTRUCTIVE_INTENT) for x in substitutions(cmd)):
+        return None
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        if not seg:
+            continue
+        remote = remote_command(seg)
+        if remote == UNPARSED:
+            return None
+        if remote:
+            sub = plain_delete_targets(remote)
+            if sub is None:
+                return None
+            targets += sub
+            continue
+        seg_targets = delete_targets(seg)
+        if seg_targets is None and hidden_deletes(seg):
+            return None
+        seg_hit = any_match(seg, DESTRUCTIVE_INTENT)
+        if seg_targets is None and not seg_hit:
+            continue
+        if not seg_targets:
+            return None
+        verb = seg.split()[0].lower().rsplit("/", 1)[-1].removesuffix(".exe")
+        recursive = _is_recursive(verb, seg)
+        targets += [(t, recursive) for t in seg_targets]
+    return targets or None
+
+
+def target_hard_limit(target: str) -> str | None:
+    """Why a target may never be deleted on request, or None."""
+    t = _norm(target)
+    if not t or re.search(r"[$%`*?\[\]{}@()]", t):
+        return "glob/variable/expression"
+    if t.startswith("//"):
+        return "UNC/network path"
+    if "/../" in f"/{t}/" or "/./" in f"/{t}/":
+        return "traversal"
+    if re.match(r"^[A-Za-z]{2,}:", t):
+        return "provider"
+    if not (t.startswith("/") or re.match(r"^[A-Za-z]:/", t)):
+        return "relative path (cwd unknown to the owner)"
+    if any(c not in {".", ".."} and (c.endswith((".", " ")) or re.search(r"~\d", c)) for c in t.split("/")):
+        return "ambiguous Windows name (trailing dot/space or 8.3 short name)"
+    wsl = re.match(r"^/mnt/([a-zA-Z])(/.*)?$", t)
+    if PROTECTED.search(t) or (wsl and PROTECTED.search(f"{wsl.group(1)}:{wsl.group(2) or '/'}")):
+        return "protected location"
+    parts = [p for p in re.sub(r"^[A-Za-z]:", "", t).split("/") if p]
+    low = [p.lower() for p in parts]
+    if len(parts) < 3:
+        return "root-level path"
+    if low[0] in {"home", "users"} and len(parts) < 4:
+        return "home folder or its direct child"
+    return None
+
+
+def _named(text: str, needle: str) -> bool:
+    """needle appears in text as a whole token (not as part of a longer name or path)."""
+    return re.search(r"(?<![\w.\-/~:])" + re.escape(needle) + r"(?![\w.\-/])", text) is not None
+
+
+def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
+    req = owner_request(event.get("transcript_path") or "")
+    if not req:
+        return False, "no human prompt in the transcript"
+    prompt, answer = req
+    if CONFIRM_ONLY.fullmatch(prompt):
+        if not DELETE_MENTION.search(answer):
+            return False, "a bare 'yes' to an answer that proposed no deletion"
+        named_in, from_phrase = answer, False
+    elif NOT_A_GO.search(prompt):
+        return False, "the request negates, hesitates or asks a question"
+    elif DELETE_INTENT.search(prompt):
+        named_in, from_phrase = prompt, bool(FROM_PHRASE.search(prompt))
+    else:
+        return False, "the latest request does not ask to delete"
+    targets = plain_delete_targets(cmd)
+    if not targets:
+        return False, "not a plain file delete"
+    text = named_in.replace("\\", "/")
+    for t, recursive in targets:
+        why = target_hard_limit(t)
+        if why:
+            return False, f"{t}: hard limit ({why})"
+        full = _norm(t).rstrip("/")
+        hay = text
+        if re.match(r"^[A-Za-z]:/", full):  # Windows: case-insensitive filesystem
+            full, hay = full.lower(), text.lower()
+        base = full.rsplit("/", 1)[-1]
+        if _named(hay, full):
+            continue
+        if recursive or from_phrase or "." not in base.strip("."):
+            return False, f"{t}: name the full path (recursive delete, directory or 'from' phrasing)"
+        if not _named(hay, base):
+            return False, f"{t}: '{base}' is not named in the request"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "targets": [t for t, _ in targets],
+                                 "request": prompt[:300], "command": cmd[:500]}, ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, ", ".join(t for t, _ in targets)
 
 
 def main() -> None:
@@ -452,7 +843,12 @@ def main() -> None:
             log("INFO", "require_human_confirmation", "safe-target", hit, cmd[:200])
         allow()
 
-    log("BLOCK", "require_human_confirmation", "approval-interface-unavailable", hit, cmd[:300])
+    ok, why = approved_by_owner(cmd, event)
+    if ok:
+        log("INFO", "require_human_confirmation", "owner-requested-delete", hit or "", why)
+        allow()
+
+    log("BLOCK", "require_human_confirmation", "no-owner-request", hit, f"{why} | {cmd[:250]}")
     # A leftover git lock is the one deletion an agent can settle itself: the
     # tool below proves "no owner" (age + no older git process) before unlinking.
     lock_hint = ""
@@ -466,12 +862,13 @@ def main() -> None:
         lock_hint +
         "Эта операция destructive и заблокирована.\n\n"
         f"Detected pattern: /{hit}/\n\n"
-        "Текущий hook API не передаёт проверяемую запись одобрения от user. "
-        "Маркер в команде, фраза, timestamp, env или файл, который может создать agent, "
-        "не являются доказательством human approval.\n\n"
-        "Нужен host-issued одноразовый approval record, привязанный к действию, target, "
-        "session и expiry. Пока такого интерфейса нет, destructive operation не выполняется.\n\n"
-        "Исключения: только whitelisted routine build/cache/temp targets."
+        f"Почему не пропущено по просьбе владельца: {why}.\n\n"
+        "Удаление файла разрешается, только если ПОСЛЕДНЕЕ сообщение владельца (из журнала "
+        "сессии, не из команды) просит удалить и называет каждый файл по имени, либо отвечает "
+        "«да/удаляй» на мой ответ, где эти файлы перечислены. Попроси владельца назвать файлы. "
+        "Маркеры в команде, env и файлы агента не являются одобрением.\n\n"
+        "Без просьбы проходят только routine build/cache/temp targets; DROP/docker/git/kill "
+        "и корни дисков/домашние папки/маски не проходят никогда."
     )
 
 
@@ -537,8 +934,128 @@ def self_test() -> int:
         "tailscale ssh ws@workshop-vm docker rm production-bench",
         "tailscale ssh ws@workshop-vm docker rm --force qwen3-8b-bench",
     ]
+    # ssh-wrapped deletes are judged by their remote command (review 2026-10-06)
+    allow_cases += ["ssh gpu-host 'rm -rf /tmp/x'", "timeout 60 ssh -o ConnectTimeout=5 host \"ls -la /srv\"",
+                    "git config core.sshCommand ssh", "rsync -e ssh /srv/a host:/srv/b", "which ssh",
+                    "echo 'a; rm /srv/data/x'", "echo \"$(date)\"", "echo don't use ssh here",
+                    "git rm --cached notes.txt", "ssh host systemctl status nginx"]
+    block_cases += ["ssh gpu-host 'rm /srv/comfy/models/flux1-dev.sft'",
+                    "timeout 60 ssh -o ConnectTimeout=5 host 'ls; rm -f /srv/data/db.sqlite'",
+                    "tailscale ssh ws@workshop-vm rm -rf /opt/app",
+                    "ssh -B eth0 myhost rm /srv/data/db.sqlite",          # review: missing -B
+                    "ssh -Tp 2222 host rm /srv/data/db.sqlite",           # review: combined flags
+                    "echo /srv/a/b/x | xargs rm",                         # review: stdin targets
+                    "bash -c 'rm /srv/data/db.sqlite'",                   # review: inner shell
+                    "ssh h bash -c 'rm /srv/data/db.sqlite'",
+                    "powershell -Command \"Remove-Item C:/data/x.txt\"",
+                    "pwsh -EncodedCommand SQBFAFgA",
+                    'echo \\"a; rm /srv/data/db.sqlite; echo b\\"',   # round 2: escaped quotes
+                    "echo `rm /srv/data/db.sqlite`",                     # round 2: substitutions
+                    "echo $(rm /srv/data/db.sqlite)",
+                    # round 3: hidden behind grouping / wrappers / escapes / unknown verbs
+                    "{ rm /srv/prod/db.sqlite; }", "( rm /srv/prod/db.sqlite )",
+                    "nohup rm /srv/prod/db.sqlite", "time rm /srv/prod/db.sqlite",
+                    "\\rm /srv/prod/db.sqlite", "r''m /srv/prod/db.sqlite",
+                    "if true; then rm /srv/prod/db.sqlite; fi",
+                    "& { del C:\\srv\\prod\\db.sqlite }", "r`m C:\\srv\\prod\\db.sqlite",
+                    "1 | % { ri C:\\srv\\prod\\db.sqlite }",
+                    "unlink /srv/prod/db.sqlite", "find /srv/prod -name db.sqlite -exec rm {} +",
+                    "[IO.File]::Delete('C:\\srv\\prod\\db.sqlite')",
+                    "rm -rf D:/tmp/x#/../../Users/someone/Documents",
+                    "Invoke-Command -ScriptBlock { del C:/srv/prod/db.sqlite }",  # only the hidden scan sees it
+                    "Get-ChildItem C:/srv | ForEach-Object -Process { del C:/srv/prod/db.sqlite }"]
     fails = [f"should allow: {c}" for c in allow_cases if not decide(c)[0]]
     fails += [f"should block: {c}" for c in block_cases if decide(c)[0]]
+
+    # owner-requested deletes: host transcript fixtures (approval + negative controls)
+    global APPROVAL_LOG
+    saved_log = APPROVAL_LOG
+    work = Path(tempfile.mkdtemp(prefix="hcg-selftest-"))
+    APPROVAL_LOG = work / "approvals.jsonl"
+
+    def transcript(prompt: str, answer: str = "", meta_after: str = "", earlier: str = "") -> dict:
+        rows = []
+        if earlier:
+            rows.append({"type": "assistant", "message": {"content": [{"type": "text", "text": earlier}]}})
+        if answer:
+            rows.append({"type": "assistant", "message": {"content": [{"type": "text", "text": answer}]}})
+        rows.append({"type": "user", "origin": {"kind": "human"}, "message": {"content": prompt}})
+        if meta_after:
+            rows.append({"type": "user", "isMeta": True, "message": {"content": meta_after}})
+            rows.append({"type": "user", "origin": {"kind": "task-notification"}, "message": {"content": meta_after}})
+        p = work / f"t{len(list(work.iterdir()))}.jsonl"
+        p.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+        return {"transcript_path": str(p), "session_id": "selftest"}
+
+    sft = "ssh gpu-host 'rm /srv/comfy/models/checkpoints/FLUX1/flux1-dev.sft'"
+    approve = [
+        ("named in prompt", sft, transcript("удали flux1-dev.sft на сервере")),
+        ("confirm my listed proposal", sft, transcript("да, удаляй", "Удалю flux1-dev.sft (23.8 GB) - подтверди")),
+        ("local file named", "rm C:/work/proj/old/model_a.safetensors", transcript("delete model_a.safetensors please")),
+        ("full dir path named for recursive", "rm -rf /srv/comfy/models/old_loras",
+         transcript("удали папку /srv/comfy/models/old_loras")),
+        ("bash -c over ssh named", "ssh h \"bash -c 'rm /srv/a/b/x.bin'\"", transcript("удали x.bin")),
+        ("Remove-Item named", 'Remove-Item -LiteralPath "D:\\models\\loras\\bad_lora.safetensors"', transcript("убери bad_lora.safetensors")),
+    ]
+    refuse = [
+        ("no transcript", sft, {}),
+        ("negated", sft, transcript("не удаляй flux1-dev.sft")),
+        ("not a delete request", sft, transcript("посмотри flux1-dev.sft")),
+        ("target not named", sft, transcript("удали большие файлы")),
+        ("confirm without my proposal", sft, transcript("да", "Скачала модели.")),
+        ("past tense is a report, not a request", sft,
+         transcript("вроде удалила и поправь хук", "Удалить flux1-dev.sft можно командой rm ...")),
+        ("meta/notification carry the words, human prompt does not",
+         sft, transcript("посмотри статус", meta_after="удали flux1-dev.sft")),
+        ("root-level path", "rm -rf /home/someuser", transcript("удали someuser")),
+        ("drive-level path", "Remove-Item -Recurse C:\\Users", transcript("удали Users")),
+        ("glob", "ssh h 'rm /srv/a/b/*.sft'", transcript("удали *.sft")),
+        ("variable", "ssh h 'F=/srv/a/b/x.sft; rm $F'", transcript("удали x.sft")),
+        (".git", "rm -rf C:/work/repo/.git/objects", transcript("удали objects")),
+        ("non-file destructive", "psql -c 'DROP TABLE users'", transcript("удали таблицу users")),
+        ("docker", "docker rm production-db", transcript("удали production-db")),
+        ("one of two unnamed", "rm C:/w/p/a1.bin C:/w/p/b2.bin", transcript("удали a1.bin")),
+        ("touches transcript", "rm C:/Users/x/.claude/projects/p/s.jsonl", transcript("удали s.jsonl")),
+        # review 2026-10-06 (REJECT) probes
+        ("parent dir by substring", "rm -rf /srv/a/models", transcript("удали models/old.bin")),
+        ("short basename inside a word", "rm -rf /srv/app/dev", transcript("удали flux1-dev.sft")),
+        ("relative after cd", "ssh h 'cd / && rm -rf srv'", transcript("удали srv_backup.tar")),
+        ("relative bare", "rm -rf src", transcript("удали src_old.zip")),
+        ("home child", "Remove-Item -Recurse -Force C:/Users/someone/Desktop", transcript("удали ярлык с desktop")),
+        ("the guard itself", "rm C:/Users/x/.claude/claude-code-config/hooks/human-confirmation-guard.py",
+         transcript("убери лишнее из human-confirmation-guard.py")),
+        ("UNC", "Remove-Item \\\\nas\\share\\data\\data.csv", transcript("удали data.csv")),
+        ("edit phrasing", "rm C:/w/proj/src/train.py", transcript("remove the debug print from train.py")),
+        ("question", "rm /srv/a/b/flux.sft", transcript("why did you delete flux.sft?")),
+        ("then no", "rm /srv/a/b/flux.sft", transcript("удалить flux.sft? нет, оставь")),
+        ("answer widens scope", "rm /srv/data/prod/db.sqlite",
+         transcript("удали старые логи", "Удалю логи и заодно db.sqlite")),
+        ("ok-but-wait", "rm /srv/data/prod/db.sqlite", transcript("ок, посмотри сначала", "Могу удалить db.sqlite")),
+        ("dir without full path", "rm -rf /srv/a/models/", transcript("удали models")),
+        ("xargs", "echo /srv/a/b/xyz.bin | xargs rm", transcript("удали xyz.bin")),
+        ("bash -c over ssh unnamed", "ssh h bash -c 'rm /srv/a/b/x.bin'", transcript("удали y.bin")),
+        # isolated controls: each protection must refuse on its own
+        ("basename is only a suffix of the named file", "rm /srv/a/b/dev.sft", transcript("удали flux1-dev.sft")),
+        ("relative file path", "rm data/cache/run1/old.bin", transcript("удали old.bin")),
+        ("bare yes covers only my last message", "rm /srv/data/prod/db.sqlite",
+         transcript("да", "Удалю /srv/tmp/a/old.bin - подтверди", earlier="Кстати, /srv/data/prod/db.sqlite большой")),
+        ("POSIX name case differs", "rm /srv/a/b/model.bin", transcript("удали Model.bin")),
+        ("hash inside the path", "rm /srv/a/b/x.bin#/../../../../etc/passwd", transcript("удали /srv/a/b/x.bin")),
+        ("trailing-dot alias of .claude", "Remove-Item C:/Users/u/.claude./settings.json", transcript("удали settings.json")),
+        ("8.3 short name", "rm C:/Users/u/CLAUDE~1/settings.json", transcript("удали settings.json")),
+        ("WSL alias of Windows", "rm /mnt/c/Windows/System32/drivers/etc/hosts.bin", transcript("удали hosts.bin")),
+        ("AppData Roaming", "rm C:/Users/u/AppData/Roaming/app/state.db", transcript("удали state.db")),
+    ]
+    for name, cmd, ev in approve:
+        if not approved_by_owner(cmd, ev)[0]:
+            fails.append(f"owner request should allow ({name}): {approved_by_owner(cmd, ev)[1]}")
+    for name, cmd, ev in refuse:
+        if approved_by_owner(cmd, ev)[0]:
+            fails.append(f"owner request should refuse ({name})")
+    if not APPROVAL_LOG.exists() or len(APPROVAL_LOG.read_text(encoding="utf-8").splitlines()) != len(approve):
+        fails.append("every owner-approved delete must leave exactly one audit record")
+    APPROVAL_LOG = saved_log
+    print(f"SCANNED owner-requests: approve={len(approve)} refuse={len(refuse)}")
     for f in fails:
         print("SELF-TEST FAIL:", f)
     print(f"SCANNED: allow={len(allow_cases)} block={len(block_cases)}")
@@ -549,4 +1066,9 @@ def self_test() -> int:
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         sys.exit(self_test())
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # fail closed: a crashed guard must not let a delete run
+        block(f"human-confirmation-guard internal error, failing closed: {exc!r}")
