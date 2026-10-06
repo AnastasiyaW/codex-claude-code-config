@@ -1041,10 +1041,10 @@ def self_test() -> int:
          transcript("да", "Удалю /srv/tmp/a/old.bin - подтверди", earlier="Кстати, /srv/data/prod/db.sqlite большой")),
         ("POSIX name case differs", "rm /srv/a/b/model.bin", transcript("удали Model.bin")),
         ("hash inside the path", "rm /srv/a/b/x.bin#/../../../../etc/passwd", transcript("удали /srv/a/b/x.bin")),
-        ("trailing-dot alias of .claude", "Remove-Item C:/Users/u/.claude./settings.json", transcript("удали settings.json")),
-        ("8.3 short name", "rm C:/Users/u/CLAUDE~1/settings.json", transcript("удали settings.json")),
+        ("trailing-dot alias of .claude", "Remove-Item C:/Users/someone/.claude./settings.json", transcript("удали settings.json")),
+        ("8.3 short name", "rm C:/Users/someone/CLAUDE~1/settings.json", transcript("удали settings.json")),
         ("WSL alias of Windows", "rm /mnt/c/Windows/System32/drivers/etc/hosts.bin", transcript("удали hosts.bin")),
-        ("AppData Roaming", "rm C:/Users/u/AppData/Roaming/app/state.db", transcript("удали state.db")),
+        ("AppData Roaming", "rm C:/Users/someone/AppData/Roaming/app/state.db", transcript("удали state.db")),
     ]
     for name, cmd, ev in approve:
         if not approved_by_owner(cmd, ev)[0]:
