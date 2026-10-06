@@ -292,14 +292,26 @@ COMMAND_PREFIXES = {"sudo", "command", "&", "{", "(", "then", "do", "else", "tim
 # Remove-Item parameters without a value; any other -Param consumes the next token.
 PS_SWITCHES = {"recurse", "r", "force", "whatif", "verbose", "confirm"}
 PS_PATH_PARAMS = {"path", "literalpath", "lp", "pspath"}
-# Owner approval 2026-10-02 is bound to this remote and this closed set only.
+# Owner approval 2026-10-02 is bound to one remote and a closed set of containers only.
 # Do not turn names such as `production-bench` into a blanket deletion bypass.
-WORKSHOP_VM_SSH_TARGET = "ws@workshop-vm"
-WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS = frozenset({
-    "qwen3-8b-bench",
-    "qwen3-8b-bench2",
-    "qwen3vl-4b-bench",
-})
+# The host and container names are private infrastructure, so they live in a local file
+# outside this public repository: {"ephemeral_docker_ssh_target": "user@host",
+# "ephemeral_docker_containers": ["name", ...]}. Missing/invalid file -> no exception at all.
+LOCAL_CONFIG = Path.home() / ".claude" / "local" / "human-confirmation-guard.json"
+
+
+def _local_config() -> dict:
+    try:
+        cfg = json.loads(LOCAL_CONFIG.read_text(encoding="utf-8"))
+        return cfg if isinstance(cfg, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_CFG = _local_config()
+WORKSHOP_VM_SSH_TARGET = str(_CFG.get("ephemeral_docker_ssh_target") or "")
+WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS = frozenset(
+    c for c in (_CFG.get("ephemeral_docker_containers") or []) if isinstance(c, str) and c)
 
 
 def _norm(target: str) -> str:
@@ -401,7 +413,7 @@ def is_ephemeral_docker_rm(segment: str) -> bool:
     except ValueError:
         return False
     if (len(toks) >= 6 and toks[0:2] == ["tailscale", "ssh"]
-            and toks[2] == WORKSHOP_VM_SSH_TARGET
+            and WORKSHOP_VM_SSH_TARGET and toks[2] == WORKSHOP_VM_SSH_TARGET
             and toks[3:5] == ["docker", "rm"]):
         targets = toks[5:]
     else:
@@ -876,6 +888,9 @@ def self_test() -> int:
     """Negative controls: every must-block case blocks, every temp/build delete passes."""
     import tempfile
     HOME_FIX = "C:/" + "Users" + "/someone"  # assembled: the public-repo scanner flags literal home paths
+    global WORKSHOP_VM_SSH_TARGET, WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS
+    WORKSHOP_VM_SSH_TARGET = "ws@bench-vm"
+    WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS = frozenset({"bench-a", "bench-a2", "bench-b"})
     tmp = tempfile.gettempdir()
     repo_root = Path(__file__).resolve().parents[1]
     allow_cases = [
@@ -891,7 +906,7 @@ def self_test() -> int:
         "echo 'a | rm -rf /data'",
         "cat > s.sh <<'EOF'\nrm -rf /workspace/sample/project\nEOF",   # heredoc body is not executed
         "ls -la",
-        "tailscale ssh ws@workshop-vm docker rm qwen3-8b-bench qwen3-8b-bench2 qwen3vl-4b-bench",
+        "tailscale ssh ws@bench-vm docker rm bench-a bench-a2 bench-b",
     ]
     block_cases = [
         f"rm -rf {tmp}",                                   # the temp root itself
@@ -928,12 +943,12 @@ def self_test() -> int:
         "rm -rf /workspace/sample/tmpabcdefgh/important",    # name above the target
         "rm -rf C:/work/tmpservers1",                        # mkdtemp-like name outside a repo root
         "git commit -m 'ok'; del C:\\data\\x",               # real del after a quoted message
-        "docker rm -f qwen3-8b-bench",
+        "docker rm -f bench-a",
         "docker rm production-db",
-        "docker rm qwen3-8b-bench",
-        "tailscale ssh ws@production-vm docker rm qwen3-8b-bench",
-        "tailscale ssh ws@workshop-vm docker rm production-bench",
-        "tailscale ssh ws@workshop-vm docker rm --force qwen3-8b-bench",
+        "docker rm bench-a",
+        "tailscale ssh ws@production-vm docker rm bench-a",
+        "tailscale ssh ws@bench-vm docker rm production-bench",
+        "tailscale ssh ws@bench-vm docker rm --force bench-a",
     ]
     # ssh-wrapped deletes are judged by their remote command (review 2026-10-06)
     allow_cases += ["ssh gpu-host 'rm -rf /tmp/x'", "timeout 60 ssh -o ConnectTimeout=5 host \"ls -la /srv\"",
@@ -942,7 +957,7 @@ def self_test() -> int:
                     "git rm --cached notes.txt", "ssh host systemctl status nginx"]
     block_cases += ["ssh gpu-host 'rm /srv/comfy/models/flux1-dev.sft'",
                     "timeout 60 ssh -o ConnectTimeout=5 host 'ls; rm -f /srv/data/db.sqlite'",
-                    "tailscale ssh ws@workshop-vm rm -rf /opt/app",
+                    "tailscale ssh ws@bench-vm rm -rf /opt/app",
                     "ssh -B eth0 myhost rm /srv/data/db.sqlite",          # review: missing -B
                     "ssh -Tp 2222 host rm /srv/data/db.sqlite",           # review: combined flags
                     "echo /srv/a/b/x | xargs rm",                         # review: stdin targets
