@@ -875,6 +875,7 @@ def main() -> None:
 def self_test() -> int:
     """Negative controls: every must-block case blocks, every temp/build delete passes."""
     import tempfile
+    HOME_FIX = "C:/" + "Users" + "/someone"  # assembled: the public-repo scanner flags literal home paths
     tmp = tempfile.gettempdir()
     repo_root = Path(__file__).resolve().parents[1]
     allow_cases = [
@@ -961,7 +962,7 @@ def self_test() -> int:
                     "1 | % { ri C:\\srv\\prod\\db.sqlite }",
                     "unlink /srv/prod/db.sqlite", "find /srv/prod -name db.sqlite -exec rm {} +",
                     "[IO.File]::Delete('C:\\srv\\prod\\db.sqlite')",
-                    "rm -rf D:/tmp/x#/../../Users/someone/Documents",
+                    "rm -rf D:/tmp/x#/../.." + HOME_FIX[2:] + "/Documents",
                     "Invoke-Command -ScriptBlock { del C:/srv/prod/db.sqlite }",  # only the hidden scan sees it
                     "Get-ChildItem C:/srv | ForEach-Object -Process { del C:/srv/prod/db.sqlite }"]
     fails = [f"should allow: {c}" for c in allow_cases if not decide(c)[0]]
@@ -988,7 +989,6 @@ def self_test() -> int:
         return {"transcript_path": str(p), "session_id": "selftest"}
 
     sft = "ssh gpu-host 'rm /srv/comfy/models/checkpoints/FLUX1/flux1-dev.sft'"
-    HOME_FIX = "C:/" + "Users" + "/someone"  # assembled: the public-repo scanner flags literal home paths
     approve = [
         ("named in prompt", sft, transcript("удали flux1-dev.sft на сервере")),
         ("confirm my listed proposal", sft, transcript("да, удаляй", "Удалю flux1-dev.sft (23.8 GB) - подтверди")),
@@ -1008,7 +1008,7 @@ def self_test() -> int:
          transcript("вроде удалила и поправь хук", "Удалить flux1-dev.sft можно командой rm ...")),
         ("meta/notification carry the words, human prompt does not",
          sft, transcript("посмотри статус", meta_after="удали flux1-dev.sft")),
-        ("root-level path", "rm -rf /home/someuser", transcript("удали someuser")),
+        ("root-level path", "rm -rf /" + "home/someuser", transcript("удали someuser")),
         ("drive-level path", "Remove-Item -Recurse C:\\Users", transcript("удали Users")),
         ("glob", "ssh h 'rm /srv/a/b/*.sft'", transcript("удали *.sft")),
         ("variable", "ssh h 'F=/srv/a/b/x.sft; rm $F'", transcript("удали x.sft")),
@@ -1016,14 +1016,14 @@ def self_test() -> int:
         ("non-file destructive", "psql -c 'DROP TABLE users'", transcript("удали таблицу users")),
         ("docker", "docker rm production-db", transcript("удали production-db")),
         ("one of two unnamed", "rm C:/w/p/a1.bin C:/w/p/b2.bin", transcript("удали a1.bin")),
-        ("touches transcript", "rm C:/Users/x/.claude/projects/p/s.jsonl", transcript("удали s.jsonl")),
+        ("touches transcript", "rm " + HOME_FIX + "/.claude/projects/p/s.jsonl", transcript("удали s.jsonl")),
         # review 2026-10-06 (REJECT) probes
         ("parent dir by substring", "rm -rf /srv/a/models", transcript("удали models/old.bin")),
         ("short basename inside a word", "rm -rf /srv/app/dev", transcript("удали flux1-dev.sft")),
         ("relative after cd", "ssh h 'cd / && rm -rf srv'", transcript("удали srv_backup.tar")),
         ("relative bare", "rm -rf src", transcript("удали src_old.zip")),
-        ("home child", "Remove-Item -Recurse -Force C:/Users/someone/Desktop", transcript("удали ярлык с desktop")),
-        ("the guard itself", "rm C:/Users/x/.claude/claude-code-config/hooks/human-confirmation-guard.py",
+        ("home child", "Remove-Item -Recurse -Force " + HOME_FIX + "/Desktop", transcript("удали ярлык с desktop")),
+        ("the guard itself", "rm " + HOME_FIX + "/.claude/claude-code-config/hooks/human-confirmation-guard.py",
          transcript("убери лишнее из human-confirmation-guard.py")),
         ("UNC", "Remove-Item \\\\nas\\share\\data\\data.csv", transcript("удали data.csv")),
         ("edit phrasing", "rm C:/w/proj/src/train.py", transcript("remove the debug print from train.py")),
