@@ -638,7 +638,8 @@ CONFIRM_ONLY = re.compile(
 APPROVAL_LOG = Path.home() / ".claude" / "logs" / "deletion-approvals.jsonl"
 TRANSCRIPT_SCAN_CAP = 64 * 1024 * 1024
 PROTECTED = re.compile(
-    r"(?:^|/)\.(?:claude|codex|ssh|secrets|gnupg|git|agents|config/gh)(?:/|$)|"
+    # .claude is judged separately (_claude_limit): the home one is protected, a project's is not
+    r"(?:^|/)\.(?:codex|ssh|secrets|gnupg|git|agents|config/gh)(?:/|$)|"
     r"^(?:/etc|/usr|/bin|/sbin|/lib\w*|/boot|/sys|/proc|/dev|/var/lib|/srv/?$)(?:/|$)|"
     r"^[a-z]:/(?:windows|program files[^/]*|programdata|\.secrets|\$recycle\.bin)(?:/|$)|"
     r"^[a-z]:/users/[^/]+/appdata/(?:roaming|locallow)(?:/|$)|^/users/[^/]+/library(?:/|$)|"
@@ -762,6 +763,21 @@ def plain_delete_targets(cmd: str) -> list[tuple[str, bool]] | None:
     return targets or None
 
 
+def _claude_limit(path: str) -> str | None:
+    """Owner decision 2026-10-07: a project's .claude (handoffs, roster, worktrees) may be
+    cleaned on request. The home one (rules, hooks, transcripts, settings) stays protected,
+    and so does a project's whole .claude folder -- only things inside it."""
+    low = [p.lower() for p in re.sub(r"^[A-Za-z]:", "", path).split("/") if p]
+    for i, p in enumerate(low):
+        if p != ".claude":
+            continue
+        if (i == 2 and low[0] in {"users", "home"}) or (i == 1 and low[0] == "root"):
+            return "protected location (home .claude)"
+        if i == len(low) - 1:
+            return "protected location (whole .claude folder)"
+    return None
+
+
 def target_hard_limit(target: str) -> str | None:
     """Why a target may never be deleted on request, or None."""
     t = _norm(target)
@@ -780,6 +796,9 @@ def target_hard_limit(target: str) -> str | None:
     wsl = re.match(r"^/mnt/([a-zA-Z])(/.*)?$", t)
     if PROTECTED.search(t) or (wsl and PROTECTED.search(f"{wsl.group(1)}:{wsl.group(2) or '/'}")):
         return "protected location"
+    claude = _claude_limit(t) or (wsl and _claude_limit(f"{wsl.group(1)}:{wsl.group(2) or '/'}"))
+    if claude:
+        return claude
     parts = [p for p in re.sub(r"^[A-Za-z]:", "", t).split("/") if p]
     low = [p.lower() for p in parts]
     if len(parts) < 3:
@@ -1011,6 +1030,8 @@ def self_test() -> int:
         ("full dir path named for recursive", "rm -rf /srv/comfy/models/old_loras",
          transcript("удали папку /srv/comfy/models/old_loras")),
         ("bash -c over ssh named", "ssh h \"bash -c 'rm /srv/a/b/x.bin'\"", transcript("удали x.bin")),
+        ("inside a project .claude", "Remove-Item -LiteralPath 'C:/work/proj/.claude/handoffs/roster' -Recurse -Force",
+         transcript("да, удаляй C:/work/proj/.claude/handoffs/roster")),
         ("Remove-Item named", 'Remove-Item -LiteralPath "D:\\models\\loras\\bad_lora.safetensors"', transcript("убери bad_lora.safetensors")),
     ]
     refuse = [
@@ -1061,6 +1082,12 @@ def self_test() -> int:
         ("8.3 short name", "rm " + HOME_FIX + "/CLAUDE~1/settings.json", transcript("удали settings.json")),
         ("WSL alias of Windows", "rm /mnt/c/Windows/System32/drivers/etc/hosts.bin", transcript("удали hosts.bin")),
         ("AppData Roaming", "rm " + HOME_FIX + "/AppData/Roaming/app/state.db", transcript("удали state.db")),
+        ("home .claude stays protected", "rm -rf " + HOME_FIX + "/.claude/handoffs/roster",
+         transcript("удали " + HOME_FIX + "/.claude/handoffs/roster")),
+        ("home .claude via WSL", "rm -rf /mnt/c/Users/someone/.claude/rules/x",
+         transcript("удали /mnt/c/Users/someone/.claude/rules/x")),
+        ("whole project .claude", "rm -rf C:/work/proj/.claude", transcript("удали C:/work/proj/.claude")),
+        ("linux root home .claude", "rm -rf /root/.claude/hooks/h", transcript("удали /root/.claude/hooks/h")),
     ]
     for name, cmd, ev in approve:
         if not approved_by_owner(cmd, ev)[0]:
