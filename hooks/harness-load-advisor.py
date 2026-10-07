@@ -58,7 +58,10 @@ SIGNALS: list[tuple[str, list[str]]] = [
             r"\b(too (strict|restrictive|much|heavy)|overkill|over[- ]engineer\w*|"
             r"blocks? (the )?(staging|smoke)|false positive|false-positive)\b",
             r"\b(слишком (строг\w*|жестк\w*|зажат\w*|много|тяжел\w*)|"
-            r"перегруж\w*|избыточн\w*|ложн\w* срабатыван\w*|блокир\w* smoke)\b",
+            # bare "перегруж" is not here: it also describes a slow computer (2026-10-07
+            # false positive); harness overload is caught by declared-overload, which
+            # requires a harness/test-system subject in the same sentence.
+            r"избыточн\w*|ложн\w* срабатыван\w*|блокир\w* smoke)\b",
         ],
     ),
 ]

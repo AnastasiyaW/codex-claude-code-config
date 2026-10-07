@@ -140,6 +140,24 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
                 payload, output = run_hook(Path(raw), text)
                 self.assertEqual(payload and payload.get("decision"), "block", output)
 
+    def test_machine_load_is_not_harness_overload(self) -> None:
+        # 2026-10-07 false positive: a report that the computer was slow ("перегруженная
+        # машина", app timeouts) matched a bare "перегруж" in explicit-feedback.
+        with tempfile.TemporaryDirectory(prefix="harness-machine-") as raw:
+            root = Path(raw)
+            payload, output = run_hook(
+                root,
+                "Простаивающие окна на перегруженной машине стартуют дольше минуты; "
+                "команды не укладывались в 120 секунд.",
+            )
+            self.assertIsNone(payload, output)
+            self.assertFalse((root / "feedback" / "events.jsonl").exists())
+
+    def test_harness_overload_word_still_blocks(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="harness-overload-") as raw:
+            payload, output = run_hook(Path(raw), "Система тестов перегружена и не пускает обычную проверку.")
+            self.assertEqual(payload and payload.get("decision"), "block", output)
+
     def test_yo_spelling_matches_declared_overload(self) -> None:
         # "жёсткий" must meet the same pattern as "жесткий".
         with tempfile.TemporaryDirectory(prefix="harness-yo-") as raw:
