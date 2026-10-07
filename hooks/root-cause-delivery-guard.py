@@ -393,6 +393,12 @@ SYSTEM_NOTIFICATION_MARKER = "[SYSTEM NOTIFICATION - NOT USER INPUT]"
 NOTIFICATION_CLOSE = "</task-notification>"
 _NOTIFICATION_OPEN = re.compile(r"<task-notification>\s*<[A-Za-z]")
 _MARKER_LEAD = re.compile(r"(?:<system-reminder>\s*)?" + re.escape(SYSTEM_NOTIFICATION_MARKER))
+# delivery-guard-pasted-content-intent (2026-10-08): the harness wraps pasted text in
+# <pasted_content id="X"> ... </pasted_content id="X"> with the same id on both tags. That text
+# is data the owner forwarded, not her request: a pasted cloud-agent report that mentioned
+# failures opened a false incident intent and blocked every hub edit. Only a block closed by
+# its own id is removed; an unclosed or mismatched one stays and is classified (fail closed).
+_PASTED_BLOCK = re.compile(r'<pasted_content id="([^"<>]+)">.*?</pasted_content id="\1">', re.DOTALL)
 
 
 def owner_text(prompt: str) -> str:
@@ -401,9 +407,10 @@ def owner_text(prompt: str) -> str:
     A leading runtime notification, bare or behind the harness marker, is
     removed through the last closing tag, so several concatenated notifications
     go together and words written after the last one are still classified.
-    Text without that structure is returned as is.
+    Pasted third-party text (harness <pasted_content id=X> blocks) is removed
+    wherever it appears. Text without that structure is returned as is.
     """
-    text = prompt.lstrip()
+    text = _PASTED_BLOCK.sub("", prompt).lstrip()
     if _MARKER_LEAD.match(text):
         opening = _NOTIFICATION_OPEN.search(text)
     else:
