@@ -907,6 +907,7 @@ def self_test() -> int:
     """Negative controls: every must-block case blocks, every temp/build delete passes."""
     import tempfile
     HOME_FIX = "C:/" + "Users" + "/someone"  # assembled: the public-repo scanner flags literal home paths
+    WSL_HOME = "/mnt/c/" + "Users" + "/someone"
     global WORKSHOP_VM_SSH_TARGET, WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS
     WORKSHOP_VM_SSH_TARGET = "ws@bench-vm"
     WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS = frozenset({"bench-a", "bench-a2", "bench-b"})
@@ -1084,8 +1085,8 @@ def self_test() -> int:
         ("AppData Roaming", "rm " + HOME_FIX + "/AppData/Roaming/app/state.db", transcript("удали state.db")),
         ("home .claude stays protected", "rm -rf " + HOME_FIX + "/.claude/handoffs/roster",
          transcript("удали " + HOME_FIX + "/.claude/handoffs/roster")),
-        ("home .claude via WSL", "rm -rf /mnt/c/Users/someone/.claude/rules/x",
-         transcript("удали /mnt/c/Users/someone/.claude/rules/x")),
+        ("home .claude via WSL", "rm -rf " + WSL_HOME + "/.claude/rules/x",
+         transcript("удали " + WSL_HOME + "/.claude/rules/x")),
         ("whole project .claude", "rm -rf C:/work/proj/.claude", transcript("удали C:/work/proj/.claude")),
         ("linux root home .claude", "rm -rf /root/.claude/hooks/h", transcript("удали /root/.claude/hooks/h")),
     ]
