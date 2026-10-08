@@ -255,20 +255,25 @@ def group_projects(agents: list[dict]) -> dict[str, list[dict]]:
 
 
 def assign_numbers(sessions: list[dict], prev_path: Path, renumber: bool) -> None:
-    """Номер агента сохраняется между пересборками; новым -- наименьший свободный,
-    самым свежим по активности -- меньшие (сегодняшние агенты получают 1, 2, 3 …)."""
-    prev = {}
-    if prev_path.exists() and not renumber:
-        try:
-            prev = {a["sessionId"]: a["n"] for a in json.loads(prev_path.read_text(encoding="utf-8"))["agents"]}
-        except (OSError, json.JSONDecodeError, KeyError, TypeError):
-            prev = {}
-    used = set()
+    """Номер агента сохраняется навсегда: реестр номеров (numbers.json) помнит и агентов,
+    выпавших из окна сборки, и их номер новому чату не отдаётся. Иначе «подмени агента 1»
+    указывает на другой чат (2026-10-08: сборка за сегодня отдала 1 «Письмам в Викунья»,
+    и подмена агента 1 ложно встала в чужой проект). Новым -- наименьший никогда не выданный."""
+    reg_path = prev_path.with_name("numbers.json")
+    prev: dict[str, int] = {}
+    if not renumber:
+        for p, pick in ((prev_path, lambda d: {a["sessionId"]: a["n"] for a in d["agents"]}),
+                        (reg_path, lambda d: d)):
+            try:
+                prev.update({str(k): int(v) for k, v in pick(json.loads(p.read_text(encoding="utf-8"))).items()})
+            except FileNotFoundError:
+                pass
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as e:
+                print(f"{p.name} не прочитан, номера могут сдвинуться: {e}", file=sys.stderr)
+    used = set(prev.values())
     for s in sessions:
-        n = prev.get(s["sessionId"])
-        if n and n not in used:
-            s["n"] = n
-            used.add(n)
+        if s["sessionId"] in prev:
+            s["n"] = prev[s["sessionId"]]
     nxt = 1
     for s in sorted(sessions, key=lambda s: s["lastActivity"], reverse=True):
         if "n" in s:
@@ -277,6 +282,8 @@ def assign_numbers(sessions: list[dict], prev_path: Path, renumber: bool) -> Non
             nxt += 1
         s["n"] = nxt
         used.add(nxt)
+    prev.update({s["sessionId"]: s["n"] for s in sessions})
+    reg_path.write_text(json.dumps(prev, ensure_ascii=False, indent=0), encoding="utf-8")
 
 
 def agent_block(s: dict) -> list[str]:
