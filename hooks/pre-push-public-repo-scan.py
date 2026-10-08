@@ -467,8 +467,57 @@ def agent_b_claude(diff: str) -> dict | None:
     # This is an inner machine review, not a direct user request.  Its prompt
     # contains imperative security-review instructions, so explicitly prevent
     # the user-task hook from turning it into a durable work order.
+    # The same reviewer under another login when this one is out of quota: the
+    # verdict is still required, only the account changes (see fallback_config_dirs).
+    for config_dir in [None] + fallback_config_dirs():
+        r = _agent_b_call(claude, prompt, config_dir)
+        if r.returncode == 0 or not _QUOTA_RE.search((r.stdout or "") + (r.stderr or "")):
+            break
+        print(f"[pre-push] Agent B: {'main login' if config_dir is None else config_dir} is out of "
+              "quota; trying the next configured login", file=sys.stderr)
+    if r.returncode != 0:
+        # Distinguish "found but errored" (e.g. not logged in) from "not found",
+        # so the failure is legible instead of mislabeled as missing.
+        first = (r.stdout or r.stderr or "").strip().splitlines()
+        hint = first[0] if first else "unknown error"
+        print(f"[pre-push] Agent B: claude CLI found ({claude}) but call failed: {hint}",
+              file=sys.stderr)
+        return None
+    out = r.stdout.strip()
+    # Extract JSON from response
+    m = re.search(r'\{"verdict"\s*:\s*"(SAFE|BLOCK)"\s*,\s*"reason"\s*:\s*"([^"]+)"\}', out)
+    if not m:
+        return None
+    return {"verdict": m.group(1), "reason": m.group(2)}
+
+
+# A usage limit or an empty API balance is an account state, not a verdict.
+_QUOTA_RE = re.compile(r"hit your (weekly|daily|usage) limit|usage limit|Credit balance is too low", re.I)
+
+
+def fallback_config_dirs() -> list[str]:
+    """Extra Claude CLI config dirs (other logins) for Agent B, from the private
+    file ~/.claude/claude-code-private/agent-b-fallback.json: {"config_dirs": [...]}.
+    Missing or unreadable file = no fallback (the scan stays fail-closed)."""
+    path = os.path.join(os.path.expanduser("~"), ".claude", "claude-code-private",
+                        "agent-b-fallback.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            dirs = json.load(fh).get("config_dirs") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [d for d in dirs if isinstance(d, str) and os.path.isdir(d)]
+
+
+def _agent_b_call(claude: str, prompt: str, config_dir: str | None) -> subprocess.CompletedProcess:
+    # This is an inner machine review, not a direct user request.  Its prompt
+    # contains imperative security-review instructions, so explicitly prevent
+    # the user-task hook from turning it into a durable work order.
     environment = os.environ.copy()
     environment["CLAUDE_USER_TASK_CAPTURE"] = "0"
+    if config_dir is not None:
+        environment["CLAUDE_CONFIG_DIR"] = config_dir
+        environment.pop("ANTHROPIC_API_KEY", None)   # the login, not a stray key, answers
     # The public diff is adversarial input.  Run the semantic classifier without
     # this repository's CLAUDE.md, user hooks, plugins, skills, MCP servers, or
     # filesystem context.  Otherwise instructions in the repository and ambient
@@ -477,7 +526,7 @@ def agent_b_claude(diff: str) -> dict | None:
     # cleanup then raised WinError 32 after the verdict and blocked a safe push.
     # The empty folder stays in TEMP; the verdict does not depend on removing it.
     with tempfile.TemporaryDirectory(prefix="public-push-review-", ignore_cleanup_errors=True) as neutral_cwd:
-        r = run(
+        return run(
             [
                 claude,
                 "-p",
@@ -501,20 +550,6 @@ def agent_b_claude(diff: str) -> dict | None:
             env=environment,
             cwd=neutral_cwd,
         )
-    if r.returncode != 0:
-        # Distinguish "found but errored" (e.g. not logged in) from "not found",
-        # so the failure is legible instead of mislabeled as missing.
-        first = (r.stdout or r.stderr or "").strip().splitlines()
-        hint = first[0] if first else "unknown error"
-        print(f"[pre-push] Agent B: claude CLI found ({claude}) but call failed: {hint}",
-              file=sys.stderr)
-        return None
-    out = r.stdout.strip()
-    # Extract JSON from response
-    m = re.search(r'\{"verdict"\s*:\s*"(SAFE|BLOCK)"\s*,\s*"reason"\s*:\s*"([^"]+)"\}', out)
-    if not m:
-        return None
-    return {"verdict": m.group(1), "reason": m.group(2)}
 
 
 # =============================================================================
