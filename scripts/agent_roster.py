@@ -471,8 +471,8 @@ def build(args) -> int:
     by_n = {s["n"]: s for s in sessions}
     for s in sessions:
         orig = by_n.get(s["replaces"]) if s.get("replaces") else None
-        # свой хендоф подмены важнее: «поиск цен» подменял агента 13, а пишет хендоф в
-        # diamant-price-intelligence -- значит, это его проект, а не проект агента 13
+        # свой хендоф подмены важнее: чат-подмена может вести хендоф в другом проекте,
+        # чем исходный агент -- тогда это его проект, а не проект исходного
         if orig and s["cli"][:8] not in marks and not (s["handoffs"] and s["handoffs"][0].parent.name != "handoffs"):
             if not orig["project"]:
                 orig["project"] = f"агент {orig['n']} — {orig['title']}"
