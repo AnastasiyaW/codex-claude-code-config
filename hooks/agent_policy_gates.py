@@ -371,13 +371,68 @@ def _drop_redirections(seg: list[str]) -> list[str]:
     return out
 
 
-def commit_invocations(command: str, cwd: Path) -> list[tuple[Path, bool]]:
+VAR_REF = re.compile(r"\$\{(\w+)\}|\$((?:env:)?\w+)")
+PS_ASSIGN = re.compile(r"^\$(\w+)=(.+)$")
+SH_ASSIGN = re.compile(r"^(\w+)=(.*)$")
+
+
+def _expand(text: str, assigned: dict[str, str | None]) -> str | None:
+    """`$r` / `${r}` replaced by a literal assigned earlier in the same command;
+    None when any reference stays unknown (an env var, a subshell, a loop)."""
+    unknown = False
+
+    def sub(m: re.Match) -> str:
+        nonlocal unknown
+        value = assigned.get(m.group(1) or m.group(2))
+        if value is None:
+            unknown = True
+            return ""
+        return value
+
+    out = VAR_REF.sub(sub, text)
+    return None if unknown else out
+
+
+def _record_assignment(seg: list[str], assigned: dict[str, str | None]) -> bool:
+    """`$r='C:/x'`, `$r = "C:/x"` (PowerShell) or a bare `r=/c/x` (sh) segment."""
+    if len(seg) == 3 and seg[1] == "=" and re.match(r"^\$\w+$", seg[0]):
+        assigned[seg[0][1:]] = _expand(seg[2], assigned)
+        return True
+    if len(seg) == 1 and PS_ASSIGN.match(seg[0]):
+        name, value = PS_ASSIGN.match(seg[0]).groups()
+        assigned[name] = _expand(value, assigned)
+        return True
+    if seg and all(SH_ASSIGN.match(tok) for tok in seg):  # `VAR=x git ...` is an env prefix, not this
+        for tok in seg:
+            name, value = SH_ASSIGN.match(tok).groups()
+            assigned[name] = _expand(value, assigned)
+        return True
+    return False
+
+
+def _step(base: Path | None, raw: str, assigned: dict[str, str | None]) -> Path | None:
+    text = _expand(raw, assigned)
+    if text is None:
+        return None
+    step = windows_path(text)
+    if step.is_absolute():
+        return step
+    return None if base is None else base / step
+
+
+def commit_invocations(command: str, cwd: Path) -> list[tuple[Path | None, bool]]:
     """(target dir, records the working tree?) for every `git ... commit` in the command.
 
     Tokens, not a regex over raw text (review 2026-09-26): quoted text never counts,
     global options are skipped generically, `-C dir` retargets the repo, and
     `-a` / `--all` / `-i` / `-o` / a pathspec mean git records the working tree.
     `--dry-run` records nothing.
+
+    A variable in `-C` / `cd` resolves through an assignment earlier in the same
+    command (2026-10-04: `$r='...claude-code-private'; git -C $r commit` was judged
+    as a relative dir `$r` under the session cwd, so another repo's 38 C++ functions
+    blocked it). A reference that does not resolve gives target None: unknown,
+    never the cwd's repo.
     """
     # posix shlex eats Windows backslashes; a newline separates commands like `;` (review round 2)
     lex = shlex.shlex(command.replace("\\", "/").replace("\r", ""), posix=True,
@@ -397,14 +452,16 @@ def commit_invocations(command: str, cwd: Path) -> list[tuple[Path, bool]]:
             seg.append(tok)
     segments.append(seg)
     found = []
-    here = cwd
+    here: Path | None = cwd
+    assigned: dict[str, str | None] = {}
     for seg in segments:
         seg = _drop_redirections(seg)
+        if _record_assignment(seg, assigned):
+            continue
         while seg and (seg[0] in {"env", "time", "command", "nohup"} or re.match(r"^\w+=", seg[0])):
             seg = seg[1:]
         if seg and seg[0].lower() in {"cd", "set-location", "pushd"} and len(seg) > 1:
-            step = windows_path(seg[1])
-            here = step if step.is_absolute() else here / step
+            here = _step(here, seg[1], assigned)
             continue
         if not seg or Path(seg[0]).name.lower() not in {"git", "git.exe"}:
             continue
@@ -413,8 +470,7 @@ def commit_invocations(command: str, cwd: Path) -> list[tuple[Path, bool]]:
             opt = seg[i].split("=", 1)[0]
             if opt in GIT_GLOBAL_VALUE and "=" not in seg[i]:
                 if opt == "-C" and i + 1 < len(seg):
-                    step = windows_path(seg[i + 1])
-                    target = step if step.is_absolute() else target / step
+                    target = _step(target, seg[i + 1], assigned)
                 i += 2
             else:
                 i += 1
@@ -461,6 +517,12 @@ def commit_gate(command: str, cwd: Path) -> None:
     """
     deadline = time.monotonic() + COMMIT_CHECK_BUDGET
     for target, worktree in commit_invocations(command, cwd):
+        if target is None:
+            log("BLOCK", HOOK, "commit-target-unknown", "unresolved -C/cd target", command[:200])
+            block("Cannot tell which repository this `git commit` targets: its `-C` / `cd` path "
+                  "uses a variable this command does not assign. Write the path literally, or "
+                  "assign it in the same command (`$r='C:/repo'; git -C $r commit ...`), so the "
+                  "right repo's commit checks run; a check on a guessed repo is not a pass.")
         root = repo_root(target)
         policy = load_policy(root)
         checks = (policy or {}).get("commit_checks") or []

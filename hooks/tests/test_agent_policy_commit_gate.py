@@ -101,6 +101,33 @@ def test_commit_parsing_review_cases(tmp_path):
     assert inv("VAR=x git commit -m y") == [(here, False)]
 
 
+def test_variable_target_judges_the_named_repo_not_the_cwd(tmp_path):
+    """2026-10-04: `$r='...'; git -C $r commit` from inside a policy repo ran that
+    repo's checks (38 C++ functions) against a commit made in another repo."""
+    policy_repo = _repo(tmp_path)
+    (policy_repo / "a.txt").write_text("BAD\n")
+    _git(policy_repo, "add", "a.txt")
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    other_ps = str(other).replace("/", "\\")
+    assert not _hook(policy_repo, f"$r='{other_ps}'; git -C $r add x; git -C $r commit -m y")
+    assert not _hook(policy_repo, f'$r = "{other_ps}"\ngit -C "$r" commit -m y')
+    assert not _hook(policy_repo, f"r={other.as_posix()}; cd \"$r\" && git commit -m y")
+    # the same spellings still judge the policy repo when they name it
+    pr = str(policy_repo)
+    assert _hook(other, f"$r='{pr}'; git -C $r commit -m y")
+    assert _hook(other, f"r={policy_repo.as_posix()}; git -C ${{r}} commit -m y")
+
+
+def test_unresolved_target_is_not_guessed(tmp_path):
+    g = _gates()
+    assert g.commit_invocations("git -C $unknown commit -m y", tmp_path) == [(None, False)]
+    assert g.commit_invocations("cd $env:X; git commit -m y", tmp_path) == [(None, False)]
+    repo = _repo(tmp_path)
+    assert _hook(repo, "git -C $unknown commit -m y")  # cannot tell the repo: blocks, not a pass
+
+
 def test_non_commit_commands_are_untouched(tmp_path):
     repo = _repo(tmp_path)
     (repo / "a.txt").write_text("BAD\n")
