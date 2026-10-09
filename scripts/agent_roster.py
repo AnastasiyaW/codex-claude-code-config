@@ -293,6 +293,8 @@ def agent_block(s: dict) -> list[str]:
     lines = [
         f"Агент {s['n']} «{s['title']}»: рабочая папка `{s['cwd']}`, ветка `{tr.get('branch') or '—'}`, "
         f"последняя активность {_fmt(s['lastActivity'])}, окно `{s['sessionId']}`.",
+        # полный путь отдельной строкой: новый чат открывает хендоф по нему, не ищет по папкам
+        f"Хендоф: {s['handoffs'][0]}" if s["handoffs"] else "Хендоф: нет",
         "",
     ]
     since = None
@@ -414,6 +416,7 @@ def write_html(agents: list[dict], path: Path, built: str, max_back: int) -> Non
 <div class="meta">активность {_fmt(s['lastActivity'])} · ветка {html.escape(tr.get('branch') or '—')} · режим {html.escape(s['mode'])}{proj}{' · архив' if s['archived'] else ''}</div>
 <div class="ho">{ho}</div><div class="last">последняя просьба: {html.escape(last)}</div>
 <div class="meta">{' · '.join(links)}</div>
+{f'<div class="meta"><code>{html.escape(str(s["handoffs"][0]))}</code></div>' if s["handoffs"] else ''}
 <button data-k="a{s['n']}">скопировать для нового чата</button></div>""")
     # JSON внутри <script>: экранируем "</", иначе текст хендофа может закрыть тег
     data = json.dumps(prompts, ensure_ascii=False).replace("</", "<\\/")
