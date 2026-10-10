@@ -49,7 +49,9 @@ class HumanConfirmationAuthorityTests(unittest.TestCase):
     def assert_blocked(self, command: str, *, session_id: str) -> None:
         decision, output = invoke(command, session_id=session_id)
         self.assertEqual("block", decision, output)
-        self.assertIn("host-issued", output)
+        # The block reason must say that markers in the command are not approval
+        # (the old "host-issued" wording was replaced when owner requests became the approval source).
+        self.assertIn("Маркеры в команде", output)
 
     def test_forged_phrase_does_not_authorize_same_target(self) -> None:
         self.assert_blocked(

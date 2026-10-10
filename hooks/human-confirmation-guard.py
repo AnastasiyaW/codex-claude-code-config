@@ -63,9 +63,12 @@ approval. CI/CD pipelines should not run inside Claude Code sessions.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import shlex
+import stat
 import sys
 from pathlib import Path
 
@@ -87,6 +90,9 @@ from safety_common import (  # noqa: E402
 # =============================================================================
 DESTRUCTIVE_INTENT = [
     # Filesystem
+    # owner-approved list delete (approved_by_owner checks the list); a lone --show only reads it
+    # delete_from_list.py is judged in decide() (LIST_MENTION): any mention is a delete unless
+    # it is a strict read-only --show call or a one-line git command (review round 9).
     r"\brm\s+-[a-z]*r[a-z]*\s+",      # rm -rf, rm -r, rm -Rf, etc
     r"\brmdir\s+",
     r"(?:^|[;&|])\s*mv\s+",
@@ -569,6 +575,16 @@ def decide(cmd: str) -> tuple[bool, str | None]:
     word is a delete verb (rm without -r, del, rd, ri, erase): review 2026-09-26
     found those verbs passing untouched because no pattern named them.
     """
+    # review round 9: fail closed on the list script (line breaks, backticks, runpy argv tricks
+    # all still mention it) and on inline-Python deletes the verb patterns never saw.
+    # review round 11: shell quoting splits a name ('' "" \ `) - match on the de-quoted text too
+    dequoted = re.sub(r"[\"'`\\]", "", cmd)
+    if (LIST_MENTION.search(cmd) or LIST_MENTION.search(dequoted)) and not _benign_list_mention(cmd):
+        return False, "delete_from_list run"
+    if INLINE_PY_DELETE.search(cmd):
+        return False, "inline python delete"
+    if GLOB_SCRIPT.search(cmd):  # review round 10: the script name hidden behind a shell glob
+        return False, "python script given by a glob"
     whole_hit = any_match(cmd, DESTRUCTIVE_INTENT, command=True)
     flagged = False
     for inner in substitutions(cmd):
@@ -634,7 +650,217 @@ DELETE_MENTION = re.compile(r"удал|снес|сотр|стер|почист|�
 # A bare go-ahead and nothing else: "да", "да, удаляй", "ок!", "yes".
 CONFIRM_ONLY = re.compile(
     r"\s*(?:да|ага|ок|окей|ok|okay|yes|подтверждаю|удаляй|давай|можно)"
-    r"(?:[\s,]+(?:да|удаляй|давай|можно|ок|ok|yes|подтверждаю))*\s*[.!]*\s*", re.IGNORECASE)
+    r"(?:[\s,]+(?:да|удаляй|давай|можно|ок|ok|yes|подтверждаю|вс[её]|по\s+списку|список))*\s*[.!]*\s*",
+    re.IGNORECASE)
+# Owner decision 2026-10-11: a long delete list goes into a file instead of the chat. My answer
+# shows `deletion-list: <path> sha256:<hex>`; a bare go-ahead to that answer approves exactly that
+# file's lines, and only scripts/delete_from_list.py may act on it. The digest binds the approval
+# to the content the owner was shown; every listed path still passes target_hard_limit.
+DELETION_LIST_DIR = Path.home() / ".claude" / "state" / "deletion-lists"
+LIST_REF = re.compile(r"deletion-list:\s*(\S+?\.txt)\s+sha256:([0-9a-fA-F]{16,64})")
+LIST_SCRIPT = (Path(__file__).resolve().parent.parent / "scripts" / "delete_from_list.py")
+# review 2026-10-11 F1: no separators, substitutions or redirects anywhere in a list-delete call
+LIST_CALL_FORBIDDEN = re.compile(r"[;|`$()<>\n\r{}]|&(?!\s)|\s&\s*\S.*&")
+PYTHON_NAMES = {"python", "python3", "py", "python.exe", "python3.exe", "py.exe"}
+
+
+# Owner decision 2026-10-11: "a general yes, without naming files, works for everything
+# regenerable; explicit confirmation only for the irreplaceable, e.g. database backups or a
+# database". Unnamed targets therefore pass a general go-ahead unless they look irreplaceable
+# (or a folder's contents cannot be inspected from here); those still have to be named.
+IRREPLACEABLE = re.compile(
+    # database files, their journals and dumps, plain or compressed (review 2026-10-11 R4)
+    r"\.(?:db|db3|sqlite\d?|sqlite\d?-(?:wal|shm)|db-(?:wal|shm)|mdb|accdb|dump|pgdump|sql|bak|backup|"
+    r"kdbx|rdb|aof|ibd|mdf|ldf|ndf|frm|myd|myi|fdb|gdb|realm|ldb|sdf|ost|pst)"
+    r"(?:\.(?:gz|bz2|xz|zst|7z|zip|tar|tgz))?$|-journal$|"
+    # server data directories recognised by their marker files (review R5)
+    r"(?:^|/)(?:PG_VERSION|pg_wal|pg_xlog|ibdata\d*|dump\.rdb|appendonly\.aof|WiredTiger[^/]*)(?:/|$)|"
+    r"(?:^|/)[^/]*(?:backup|бэкап|бекап|snapshot|pgdata|postgres|mysql|mariadb|mongo|redis|"
+    r"dataset|датасет)[^/]*(?:/|$)",
+    re.IGNORECASE)
+# The request itself names a file or path (then only named targets are covered).
+NAMES_FILE = re.compile(r"[\w\-]+\.[A-Za-z0-9]{1,8}\b|[\w\-.]+[\\/][\w\-.]")
+CONTENT_SCAN_CAP = 200_000  # simplification: bounded walk; a bigger folder must be named explicitly
+
+
+INNER_NAME_CAP = 50  # simplification: more irreplaceable files inside a folder -> name them one by one
+WALK = os.walk  # indirection so the self-test can simulate an unreadable subtree (review R10)
+LSTAT = os.lstat  # same, for a target that cannot be stat'ed (review R11)
+
+
+def _kind(p: Path) -> str:
+    """'missing' | 'dir' | 'file' | 'link' | 'error'. Path.is_file/is_dir/exists swallow
+    PermissionError and answer False (review R11); here only a real "not found" counts as missing."""
+    try:
+        st = LSTAT(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return "missing"
+    except OSError:
+        return "error"
+    if stat.S_ISLNK(st.st_mode):
+        return "link"
+    return "dir" if stat.S_ISDIR(st.st_mode) else "file"
+
+
+def _sqlite_header(p: Path) -> bool | None:
+    """True/False for a readable file; None when it cannot be read (review R10: unknown, not clean)."""
+    try:
+        with p.open("rb") as fh:
+            return fh.read(16) == b"SQLite format 3\x00"
+    except OSError:
+        return None
+
+
+def irreplaceable_info(target: str, recursive: bool) -> tuple[str | None, list[str] | None]:
+    """(why the target needs the owner's own naming, irreplaceable file names inside a folder).
+    (None, []) means regenerable; inner=None means the folder could not be fully inspected and
+    may not be deleted as a whole at all (review R9: fail closed, no naming escape)."""
+    t = _norm(target).rstrip("/")
+    if IRREPLACEABLE.search(t):
+        return "database/backup/dataset path", []
+    p = Path(t)
+    kind = _kind(p)
+    if kind == "error":
+        return "cannot be checked from here (access denied)", None
+    if kind == "file":
+        header = _sqlite_header(p)  # review R5: a SQLite file without a telling name
+        if header is None:
+            return "file cannot be read to check it", None
+        if header:
+            return "SQLite database (file header)", []
+    # Owner 2026-10-11: on a server regenerable folders go too; a folder that cannot be
+    # inspected from here (remote, kind 'missing') is judged by its path alone.
+    if recursive and kind == "dir":
+        inner: list[str] = []
+        walk_errors: list[OSError] = []
+        n = 0
+        # review R10: os.walk with onerror, not rglob (which silently skips unreadable subtrees)
+        for root, dirs, files in WALK(p, onerror=walk_errors.append, followlinks=False):
+            for name in dirs + files:
+                n += 1
+                if n > CONTENT_SCAN_CAP:
+                    return "too many entries to inspect", None
+                f = Path(root) / name
+                fk = _kind(f)
+                if fk == "error":
+                    return f"cannot check {f.as_posix()} (access denied)", None
+                header = _sqlite_header(f) if fk == "file" else False
+                if header is None:
+                    return f"cannot read {f.as_posix()} to check it", None
+                # review R8: inside a folder judge every file by name AND by SQLite header
+                if IRREPLACEABLE.search(f.as_posix()) or header:
+                    inner.append(name)
+                    if len(inner) > INNER_NAME_CAP:
+                        return "too many databases/backups inside", None
+        if walk_errors:
+            return f"part of the folder cannot be read ({walk_errors[0]})", None
+        if inner:
+            return f"contains {', '.join(sorted(set(inner)))}", sorted(set(inner))
+    return None, []
+
+
+def irreplaceable_reason(target: str, recursive: bool) -> str | None:
+    """Why an unnamed target needs explicit naming even after a general go-ahead, or None."""
+    return irreplaceable_info(target, recursive)[0]
+
+
+LIST_MENTION = re.compile(r"(?<![\w])delete_from_list|deletion-approvals", re.IGNORECASE)
+# a .py path built by a glob, a variable or a substitution (review rounds 10-11)
+GLOB_SCRIPT = re.compile(r"\b(?:python3?|py)(?:\.exe)?[\"']?\s+[\"']?[^\s\"']*[*?\[\]$%{}`][^\s\"']*\.py\b",
+                         re.IGNORECASE)
+GIT_PLAIN = {"add", "diff", "log", "status", "show", "commit", "blame", "restore", "stash"}
+INLINE_PY_DELETE = re.compile(
+    r"\bshutil\s*\.\s*rmtree\b|\brmtree\s*\(|\bos\s*\.\s*(?:remove|unlink|rmdir|removedirs)\s*\(|"
+    r"\.\s*unlink\s*\(|\.\s*rmdir\s*\(|\bsend2trash\b|"
+    # review round 10: a shell delete launched from inline Python
+    r"(?:os\s*\.\s*system|os\s*\.\s*popen|subprocess)[^\n]*?\b(?:rm|del|rd|rmdir|erase|remove-item|unlink)\b",
+    re.IGNORECASE)
+
+
+def _benign_list_mention(cmd: str) -> bool:
+    """A strict read-only `python <real script> <list>.txt --show`, or a one-line git command."""
+    raw = cmd.strip()
+    if LIST_CALL_FORBIDDEN.search(raw) or "&" in raw:  # review round 11: `git status & <run>`
+        return False
+    try:
+        argv = shlex.split(raw.replace("\\", "/"), posix=True)
+    except ValueError:
+        return False
+    # review round 10: no blanket git (a `-c alias.x='!...'` runs a shell); plain subcommands only
+    if argv and argv[0] == "git":
+        if len(argv) > 3 and argv[1] == "-C":  # `git -C <repo> <plain>`: -C only picks the repository
+            argv = [argv[0]] + argv[3:]
+        return (len(argv) > 1 and argv[1] in GIT_PLAIN and "-c" not in argv
+                and not any(a.startswith("--config") or "!" in a for a in argv))
+    if len(argv) != 4 or argv[0].lower() not in PYTHON_NAMES or argv[3] != "--show" \
+            or not argv[2].lower().endswith(".txt"):
+        return False
+    try:
+        return Path(argv[1]).expanduser().resolve(strict=True) == LIST_SCRIPT
+    except OSError:
+        return False
+
+
+def _list_key(path: str) -> str:
+    return Path(path.replace("\\", "/")).expanduser().as_posix().lower()
+
+
+def read_deletion_list(path: str, sha: str) -> tuple[list[str] | None, str]:
+    """Lines of an owner-shown deletion list, or (None, why) if it is outside the list folder or changed."""
+    try:
+        p = Path(path.replace("\\", "/")).expanduser().resolve(strict=True)
+        p.relative_to(DELETION_LIST_DIR.resolve())
+        data = p.read_bytes()
+    except (OSError, ValueError):
+        return None, f"{path}: the list must be an existing file in {DELETION_LIST_DIR}"
+    if not hashlib.sha256(data).hexdigest().startswith(sha.lower()):
+        return None, f"{path}: the list changed after it was shown (sha256 mismatch)"
+    entries = [ln.strip() for ln in data.decode("utf-8-sig", errors="replace").splitlines()]
+    return [e for e in entries if e and not e.startswith("#")], ""
+
+
+def list_delete_request(cmd: str, prompt: str, answer: str) -> tuple[list[tuple[str, bool]] | None, str]:
+    """(targets, "") for an approved delete_from_list.py call; (None, why) if refused; ([], "") if not one."""
+    if "delete_from_list.py" not in cmd:
+        return [], ""
+    raw = cmd.strip()
+    raw = raw[1:].lstrip() if raw.startswith("&") else raw  # PowerShell call operator
+    if LIST_CALL_FORBIDDEN.search(raw):
+        return None, "delete_from_list.py must be the whole command (no separators or substitutions)"
+    try:
+        argv = shlex.split(raw.replace("\\", "/"), posix=True)
+    except ValueError:
+        return None, "delete_from_list.py call cannot be parsed"
+    # review R1: the interpreter is a bare name resolved from PATH, never a path the agent picked
+    if (len(argv) != 5 or argv[0].lower() not in PYTHON_NAMES or argv[3] != "--sha"
+            or not re.fullmatch(r"[0-9a-fA-F]{16,64}", argv[4]) or not argv[2].lower().endswith(".txt")):
+        return None, "expected exactly: python <delete_from_list.py> <list.txt> --sha <hex>"
+    try:  # review F2: only the real script, not a look-alike planted elsewhere
+        same = Path(argv[1]).expanduser().resolve(strict=True) == LIST_SCRIPT
+    except OSError:
+        same = False
+    if not same:
+        return None, f"only {LIST_SCRIPT.as_posix()} may act on a deletion list"
+    path, sha = argv[2], argv[4]
+    if not CONFIRM_ONLY.fullmatch(prompt):
+        return None, "a list delete needs a bare go-ahead to the answer that showed the list"
+    shown = {(_list_key(p), s.lower()) for p, s in LIST_REF.findall(answer)}
+    if (_list_key(path), sha.lower()) not in shown:
+        return None, "this list and digest were not shown in my last answer"
+    entries, why = read_deletion_list(path, sha)
+    if entries is None:
+        return None, why
+    if not entries:
+        return None, "the list is empty"
+    if sys.platform == "win32":  # review F3: the script deletes on this host; a drive-less path is ambiguous
+        driveless = [e for e in entries if not re.match(r"^[A-Za-z]:[\\/]", e)]
+        if driveless:
+            return None, f"{driveless[0]}: a listed path needs a drive letter on Windows"
+    for e in entries:  # review R2: a list is a general go-ahead; the irreplaceable must be named in chat
+        why = irreplaceable_reason(e, True)
+        if why:
+            return None, f"{e}: irreplaceable ({why}) - name it in the chat, not in a list"
+    return [(e, True) for e in entries], ""
 APPROVAL_LOG = Path.home() / ".claude" / "logs" / "deletion-approvals.jsonl"
 TRANSCRIPT_SCAN_CAP = 64 * 1024 * 1024
 PROTECTED = re.compile(
@@ -794,7 +1020,11 @@ def target_hard_limit(target: str) -> str | None:
     if any(c not in {".", ".."} and (c.endswith((".", " ")) or re.search(r"~\d", c)) for c in t.split("/")):
         return "ambiguous Windows name (trailing dot/space or 8.3 short name)"
     wsl = re.match(r"^/mnt/([a-zA-Z])(/.*)?$", t)
-    if PROTECTED.search(t) or (wsl and PROTECTED.search(f"{wsl.group(1)}:{wsl.group(2) or '/'}")):
+    # review 2026-10-11 F3: on Windows "/Users/x/AppData/Roaming" is "<current drive>:/Users/...";
+    # judge a drive-less path as if it were on a drive too.
+    on_drive = f"c:{t}" if sys.platform == "win32" and t.startswith("/") and not t.startswith("//") else None
+    if (PROTECTED.search(t) or (wsl and PROTECTED.search(f"{wsl.group(1)}:{wsl.group(2) or '/'}"))
+            or (on_drive and PROTECTED.search(on_drive))):
         return "protected location"
     claude = _claude_limit(t) or (wsl and _claude_limit(f"{wsl.group(1)}:{wsl.group(2) or '/'}"))
     if claude:
@@ -818,6 +1048,16 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     if not req:
         return False, "no human prompt in the transcript"
     prompt, answer = req
+    listed, why = list_delete_request(cmd, prompt, answer)
+    if listed is None:
+        return False, why
+    if listed:
+        # The audit record doubles as the script's one-shot approval: delete_from_list.py refuses
+        # unless it finds a fresh record for exactly this list and digest (review round 10 - the
+        # script no longer depends on the hook recognising how it was invoked).
+        argv = shlex.split(cmd.strip().lstrip("&").strip().replace("\\", "/"), posix=True)
+        extra = {"list": _list_key(argv[2]), "sha": argv[4].lower()}
+        return _approve(listed, "\n".join(t for t, _ in listed), False, prompt, cmd, event, extra=extra)
     if CONFIRM_ONLY.fullmatch(prompt):
         if not DELETE_MENTION.search(answer):
             return False, "a bare 'yes' to an answer that proposed no deletion"
@@ -831,6 +1071,17 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     targets = plain_delete_targets(cmd)
     if not targets:
         return False, "not a plain file delete"
+    # A general go-ahead is a bare yes to my proposal, or a request that names no file itself
+    # ("удали временные"). When the owner names a file, unnamed others are not covered.
+    general = named_in is answer or not NAMES_FILE.search(prompt)
+    return _approve(targets, named_in, from_phrase, prompt, cmd, event, general=general)
+
+
+def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
+             prompt: str, cmd: str, event: dict, general: bool = False,
+             extra: dict | None = None) -> tuple[bool, str]:
+    """Every target passes the hard limits and is named in named_in (or, with a general go-ahead,
+    is regenerable); then one audit record."""
     text = named_in.replace("\\", "/")
     for t, recursive in targets:
         why = target_hard_limit(t)
@@ -841,8 +1092,31 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         if re.match(r"^[A-Za-z]:/", full):  # Windows: case-insensitive filesystem
             full, hay = full.lower(), text.lower()
         base = full.rsplit("/", 1)[-1]
+        # review 2026-10-11 R7: the irreplaceable counts as named only in the OWNER's own words,
+        # never because my answer mentioned it (an answer can mention a path to say "won't touch").
+        why, inner = irreplaceable_info(t, recursive)
+        if why:
+            own = prompt.replace("\\", "/")
+            win = bool(re.match(r"^[a-z]:/", full))
+            own = own.lower() if win else own
+            if inner is None:
+                return False, (f"{t}: {why} - cannot be confirmed as a whole; delete it in parts "
+                               f"or through a deletion list")
+            if inner:
+                # review R8: naming a folder does not name the databases inside it; each one must be
+                # named by the owner herself, then the folder goes through the usual checks below.
+                missing = [n for n in inner if not _named(own, n.lower() if win else n)]
+                if missing:
+                    return False, (f"{t}: holds irreplaceable files the owner did not name herself: "
+                                   f"{', '.join(missing)}")
+            else:
+                if _named(own, full) or (_named(own, base) and not recursive and "." in base.strip(".")):
+                    continue
+                return False, f"{t}: irreplaceable ({why}) - the owner must name it in her own message"
         if _named(hay, full):
             continue
+        if general and not from_phrase:
+            continue  # regenerable: the general go-ahead is enough
         if recursive or from_phrase or "." not in base.strip("."):
             return False, f"{t}: name the full path (recursive delete, directory or 'from' phrasing)"
         if not _named(hay, base):
@@ -852,7 +1126,8 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
                                  "session": event.get("session_id"), "targets": [t for t, _ in targets],
-                                 "request": prompt[:300], "command": cmd[:500]}, ensure_ascii=False) + "\n")
+                                 "request": prompt[:300], "command": cmd[:500], **(extra or {})},
+                                ensure_ascii=False) + "\n")
     except OSError:
         return False, "cannot write the approval audit record"
     return True, ", ".join(t for t, _ in targets)
@@ -897,6 +1172,10 @@ def main() -> None:
         "Удаление файла разрешается, только если ПОСЛЕДНЕЕ сообщение владельца (из журнала "
         "сессии, не из команды) просит удалить и называет каждый файл по имени, либо отвечает "
         "«да/удаляй» на мой ответ, где эти файлы перечислены. Попроси владельца назвать файлы. "
+        "Длинный список: запиши пути в ~/.claude/state/deletion-lists/<имя>.txt, покажи владельцу "
+        "строку из `python ~/.claude/claude-code-config/scripts/delete_from_list.py <список> --show` "
+        "(deletion-list: <путь> sha256:<хэш>) и после его «да» выполни "
+        "`python ~/.claude/claude-code-config/scripts/delete_from_list.py <список> --sha <хэш>`. "
         "Маркеры в команде, env и файлы агента не являются одобрением.\n\n"
         "Без просьбы проходят только routine build/cache/temp targets; DROP/docker/git/kill "
         "и корни дисков/домашние папки/маски не проходят никогда."
@@ -1039,7 +1318,6 @@ def self_test() -> int:
         ("no transcript", sft, {}),
         ("negated", sft, transcript("не удаляй flux1-dev.sft")),
         ("not a delete request", sft, transcript("посмотри flux1-dev.sft")),
-        ("target not named", sft, transcript("удали большие файлы")),
         ("confirm without my proposal", sft, transcript("да", "Скачала модели.")),
         ("past tense is a report, not a request", sft,
          transcript("вроде удалила и поправь хук", "Удалить flux1-dev.sft можно командой rm ...")),
@@ -1052,7 +1330,6 @@ def self_test() -> int:
         (".git", "rm -rf C:/work/repo/.git/objects", transcript("удали objects")),
         ("non-file destructive", "psql -c 'DROP TABLE users'", transcript("удали таблицу users")),
         ("docker", "docker rm production-db", transcript("удали production-db")),
-        ("one of two unnamed", "rm C:/w/p/a1.bin C:/w/p/b2.bin", transcript("удали a1.bin")),
         ("touches transcript", "rm " + HOME_FIX + "/.claude/projects/p/s.jsonl", transcript("удали s.jsonl")),
         # review 2026-10-06 (REJECT) probes
         ("parent dir by substring", "rm -rf /srv/a/models", transcript("удали models/old.bin")),
@@ -1069,15 +1346,12 @@ def self_test() -> int:
         ("answer widens scope", "rm /srv/data/prod/db.sqlite",
          transcript("удали старые логи", "Удалю логи и заодно db.sqlite")),
         ("ok-but-wait", "rm /srv/data/prod/db.sqlite", transcript("ок, посмотри сначала", "Могу удалить db.sqlite")),
-        ("dir without full path", "rm -rf /srv/a/models/", transcript("удали models")),
         ("xargs", "echo /srv/a/b/xyz.bin | xargs rm", transcript("удали xyz.bin")),
         ("bash -c over ssh unnamed", "ssh h bash -c 'rm /srv/a/b/x.bin'", transcript("удали y.bin")),
         # isolated controls: each protection must refuse on its own
-        ("basename is only a suffix of the named file", "rm /srv/a/b/dev.sft", transcript("удали flux1-dev.sft")),
         ("relative file path", "rm data/cache/run1/old.bin", transcript("удали old.bin")),
         ("bare yes covers only my last message", "rm /srv/data/prod/db.sqlite",
          transcript("да", "Удалю /srv/tmp/a/old.bin - подтверди", earlier="Кстати, /srv/data/prod/db.sqlite большой")),
-        ("POSIX name case differs", "rm /srv/a/b/model.bin", transcript("удали Model.bin")),
         ("hash inside the path", "rm /srv/a/b/x.bin#/../../../../etc/passwd", transcript("удали /srv/a/b/x.bin")),
         ("trailing-dot alias of .claude", "Remove-Item " + HOME_FIX + "/.claude./settings.json", transcript("удали settings.json")),
         ("8.3 short name", "rm " + HOME_FIX + "/CLAUDE~1/settings.json", transcript("удали settings.json")),
@@ -1090,6 +1364,168 @@ def self_test() -> int:
         ("whole project .claude", "rm -rf C:/work/proj/.claude", transcript("удали C:/work/proj/.claude")),
         ("linux root home .claude", "rm -rf /root/.claude/hooks/h", transcript("удали /root/.claude/hooks/h")),
     ]
+    # general go-ahead (owner 2026-10-11): regenerable needs no naming, irreplaceable does
+    gdir = work / "general"
+    (gdir / "proj" / "out" / "run1").mkdir(parents=True)
+    (gdir / "proj" / "out" / "run1" / "img.png").write_text("x")
+    (gdir / "proj" / "app" / "data").mkdir(parents=True)
+    (gdir / "proj" / "app" / "data" / "state.sqlite").write_text("x")
+    out_dir, app_dir = (gdir / "proj" / "out").as_posix(), (gdir / "proj" / "app").as_posix()
+    approve += [
+        ("general request, regenerable file unnamed", sft, transcript("удали большие файлы")),
+        ("general yes to my proposal, regenerable", "rm /srv/a/b/model.bin",
+         transcript("да", "Удалю временные модели из /srv/a/b - подтверди")),
+        ("general yes, inspectable local folder without databases", f"rm -rf {out_dir}",
+         transcript("да, удаляй", "Удалю выходы тестов")),
+        ("irreplaceable but named explicitly", "rm /srv/data/prod/db.sqlite", transcript("удали db.sqlite")),
+        ("general request for a regenerable server folder", "rm -rf /srv/a/models/", transcript("удали models")),
+        ("general yes, regenerable remote folder judged by path", "ssh h 'rm -rf /srv/a/b/old'",
+         transcript("да", "Удалю старое на сервере")),
+    ]
+    refuse += [
+        ("general yes, database file", "rm /srv/data/prod/main.sqlite", transcript("да", "Удалю мусор на сервере")),
+        ("general yes, database backup dump", "rm /srv/data/prod/nightly.dump", transcript("да", "Удалю мусор")),
+        ("general yes, backup folder", "rm -rf C:/w/proj/backups/2026-10", transcript("да", "Удалю старое")),
+        ("general yes, dataset", "rm -rf D:/data/jewelry-dataset/v2", transcript("да", "Удалю лишнее")),
+        ("general yes, local folder that holds a database", f"rm -rf {app_dir}", transcript("да", "Удалю старый проект")),
+        ("general request, sql export", "rm C:/w/proj/exports/users.sql", transcript("удали старые выгрузки")),
+        ("owner named a file, another one is not covered", "rm C:/w/p/a1.bin C:/w/p/b2.bin", transcript("удали a1.bin")),
+        ("owner named a file, its suffix is not covered", "rm /srv/a/b/dev.sft", transcript("удали flux1-dev.sft")),
+        ("owner named a file, case differs on POSIX", "rm /srv/a/b/model.bin", transcript("удали Model.bin")),
+        ("general yes, remote database folder by path", "ssh h 'rm -rf /srv/pgdata/main'", transcript("да", "Удалю старое")),
+    ]
+
+    # owner-approved deletion lists (2026-10-11)
+    global DELETION_LIST_DIR
+    saved_list_dir = DELETION_LIST_DIR
+    DELETION_LIST_DIR = work / "deletion-lists"
+    DELETION_LIST_DIR.mkdir()
+    lst = DELETION_LIST_DIR / "tmp-cleanup.txt"
+    lst.write_text("# temp and test leftovers\nD:/tmp/work/run1\nC:/w/proj/tests/out/cache.bin\n", encoding="utf-8")
+    dig = hashlib.sha256(lst.read_bytes()).hexdigest()[:16]
+    shown = f"Удалю временные файлы (2 шт.). deletion-list: {lst.as_posix()} sha256:{dig}"
+    call = f"python {LIST_SCRIPT.as_posix()} {lst.as_posix()} --sha {dig}"
+    bad = DELETION_LIST_DIR / "bad.txt"
+    bad.write_text("C:/w/repo/.git/objects\n", encoding="utf-8")
+    bdig = hashlib.sha256(bad.read_bytes()).hexdigest()[:16]
+    outside = work / "outside.txt"
+    outside.write_text("D:/tmp/work/run1\n", encoding="utf-8")
+    odig = hashlib.sha256(outside.read_bytes()).hexdigest()[:16]
+    fake_dir = work / "evil" / "claude-code-config" / "scripts"
+    fake_dir.mkdir(parents=True)
+    (fake_dir / "delete_from_list.py").write_text("import shutil", encoding="utf-8")
+    approve.append(("bare yes to a shown list", call, transcript("да, удаляй по списку", shown)))
+    refuse += [
+        ("list not shown in my last answer", call, transcript("да", "Удалю временные файлы, список готов")),
+        ("list shown but owner asked a question", call, transcript("да?", shown)),
+        ("list delete needs a bare go-ahead", call, transcript("удали всё что хочешь", shown)),
+        ("digest in the command differs from the shown one",
+         call.replace(dig, "0" * 16), transcript("да", shown.replace(dig, "0" * 16).replace("sha256:0", "sha256:1"))),
+        ("list with a protected path", call.replace(str(lst.as_posix()), bad.as_posix()).replace(dig, bdig),
+         transcript("да", f"Удалю. deletion-list: {bad.as_posix()} sha256:{bdig}")),
+        ("list outside the list folder", call.replace(str(lst.as_posix()), outside.as_posix()).replace(dig, odig),
+         transcript("да", f"Удалю. deletion-list: {outside.as_posix()} sha256:{odig}")),
+        ("list call chained with another command", call + " && rm -rf C:/w/other/dir", transcript("да", shown)),
+        # review 2026-10-11 probes
+        ("injected rm before the script name (F1)",
+         f"python x;rm${{IFS}}-rf${{IFS}}C:/w/x;{LIST_SCRIPT.as_posix()} {lst.as_posix()} --sha {dig}", transcript("да", shown)),
+        ("look-alike script in another folder (F2)",
+         f"python {(fake_dir / 'delete_from_list.py').as_posix()} {lst.as_posix()} --sha {dig}", transcript("да", shown)),
+        ("show and sha together", call + " --show", transcript("да", shown)),
+        ("interpreter given as a path (R1)", "D:/agent/evil/python.exe " + call.split(" ", 1)[1], transcript("да", shown)),
+    ]
+    changed = DELETION_LIST_DIR / "changed.txt"
+    changed.write_text("D:/tmp/work/run1\n", encoding="utf-8")
+    cdig = hashlib.sha256(changed.read_bytes()).hexdigest()[:16]
+    changed.write_text("D:/tmp/work/run1\nC:/w/prod/db.sqlite\n", encoding="utf-8")  # edited after it was shown
+    refuse.append(("list edited after it was shown", call.replace(str(lst.as_posix()), changed.as_posix()).replace(dig, cdig),
+                   transcript("да", f"Удалю. deletion-list: {changed.as_posix()} sha256:{cdig}")))
+    if sys.platform == "win32":
+        refuse.append(("drive-less AppData Roaming (F3)", "rm /Users/someone/AppData/Roaming/app/x/state.bin",
+                       transcript("удали state.bin")))
+        dl = DELETION_LIST_DIR / "driveless.txt"
+        dl.write_text("/tmp/work/run1\n", encoding="utf-8")
+        ddig = hashlib.sha256(dl.read_bytes()).hexdigest()[:16]
+        refuse.append(("drive-less list entry (F3)", f"python {LIST_SCRIPT.as_posix()} {dl.as_posix()} --sha {ddig}",
+                       transcript("да", f"Удалю. deletion-list: {dl.as_posix()} sha256:{ddig}")))
+    dbl = DELETION_LIST_DIR / "with-db.txt"
+    dbl.write_text("D:/tmp/work/run1\nD:/srv/app/state/main.sqlite\n", encoding="utf-8")
+    dbdig = hashlib.sha256(dbl.read_bytes()).hexdigest()[:16]
+    refuse.append(("database inside a list (R2)", f"python {LIST_SCRIPT.as_posix()} {dbl.as_posix()} --sha {dbdig}",
+                   transcript("да", f"Удалю. deletion-list: {dbl.as_posix()} sha256:{dbdig}")))
+    for ext in ("vault.kdbx", "export.sql.gz", "app.db-journal", "dump.rdb", "orders.ibd", "erp.mdf"):
+        refuse.append((f"general yes, database-like {ext} (R4)", f"rm /srv/a/b/{ext}", transcript("да", "Удалю мусор")))
+    pg = gdir / "proj" / "pgd"
+    (pg / "base").mkdir(parents=True)
+    (pg / "PG_VERSION").write_text("16")
+    refuse.append(("general yes, postgres data dir by marker (R5)", f"rm -rf {pg.as_posix()}",
+                   transcript("да", "Удалю старое")))
+    # review round 3: R7 (my answer naming a DB is not the owner naming it), R4/R5 leftovers
+    refuse.append(("database named only in my answer (R7)", "rm D:/srv/data/prod/main.sqlite",
+                   transcript("да", "Удалю кеш в D:/srv/data/cache, D:/srv/data/prod/main.sqlite трогать не буду")))
+    refuse.append(("general yes, sqlite3 WAL (R4)", "rm /srv/a/b/app.sqlite3-wal", transcript("да", "Удалю мусор")))
+    refuse.append(("general yes, pgdump (R4)", "rm /srv/a/b/nightly.pgdump", transcript("да", "Удалю мусор")))
+    hdr = gdir / "proj" / "cache" / "blob"
+    hdr.parent.mkdir(parents=True)
+    hdr.write_bytes(b"SQLite format 3\x00" + b"\x00" * 84)
+    refuse.append(("general yes, SQLite recognised by header (R5)", f"rm {hdr.as_posix()}", transcript("да", "Удалю кеш")))
+    approve.append(("owner names the database herself", "rm D:/srv/data/prod/main.sqlite",
+                    transcript("удали D:/srv/data/prod/main.sqlite", "Могу удалить main.sqlite")))
+    # review round 4: R8 (folder contents judged by header; naming a folder does not name its DBs)
+    prof = gdir / "proj" / "browser-profile"
+    prof.mkdir(parents=True)
+    (prof / "History").write_bytes(b"SQLite format 3\x00" + b"\x00" * 84)
+    refuse.append(("general request, folder holds a header-only SQLite (R8)", f"rm -rf {prof.as_posix()}",
+                   transcript("удали старый кеш")))
+    refuse.append(("owner names a folder but not the database inside (R8)", f"rm -rf {app_dir}",
+                   transcript(f"удали {app_dir}")))
+    approve.append(("owner names the folder and the database inside", f"rm -rf {app_dir}",
+                    transcript(f"удали {app_dir} вместе с state.sqlite")))
+    # review round 5: R9 (overflowing either cap fails closed even when the owner names the folder)
+    many = gdir / "proj" / "many-dbs"
+    many.mkdir(parents=True)
+    for i in range(INNER_NAME_CAP + 1):
+        (many / f"s{i}.sqlite").write_text("x")
+    refuse.append(("folder with more databases than the cap, owner names only the folder (R9)",
+                   f"rm -rf {many.as_posix()}", transcript(f"удали {many.as_posix()}")))
+    global CONTENT_SCAN_CAP
+    saved_cap = CONTENT_SCAN_CAP
+    CONTENT_SCAN_CAP = 3
+    big = gdir / "proj" / "big-cache"
+    big.mkdir(parents=True)
+    for i in range(5):
+        (big / f"c{i}.bin").write_text("x")
+    if approved_by_owner(f"rm -rf {big.as_posix()}", transcript(f"удали {big.as_posix()}"))[0]:
+        fails.append("owner request should refuse (scan cap overflow, owner names only the folder) (R9)")
+    CONTENT_SCAN_CAP = saved_cap
+    # review round 6: R10 (an unreadable subtree fails closed instead of being skipped)
+    global WALK
+    saved_walk = WALK
+    def walk_with_denied_subtree(top, onerror=None, followlinks=False):
+        for entry in saved_walk(top, onerror=onerror, followlinks=followlinks):
+            yield entry
+        if onerror:
+            onerror(PermissionError(13, "Access is denied", str(top) + "/locked"))
+    WALK = walk_with_denied_subtree
+    if approved_by_owner(f"rm -rf {out_dir}", transcript(f"удали {out_dir}"))[0]:
+        fails.append("owner request should refuse (unreadable subtree, owner names only the folder) (R10)")
+    if approved_by_owner(f"rm -rf {out_dir}", transcript("да, удаляй", "Удалю выходы тестов"))[0]:
+        fails.append("owner request should refuse (unreadable subtree, general yes) (R10)")
+    WALK = saved_walk
+    # review round 7: R11 (a target that cannot be stat'ed is not "absent")
+    global LSTAT
+    saved_lstat = LSTAT
+    denied_file = (gdir / "proj" / "out" / "run1" / "img.png").as_posix()
+    def lstat_denied(path):
+        if Path(path).as_posix() == denied_file or Path(path).as_posix().startswith(out_dir):
+            raise PermissionError(13, "Access is denied", str(path))
+        return saved_lstat(path)
+    LSTAT = lstat_denied
+    if approved_by_owner(f"rm {denied_file}", transcript("да", "Удалю выходы тестов"))[0]:
+        fails.append("owner request should refuse (target cannot be stat'ed, general yes) (R11)")
+    if approved_by_owner(f"rm -rf {out_dir}", transcript(f"удали {out_dir}"))[0]:
+        fails.append("owner request should refuse (folder cannot be stat'ed, owner names it) (R11)")
+    LSTAT = saved_lstat
     for name, cmd, ev in approve:
         if not approved_by_owner(cmd, ev)[0]:
             fails.append(f"owner request should allow ({name}): {approved_by_owner(cmd, ev)[1]}")
@@ -1099,6 +1535,48 @@ def self_test() -> int:
     if not APPROVAL_LOG.exists() or len(APPROVAL_LOG.read_text(encoding="utf-8").splitlines()) != len(approve):
         fails.append("every owner-approved delete must leave exactly one audit record")
     APPROVAL_LOG = saved_log
+    DELETION_LIST_DIR = saved_list_dir
+    if decide(call)[0]:
+        fails.append("a delete_from_list.py call must never pass decide() without the owner check")
+    show = call.rsplit(" --sha ", 1)[0] + " --show"
+    if not decide(show)[0]:
+        fails.append("delete_from_list.py --show only reads the list and must pass")
+    if decide(show + " ; rm -rf C:/w/other/dir")[0]:
+        fails.append("--show followed by another delete must not pass")
+    for benign in ("git add -- scripts/delete_from_list.py", "python -m pytest hooks/tests/test_delete_from_list.py"):
+        if not decide(benign)[0]:
+            fails.append(f"mentioning the script is not a delete: {benign}")
+    # review round 9: a list run split over lines, runpy argv tricks and inline-Python deletes
+    sneaky = [
+        f"python {LIST_SCRIPT.as_posix()} `\n{lst.as_posix()} --sha {dig}",
+        f"{LIST_SCRIPT.as_posix()}\n{lst.as_posix()} --sha {dig}",
+        "python -c \"import sys,runpy; sys.argv=['x','--sha','" + dig + "','" + lst.as_posix()
+        + "']; runpy.run_path('" + LIST_SCRIPT.as_posix() + "')\"",
+        "python -c \"import shutil; shutil.rmtree('C:/w/proj/data')\"",
+        "python -c \"import os; os.remove('C:/w/proj/db.sqlite')\"",
+        "python -c \"from pathlib import Path; Path('C:/w/proj/x.bin').unlink()\"",
+    ]
+    sneaky += [
+        # review round 10: glob in the script name, git shell alias, shell delete from inline Python,
+        # and any touch of the approval log the script trusts
+        f"python {LIST_SCRIPT.parent.as_posix()}/delete_from_[l]ist.py {lst.as_posix()} --sha {dig}",
+        f"git -c alias.zz='!python {LIST_SCRIPT.as_posix()} {lst.as_posix()} --sha {dig}' zz",
+        "python -c \"import subprocess; subprocess.run(['rm','-rf','C:/w/proj/data'])\"",
+        "python -c \"import os; os.system('del C:/w/proj/db.sqlite')\"",
+        "Add-Content C:/Users/x/.claude/logs/deletion-approvals.jsonl '{}'",
+    ]
+    sneaky += [
+        # review round 11: names split by shell quoting or built from a variable; `&` after git
+        "printf x >> C:/Users/x/.claude/logs/deletion-app''rovals.jsonl",
+        f"python {LIST_SCRIPT.parent.as_posix()}/delete_from_''list.py {lst.as_posix()} --sha {dig}",
+        f"python {LIST_SCRIPT.parent.as_posix()}/${{N}}list.py {lst.as_posix()} --sha {dig}",
+        f"git status & python {LIST_SCRIPT.as_posix()} {lst.as_posix()} --sha {dig}",
+    ]
+    for s in sneaky:
+        if decide(s)[0]:
+            fails.append(f"must be flagged as a delete: {s[:80]}")
+    if decide(f"python {LIST_SCRIPT.as_posix()} {lst.as_posix()} --sha {dig}")[0]:
+        fails.append("a list run must never pass decide() without the owner check")
     print(f"SCANNED owner-requests: approve={len(approve)} refuse={len(refuse)}")
     for f in fails:
         print("SELF-TEST FAIL:", f)
