@@ -24,8 +24,10 @@ survive goes to contabo or gets a protect.txt line. Memory growth, low RAM and
 Appinfo handle growth are only reported.
 
 Hung rclone mounts are fixed too: a letter whose `dir` does not answer within
-MOUNT_TIMEOUT_S twice in a row gets its rclone process restarted with the same
-argv (logged in remounts.jsonl). A hung mount is what makes processes
+MOUNT_TIMEOUT_S in this run AND in a run at least MOUNT_CONFIRM_S earlier gets
+its rclone restarted with the same argv (logged in remounts.jsonl). One slow
+listing is not a hang: the first version remounted 10 times in 90 minutes under
+load, and a remount drops writes in flight. A hung mount is what makes processes
 unkillable: 2026-10-11 F: and W: hung, TerminateProcess on two hook processes
 "succeeded" while they stayed alive, taskkill and every PowerShell start hung;
 after the remount the hooks died on their own.
@@ -74,8 +76,17 @@ _CODEX_EXEC = re.compile(r'codex(?:\.exe)?"?\s+exec\b')   # one-shot run; the ap
 AUTOSTART_MIN = 10            # parentless and born this soon after boot = logon autostart daemon
 
 
-def _protected(r: dict, extra: list[str], boot: float) -> bool:
+def _listening_pids() -> set[int]:
+    try:
+        return {c.pid for c in psutil.net_connections(kind="inet") if c.status == psutil.CONN_LISTEN and c.pid}
+    except (psutil.AccessDenied, OSError):
+        return set()
+
+
+def _protected(r: dict, extra: list[str], boot: float, listeners: set[int] = frozenset()) -> bool:
     c = r["cmd"].lower()
+    if r["pid"] in listeners:
+        return True                                   # a server waits for requests; idle CPU is its job
     if r["name"] not in KILL_NAMES or any(m in c for m in PROTECT_DEFAULT) or any(m in c for m in extra):
         return True
     if r["name"] in SHELLS and len(c.split()) <= 1:
@@ -217,6 +228,7 @@ def _idle_since(r: dict, history: list[dict], now: int, idle_min: int) -> bool:
 
 
 MOUNT_TIMEOUT_S = 25
+MOUNT_CONFIRM_S = 240          # hung now and still hung >= 4 min later (next 5-min run) -> remount
 _MOUNT_RE = re.compile(r"\smount\s+\S+\s+([A-Za-z]):")
 
 
@@ -244,8 +256,18 @@ def check_mounts(do_fix: bool) -> list[str]:
     hung = _probe_letters(sorted(mounts))
     if hung:
         hung = _probe_letters(sorted(hung))          # second look: a slow listing is not a hang
-    findings = []
-    for L in sorted(hung):
+    now = time.time()
+    sus_file = STATE / "mount_suspects.json"
+    try:
+        prev = {k: float(v) for k, v in json.loads(sus_file.read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError):
+        prev = {}
+    suspects = {L: prev.get(L, now) for L in hung}
+    STATE.mkdir(parents=True, exist_ok=True)
+    sus_file.write_text(json.dumps(suspects), encoding="utf-8")
+    findings = [f"SLOW MOUNT {L}: no answer in {MOUNT_TIMEOUT_S} s twice; remount if still hung next run"
+                for L in sorted(hung) if now - suspects[L] < MOUNT_CONFIRM_S]
+    for L in sorted(L for L in hung if now - suspects[L] >= MOUNT_CONFIRM_S):
         info = mounts[L]
         note = "NOT restarted (dry run)"
         if do_fix:
@@ -265,7 +287,7 @@ def check_mounts(do_fix: bool) -> list[str]:
                 f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                     "letter": L, "old_pid": info["pid"], "new_pid": new.pid,
                                     "answers": ok, "argv": info["cmdline"]}) + "\n")
-        findings.append(f"HUNG MOUNT {L}: (no answer in {MOUNT_TIMEOUT_S} s twice) -> {note}")
+        findings.append(f"HUNG MOUNT {L}: no answer for {int(now - suspects[L])} s -> {note}")
     return findings
 
 
@@ -276,6 +298,7 @@ def analyse(s: dict, history: list[dict], do_kill: bool, hook_age: int = HOOK_MA
     mine = {me.pid} | {a.pid for a in me.parents()} | {c.pid for c in me.children(recursive=True)}
     extra = _protect_list()
     boot = psutil.boot_time()
+    listeners = _listening_pids()
     if s["ram_avail_gb"] < LOW_AVAIL_GB:
         findings.append(f"LOW MEMORY: {s['ram_avail_gb']} GB free of {s['ram_total_gb']}")
     targets: dict[int, tuple[str, dict]] = {}
@@ -284,7 +307,7 @@ def analyse(s: dict, history: list[dict], do_kill: bool, hook_age: int = HOOK_MA
             continue
         if _is_hook(r["cmd"]) and r["age_min"] >= hook_age and r["tree_delta_s"] < 0.05:
             targets[r["pid"]] = ("HUNG HOOK", r)
-        elif _protected(r, extra, boot):
+        elif _protected(r, extra, boot, listeners):
             continue
         elif not r["parent_alive"] and r["age_min"] >= ORPHAN_GRACE_MIN:
             targets[r["pid"]] = ("ORPHAN", r)

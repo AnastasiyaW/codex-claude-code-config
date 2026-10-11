@@ -36,9 +36,10 @@ def row(pid, name, cmd, *, parent=True, age_min=60, tree_cpu=5.0, delta=0.0, ppi
             "tree_cpu_s": tree_cpu, "tree_delta_s": delta, "priv_mb": 50}
 
 
-def verdicts(rows, history):
+def verdicts(rows, history, listeners=()):
     w.psutil.boot_time = lambda: BOOT
     w._protect_list = lambda: ["lan-forward"]
+    w._listening_pids = lambda: set(listeners)
     s = {"epoch": NOW, "ram_avail_gb": 10, "ram_total_gb": 32, "appinfo_handles": None, "procs": rows}
     _, kills = w.analyse(s, history, do_kill=False)
     return {k["pid"]: k["why"] for k in kills}
@@ -77,6 +78,39 @@ def test_idle_needs_history():
     assert verdicts(rows, []) == {}                                    # no 30-min record -> not idle yet
 
 
+def test_listening_server_is_not_idle():
+    rows = [row(40, "python.exe", "python -m http.server 4488")]       # killed for real on 2026-10-11
+    hist = [{"epoch": NOW - 31 * 60, "cpu": {f"40:{rows[0]['ctime']}": 5.0}}]
+    assert verdicts(rows, hist) == {40: "IDLE 30+ min"}
+    assert verdicts(rows, hist, listeners={40}) == {}
+
+
+def test_remount_only_when_hung_across_runs(tmp_path=None):
+    import tempfile
+    state = Path(tempfile.mkdtemp())
+
+    class P:
+        info = {"pid": 999999, "name": "rclone.exe", "cwd": None,
+                "cmdline": ["rclone.exe", "mount", "remote:/", "Z:"]}
+    saved = (w.STATE, w._probe_letters, w.psutil.process_iter, w.time.time)
+    clock = [1_000_000.0]
+    w.STATE, w._probe_letters = state, (lambda L: {"Z"} & set(L))
+    w.psutil.process_iter = lambda attrs=None: [P()]
+    w.time.time = lambda: clock[0]
+    try:
+        first = w.check_mounts(do_fix=False)
+        assert first and first[0].startswith("SLOW MOUNT Z"), first          # first strike: no remount
+        clock[0] += w.MOUNT_CONFIRM_S + 60
+        second = w.check_mounts(do_fix=False)
+        assert second and second[0].startswith("HUNG MOUNT Z"), second       # still hung next run
+        w._probe_letters = lambda L: set()
+        assert w.check_mounts(do_fix=False) == []                            # recovered: strike cleared
+        w._probe_letters = lambda L: {"Z"} & set(L)
+        assert w.check_mounts(do_fix=False)[0].startswith("SLOW MOUNT Z")
+    finally:
+        w.STATE, w._probe_letters, w.psutil.process_iter, w.time.time = saved
+
+
 def test_mount_probe_flags_silence():
     real_popen, real_timeout = w.subprocess.Popen, w.MOUNT_TIMEOUT_S
 
@@ -95,5 +129,7 @@ if __name__ == "__main__":
     test_hook_matcher()
     test_kill_policy()
     test_idle_needs_history()
+    test_listening_server_is_not_idle()
+    test_remount_only_when_hung_across_runs()
     test_mount_probe_flags_silence()
     print("ok")
