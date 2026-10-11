@@ -664,6 +664,19 @@ REPLACE_INTENT = re.compile(
     r"\b(?:замени(?:те)?|заменить|заменим|замену|перезапиши(?:те)?|перезаписать|перезапись)\b|"
     r"\breplace\b|\boverwrite\b", re.IGNORECASE)
 REPLACE_MENTION = re.compile(r"замен|перезапис|replac|overwrit", re.IGNORECASE)
+# Owner 2026-10-11 ("да, перезапускай VM" was refused; "исправляй хук, если я попросила сделать,
+# надо делать"): asking to restart approves a command that is nothing but a restart verb.
+RESTART_INTENT = re.compile(
+    r"\b(?:перезапусти(?:те)?|перезапускай(?:те)?|перезапустить|перезапустим|перезагрузи(?:те)?|"
+    r"перезагружай(?:те)?|перезагрузить|перезагрузим|ребутни(?:те)?|ребутай(?:те)?)\b|"
+    r"\breboot\b|\brestart\b", re.IGNORECASE)
+RESTART_MENTION = re.compile(r"перезапуск|перезапуст|перезагруз|ребут|reboot|restart", re.IGNORECASE)
+NOT_A_RESTART_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:перезап|перезагр|ребут)",
+                              re.IGNORECASE)
+# The whole segment is a restart and nothing else: no rm, no power-off, no service stop beside it.
+RESTART_SEGMENT = re.compile(
+    r"(?:sudo\s+(?:-\S+\s+)*)?(?:reboot|systemctl\s+reboot|shutdown\s+-r(?:\s+(?:now|\+\d+))?|"
+    r"virsh\s+reboot\s+[\w.-]+|restart-computer(?:\s+-force)?)\s*;?", re.IGNORECASE)
 # Anything that makes the request not a plain go-ahead: negation, "keep", "no", a question.
 NOT_A_GO = re.compile(
     r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:удал|снос|снес|стир|сотр|трог|чист|убир|замен|перезапис)|"
@@ -1069,6 +1082,58 @@ def _delete_targets_in(cmd: str, allow_move: bool, allow_delete: bool) -> list[t
     return targets
 
 
+def restart_only(cmd: str) -> bool:
+    """True when every destructive part of cmd (ssh unwrapped) is a plain restart verb and there
+    is at least one. Anything else destructive next to it (rm, DROP, kill, poweroff) -> False."""
+    if re.search(r"\.claude[\\/]projects[\\/]", cmd, re.IGNORECASE):
+        return False
+    if any(delete_targets(x) is not None or any_match(x, DESTRUCTIVE_INTENT) for x in substitutions(cmd)):
+        return False
+    found = False
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        if not seg:
+            continue
+        remote = remote_command(seg)
+        if remote == UNPARSED:
+            return False
+        if remote:
+            if not restart_only(remote):
+                if any_match(remote, DESTRUCTIVE_INTENT) or delete_targets(remote) is not None:
+                    return False
+                continue
+            found = True
+            continue
+        if delete_targets(seg) is not None or hidden_deletes(seg):
+            return False
+        if not any_match(seg, DESTRUCTIVE_INTENT):
+            continue
+        if not RESTART_SEGMENT.fullmatch(seg):
+            return False
+        found = True
+    return found
+
+
+def _restart_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[bool, str]:
+    """A restart passes on the owner's own request, or on a bare yes to my proposal to restart."""
+    if CONFIRM_ONLY.fullmatch(prompt):
+        if not RESTART_MENTION.search(answer):
+            return False, "a bare 'yes' to an answer that proposed no restart"
+    elif NOT_A_GO.search(prompt) or NOT_A_RESTART_GO.search(prompt):
+        return False, "the request negates, hesitates or asks a question"
+    elif not RESTART_INTENT.search(prompt):
+        return False, "the latest request does not ask to restart"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "action": "restart",
+                                 "request": prompt[:300], "command": cmd[:500]},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, "restart"
+
+
 def _claude_limit(path: str) -> str | None:
     """Owner decision 2026-10-07: a project's .claude (handoffs, roster, worktrees) may be
     cleaned on request. The home one (rules, hooks, transcripts, settings) stays protected,
@@ -1128,6 +1193,8 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     if not req:
         return False, "no human prompt in the transcript"
     prompt, answer = req
+    if restart_only(cmd):
+        return _restart_approval(cmd, prompt, answer, event)
     listed, why = list_delete_request(cmd, prompt, answer)
     if listed is None:
         return False, why
@@ -1260,6 +1327,9 @@ def main() -> None:
         "(deletion-list: <путь> sha256:<хэш>) и после его «да» выполни "
         "`python ~/.claude/claude-code-config/scripts/delete_from_list.py <список> --sha <хэш>`. "
         "Маркеры в команде, env и файлы агента не являются одобрением.\n\n"
+        "Перезапуск (reboot, systemctl reboot, shutdown -r, virsh reboot <vm>, Restart-Computer) "
+        "проходит, если последнее сообщение владельца просит перезапустить или отвечает «да» на мой "
+        "ответ с предложением перезапуска, и в команде нет ничего разрушительного, кроме перезапуска.\n\n"
         "Без просьбы проходят только routine build/cache/temp targets; DROP/docker/git/kill "
         "и корни дисков/домашние папки/маски не проходят никогда."
     )
@@ -1665,6 +1735,27 @@ def self_test() -> int:
     if approved_by_owner(f"rm -rf {out_dir}", transcript(f"удали {out_dir}"))[0]:
         fails.append("owner request should refuse (folder cannot be stat'ed, owner names it) (R11)")
     LSTAT = saved_lstat
+    # owner 2026-10-11: a restart on her request (approve) and its negative controls
+    vm_reboot = "ssh gpu-host \"ssh -o BatchMode=yes user@10.0.0.5 'sudo systemctl reboot'\""
+    approve += [
+        ("restart asked", vm_reboot, transcript("да, перезапускай VM.")),
+        ("restart asked in english", "ssh h 'sudo reboot'", transcript("reboot the vm")),
+        ("bare yes to my restart proposal", "virsh reboot build-vm",
+         transcript("да", "Перезапустить VM build-vm сейчас? Очередь пустая.")),
+        ("restart asked, mid-turn message", "ssh h 'shutdown -r now'", queued("перезагрузи сервер")),
+    ]
+    refuse += [
+        ("restart not asked", vm_reboot, transcript("проверь сервер")),
+        ("restart negated", vm_reboot, transcript("не перезапускай VM")),
+        ("restart asked as a question", vm_reboot, transcript("перезапустить VM?")),
+        ("bare yes to an answer without a restart", vm_reboot, transcript("да", "Проверила API.")),
+        ("restart plus a delete", "ssh h 'rm -rf /srv/a/b/c; sudo reboot'", transcript("перезапусти сервер")),
+        ("poweroff is not a restart", "ssh h 'sudo poweroff'", transcript("перезапусти сервер")),
+        ("shutdown without -r", "ssh h 'sudo shutdown now'", transcript("перезапусти сервер")),
+        ("delete request does not cover restart", vm_reboot, transcript("удали /srv/a/b/x.bin")),
+        ("restart hidden in a substitution", "echo $(reboot)", transcript("перезапусти сервер")),
+    ]
+
     for name, cmd, ev in approve:
         if not approved_by_owner(cmd, ev)[0]:
             fails.append(f"owner request should allow ({name}): {approved_by_owner(cmd, ev)[1]}")
