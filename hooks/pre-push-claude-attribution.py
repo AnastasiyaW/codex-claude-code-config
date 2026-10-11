@@ -113,10 +113,13 @@ def commits_in_range(remote_sha: str, local_sha: str) -> list[tuple[str, str]]:
             "-200",
         ]
     else:
+        # only what the server does not have yet: after `git merge origin/main` the range also holds main's
+        # commits, already pushed by someone else and not this push's to fix (Iliukhina, Vikunja 969 c2702)
         revs_cmd = [
             "git", "log",
             "--pretty=format:%H%x1f%B%x1e",
             f"{remote_sha}..{local_sha}",
+            "--not", "--remotes",
         ]
 
     r = run(revs_cmd)
