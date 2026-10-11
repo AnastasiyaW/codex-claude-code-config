@@ -991,6 +991,12 @@ def plain_delete_targets(cmd: str, allow_move: bool = False,
     part is something other than a plain file delete (DROP, docker, git, kill...). With
     allow_move, `mv SRC DST` counts as deleting DST (the replaced file); a request that only
     asks to replace (allow_delete=False) covers no rm at all."""
+    return _delete_targets_in(cmd, allow_move, allow_delete) or None
+
+
+def _delete_targets_in(cmd: str, allow_move: bool, allow_delete: bool) -> list[tuple[str, bool]] | None:
+    """[] = nothing destructive here (e.g. a read-only `ssh host ls`), None = not a plain delete.
+    Keeping the two apart lets a delete sit next to a harmless remote command (2026-10-11)."""
     targets: list[tuple[str, bool]] = []
     if re.search(r"\.claude[\\/]projects[\\/]", cmd, re.IGNORECASE):
         return None  # never let a command that touches the approval source approve itself
@@ -1003,7 +1009,7 @@ def plain_delete_targets(cmd: str, allow_move: bool = False,
         if remote == UNPARSED:
             return None
         if remote:
-            sub = plain_delete_targets(remote, allow_move, allow_delete)
+            sub = _delete_targets_in(remote, allow_move, allow_delete)
             if sub is None:
                 return None
             targets += sub
@@ -1026,7 +1032,7 @@ def plain_delete_targets(cmd: str, allow_move: bool = False,
         verb = seg.split()[0].lower().rsplit("/", 1)[-1].removesuffix(".exe")
         recursive = _is_recursive(verb, seg)
         targets += [(t, recursive) for t in seg_targets]
-    return targets or None
+    return targets
 
 
 def _claude_limit(path: str) -> str | None:
@@ -1443,6 +1449,8 @@ def self_test() -> int:
         ("replace named in prompt", mv_case, transcript("да, замену case.json разрешаю, продолжай сборку")),
         ("yes + full path to my replace proposal", mv_case,
          transcript("да /srv/a/b/case.json", "Нужно перезаписать /srv/a/b/case.json - ответьте да")),
+        ("delete next to a read-only remote command", mv_case + '; ssh h "ls /srv/a/b/"',
+         transcript("замени case.json")),
     ]
     refuse += [
         ("replace request covers no rm", "ssh h 'rm /srv/a/b/case.json'", transcript("замени case.json")),
@@ -1456,6 +1464,9 @@ def self_test() -> int:
          transcript("да /srv/a/b/case.json", "Перезапишу /srv/a/b/case.json")),
         ("negated replace", mv_case, transcript("не заменяй case.json")),
         ("mv with no request", mv_case, transcript("посмотри case.json")),
+        ("approved replace next to a remote DROP", mv_case + "; ssh h \"psql -c 'DROP TABLE users'\"",
+         transcript("замени case.json")),
+        ("only a read-only remote command", 'ssh h "ls /srv/a/b/"', transcript("замени case.json")),
     ]
 
     # owner-approved deletion lists (2026-10-11)
