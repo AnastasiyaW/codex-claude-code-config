@@ -138,6 +138,7 @@ DESTRUCTIVE_INTENT = [
     # Containers / orchestration
     r"\bdocker\s+rm\b",
     r"\bdocker\s+rmi\b",
+    r"\bdocker\s+image\s+(?:rm|remove|prune)\b",
     r"\bdocker\s+volume\s+rm\b",
     r"\bdocker\s+network\s+rm\b",
     r"\bdocker\s+system\s+prune\b",
@@ -677,6 +678,22 @@ NOT_A_RESTART_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит
 RESTART_SEGMENT = re.compile(
     r"(?:sudo\s+(?:-\S+\s+)*)?(?:reboot|systemctl\s+reboot|shutdown\s+-r(?:\s+(?:now|\+\d+))?|"
     r"virsh\s+reboot\s+[\w.-]+|restart-computer(?:\s+-force)?)\s*;?", re.IGNORECASE)
+# Owner 2026-10-12 ("да, почисти старые образы на сервере" was refused): a docker image is
+# rebuildable from git, so asking to clean images approves removing images named by tag or digest.
+# No flags: without -f docker refuses an image a container still uses, so a live service is safe.
+IMAGE_INTENT = re.compile(
+    r"\b(?:почисти(?:те)?|почистить|очисти(?:те)?|удали(?:те)?|удалить|убери(?:те)?|снеси(?:те)?)\b"
+    r"|\bclean\b|\bremove\b|\bdelete\b|\bprune\b", re.IGNORECASE)
+IMAGE_MENTION = re.compile(r"образ|\bimages?\b", re.IGNORECASE)
+IMAGE_REF = r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})"
+# Read-only commands allowed beside an image removal; anything else (sh, tee, python) -> refuse.
+IMAGE_RM_COMPANION = re.compile(
+    r"(?:grep(?:\s+-[A-Za-z]+)*\s+[\w.:-]+|head(?:\s+-n?\s*\d+)?|tail(?:\s+-n?\s*\d+)?|wc\s+-l|"
+    r"df\s+-h(?:\s+/)?|docker\s+(?:images|ps|system\s+df)(?:\s+-a)?)\s*;?")
+# A plain `ssh host 'cmd'` / `ssh host "cmd"`: no options, host of safe characters only.
+SSH_PLAIN = re.compile(r"ssh\s+[A-Za-z0-9][A-Za-z0-9_.@-]*\s+(?:'[^']*'|\"[^\"]*\")\s*")
+IMAGE_RM_SEGMENT = re.compile(
+    r"(?:sudo\s+)?docker\s+(?:rmi|image\s+rm)(?:\s+" + IMAGE_REF + r")+(?:\s+2>&1)?\s*;?")
 # Anything that makes the request not a plain go-ahead: negation, "keep", "no", a question.
 NOT_A_GO = re.compile(
     r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:удал|снос|снес|стир|сотр|трог|чист|убир|замен|перезапис)|"
@@ -1085,6 +1102,18 @@ def _delete_targets_in(cmd: str, allow_move: bool, allow_delete: bool) -> list[t
 def restart_only(cmd: str) -> bool:
     """True when every destructive part of cmd (ssh unwrapped) is a plain restart verb and there
     is at least one. Anything else destructive next to it (rm, DROP, kill, poweroff) -> False."""
+    return _only_segments(cmd, RESTART_SEGMENT)
+
+
+def image_rm_only(cmd: str) -> bool:
+    """True when every destructive part of cmd (ssh unwrapped) is `docker rmi <name:tag|@digest>...`
+    without flags and there is at least one."""
+    return _only_segments(cmd, IMAGE_RM_SEGMENT, IMAGE_RM_COMPANION)
+
+
+def _only_segments(cmd: str, allowed: re.Pattern, companions: re.Pattern | None = None) -> bool:
+    """companions: when given, every non-destructive segment must match it too (review 2026-10-12:
+    an image removal piped into sh passed because harmless-looking tails were never inspected)."""
     if re.search(r"\.claude[\\/]projects[\\/]", cmd, re.IGNORECASE):
         return False
     if any(delete_targets(x) is not None or any_match(x, DESTRUCTIVE_INTENT) for x in substitutions(cmd)):
@@ -1097,8 +1126,16 @@ def restart_only(cmd: str) -> bool:
         if remote == UNPARSED:
             return False
         if remote:
-            if not restart_only(remote):
+            # review 2026-10-12: ssh options can run a local command (ProxyCommand, -F config with
+            # Match exec, quote-split keywords), so beside an image removal only a bare `ssh host '...'`
+            if companions is not None and not SSH_PLAIN.fullmatch(seg):
+                return False
+            if not _only_segments(remote, allowed, companions):
                 if any_match(remote, DESTRUCTIVE_INTENT) or delete_targets(remote) is not None:
+                    return False
+                # review 2026-10-12: a harmless-looking remote tail (ssh h 'sh') must pass the companions too
+                if companions is not None and not all(
+                        companions.fullmatch(x.strip()) for x in split_segments(executable_text(remote)) if x.strip()):
                     return False
                 continue
             found = True
@@ -1106,8 +1143,10 @@ def restart_only(cmd: str) -> bool:
         if delete_targets(seg) is not None or hidden_deletes(seg):
             return False
         if not any_match(seg, DESTRUCTIVE_INTENT):
+            if companions is not None and not companions.fullmatch(seg):
+                return False
             continue
-        if not RESTART_SEGMENT.fullmatch(seg):
+        if not allowed.fullmatch(seg):
             return False
         found = True
     return found
@@ -1132,6 +1171,28 @@ def _restart_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[
     except OSError:
         return False, "cannot write the approval audit record"
     return True, "restart"
+
+
+def _image_rm_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[bool, str]:
+    """Removing docker images passes only on the owner's own request to clean images. A bare yes is
+    not enough: review 2026-10-12 showed my answer's negations ("образы не будут удалены") cannot be
+    parsed reliably, so the owner names images in her own words ("да, почисти старые образы")."""
+    if CONFIRM_ONLY.fullmatch(prompt):
+        return False, "a bare 'yes' does not approve image removal; the request must name images"
+    if NOT_A_GO.search(prompt):
+        return False, "the request negates, hesitates or asks a question"
+    elif not (IMAGE_INTENT.search(prompt) and IMAGE_MENTION.search(prompt)):
+        return False, "the latest request does not ask to remove images"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "action": "docker-image-rm",
+                                 "request": prompt[:300], "command": cmd[:500]},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, "docker image removal"
 
 
 def _claude_limit(path: str) -> str | None:
@@ -1195,6 +1256,8 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     prompt, answer = req
     if restart_only(cmd):
         return _restart_approval(cmd, prompt, answer, event)
+    if image_rm_only(cmd):
+        return _image_rm_approval(cmd, prompt, answer, event)
     listed, why = list_delete_request(cmd, prompt, answer)
     if listed is None:
         return False, why
