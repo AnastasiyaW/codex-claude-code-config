@@ -407,6 +407,26 @@ def delete_targets(segment: str) -> list[str] | None:
     return targets
 
 
+MOVE_FLAGS = {"-f", "--force", "-T", "--no-target-directory", "-v", "--verbose"}
+
+
+def move_overwrite_targets(segment: str) -> list[str] | None:
+    """Destination of `mv [-f|-T|-v] SRC DST`: the file a replacement overwrites (owner 2026-10-11).
+    None for any other shape (several sources, -t, unknown flags), which stays unapproved."""
+    # simplification: POSIX mv only; a Move-Item replacement still needs an explicit delete request
+    try:
+        toks = [t.strip("'\"") for t in shlex.split(segment, posix=False)]
+    except ValueError:
+        return None
+    if not toks or toks[0].rsplit("/", 1)[-1] != "mv":
+        return None
+    flags = [t for t in toks[1:] if t.startswith("-")]
+    operands = [t for t in toks[1:] if not t.startswith("-")]
+    if any(f not in MOVE_FLAGS for f in flags) or len(operands) != 2:
+        return None
+    return [operands[1]]
+
+
 def is_ephemeral_docker_rm(segment: str) -> bool:
     """Allow exactly the owner-approved stopped-container cleanup, never force.
 
@@ -638,9 +658,15 @@ DELETE_INTENT = re.compile(
     r"\b(?:удали(?:те)?|удаляй(?:те)?|удалить|удалим|снеси(?:те)?|снести|сотри(?:те)?|стереть|"
     r"почисти(?:те)?|очисти(?:те)?|убери(?:те)?|убрать)\b|"
     r"\bdelete\b|\bremove\b|\brm\b|\bwipe\b|\berase\b", re.IGNORECASE)
+# Owner 2026-10-11 ("замену case.json разрешаю" was refused): asking to replace a file approves
+# overwriting it with mv, never an rm of it.
+REPLACE_INTENT = re.compile(
+    r"\b(?:замени(?:те)?|заменить|заменим|замену|перезапиши(?:те)?|перезаписать|перезапись)\b|"
+    r"\breplace\b|\boverwrite\b", re.IGNORECASE)
+REPLACE_MENTION = re.compile(r"замен|перезапис|replac|overwrit", re.IGNORECASE)
 # Anything that makes the request not a plain go-ahead: negation, "keep", "no", a question.
 NOT_A_GO = re.compile(
-    r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:удал|снос|снес|стир|сотр|трог|чист|убир)|"
+    r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:удал|снос|снес|стир|сотр|трог|чист|убир|замен|перезапис)|"
     r"\bнельзя\b|\bнет\b|\bоставь|\bпогоди|\bподожди|\bdon'?t\b|\bdo\s+not\b|\bnever\b|\bkeep\b|\bno\b|\?",
     re.IGNORECASE)
 # "убери X из файла" / "remove the print from train.py" edits a file; only a full path counts then.
@@ -651,6 +677,10 @@ DELETE_MENTION = re.compile(r"удал|снес|сотр|стер|почист|�
 CONFIRM_ONLY = re.compile(
     r"\s*(?:да|ага|ок|окей|ok|okay|yes|подтверждаю|удаляй|давай|можно)"
     r"(?:[\s,]+(?:да|удаляй|давай|можно|ок|ok|yes|подтверждаю|вс[её]|по\s+списку|список))*\s*[.!]*\s*",
+    re.IGNORECASE)
+# "да /full/path" to my proposal: a go-ahead that names exactly what it covers (owner 2026-10-11).
+CONFIRM_PATHS = re.compile(
+    r"\s*(?:да|ок|ok|yes|подтверждаю|удаляй|заменяй)[\s,:]+(?:[A-Za-z]:)?[\\/]\S+(?:\s+(?:[A-Za-z]:)?[\\/]\S+)*\s*",
     re.IGNORECASE)
 # Owner decision 2026-10-11: a long delete list goes into a file instead of the chat. My answer
 # shows `deletion-list: <path> sha256:<hex>`; a bare go-ahead to that answer approves exactly that
@@ -955,9 +985,12 @@ def _is_recursive(verb: str, seg: str) -> bool:
     return False
 
 
-def plain_delete_targets(cmd: str) -> list[tuple[str, bool]] | None:
+def plain_delete_targets(cmd: str, allow_move: bool = False,
+                         allow_delete: bool = True) -> list[tuple[str, bool]] | None:
     """(target, recursive) for every delete in cmd (ssh unwrapped), or None if any destructive
-    part is something other than a plain file delete (DROP, docker, git, kill, mv...)."""
+    part is something other than a plain file delete (DROP, docker, git, kill...). With
+    allow_move, `mv SRC DST` counts as deleting DST (the replaced file); a request that only
+    asks to replace (allow_delete=False) covers no rm at all."""
     targets: list[tuple[str, bool]] = []
     if re.search(r"\.claude[\\/]projects[\\/]", cmd, re.IGNORECASE):
         return None  # never let a command that touches the approval source approve itself
@@ -970,12 +1003,19 @@ def plain_delete_targets(cmd: str) -> list[tuple[str, bool]] | None:
         if remote == UNPARSED:
             return None
         if remote:
-            sub = plain_delete_targets(remote)
+            sub = plain_delete_targets(remote, allow_move, allow_delete)
             if sub is None:
                 return None
             targets += sub
             continue
         seg_targets = delete_targets(seg)
+        if seg_targets is None and allow_move:
+            moved = move_overwrite_targets(seg)
+            if moved is not None:
+                targets += [(t, False) for t in moved]
+                continue
+        if seg_targets is not None and not allow_delete:
+            return None
         if seg_targets is None and hidden_deletes(seg):
             return None
         seg_hit = any_match(seg, DESTRUCTIVE_INTENT)
@@ -1058,17 +1098,20 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         argv = shlex.split(cmd.strip().lstrip("&").strip().replace("\\", "/"), posix=True)
         extra = {"list": _list_key(argv[2]), "sha": argv[4].lower()}
         return _approve(listed, "\n".join(t for t, _ in listed), False, prompt, cmd, event, extra=extra)
-    if CONFIRM_ONLY.fullmatch(prompt):
-        if not DELETE_MENTION.search(answer):
+    bare, with_paths = CONFIRM_ONLY.fullmatch(prompt), CONFIRM_PATHS.fullmatch(prompt)
+    if bare or with_paths:
+        allow_delete, allow_move = bool(DELETE_MENTION.search(answer)), bool(REPLACE_MENTION.search(answer))
+        if not (allow_delete or allow_move):
             return False, "a bare 'yes' to an answer that proposed no deletion"
-        named_in, from_phrase = answer, False
+        named_in, from_phrase = (answer if bare else prompt), False
     elif NOT_A_GO.search(prompt):
         return False, "the request negates, hesitates or asks a question"
-    elif DELETE_INTENT.search(prompt):
+    elif DELETE_INTENT.search(prompt) or REPLACE_INTENT.search(prompt):
         named_in, from_phrase = prompt, bool(FROM_PHRASE.search(prompt))
+        allow_delete, allow_move = bool(DELETE_INTENT.search(prompt)), bool(REPLACE_INTENT.search(prompt))
     else:
         return False, "the latest request does not ask to delete"
-    targets = plain_delete_targets(cmd)
+    targets = plain_delete_targets(cmd, allow_move, allow_delete)
     if not targets:
         return False, "not a plain file delete"
     # A general go-ahead is a bare yes to my proposal, or a request that names no file itself
@@ -1393,6 +1436,26 @@ def self_test() -> int:
         ("owner named a file, its suffix is not covered", "rm /srv/a/b/dev.sft", transcript("удали flux1-dev.sft")),
         ("owner named a file, case differs on POSIX", "rm /srv/a/b/model.bin", transcript("удали Model.bin")),
         ("general yes, remote database folder by path", "ssh h 'rm -rf /srv/pgdata/main'", transcript("да", "Удалю старое")),
+    ]
+    # owner 2026-10-11: replacing a named file with mv (approve) and its negative controls
+    mv_case = "ssh h 'mv -f /srv/a/b/case.json.tmp /srv/a/b/case.json && sha256sum /srv/a/b/case.json'"
+    approve += [
+        ("replace named in prompt", mv_case, transcript("да, замену case.json разрешаю, продолжай сборку")),
+        ("yes + full path to my replace proposal", mv_case,
+         transcript("да /srv/a/b/case.json", "Нужно перезаписать /srv/a/b/case.json - ответьте да")),
+    ]
+    refuse += [
+        ("replace request covers no rm", "ssh h 'rm /srv/a/b/case.json'", transcript("замени case.json")),
+        ("replace covers only the named file", "ssh h 'mv -f /srv/a/b/x.tmp /srv/a/b/other.json'",
+         transcript("замени case.json")),
+        ("mv with several sources", "mv /srv/a/b/a.json /srv/a/b/case.json /srv/a/b/dir", transcript("замени case.json")),
+        ("mv -t form", "mv -t /srv/a/b /srv/a/b/case.json.tmp", transcript("замени case.json")),
+        ("yes + path to an answer that proposed nothing", mv_case,
+         transcript("да /srv/a/b/case.json", "Скачала модели.")),
+        ("yes + path covers only that path", "ssh h 'mv -f /srv/a/b/t /srv/a/b/other.json'",
+         transcript("да /srv/a/b/case.json", "Перезапишу /srv/a/b/case.json")),
+        ("negated replace", mv_case, transcript("не заменяй case.json")),
+        ("mv with no request", mv_case, transcript("посмотри case.json")),
     ]
 
     # owner-approved deletion lists (2026-10-11)
