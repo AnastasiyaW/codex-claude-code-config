@@ -941,22 +941,54 @@ def _tail_entries(path: Path):
                     yield e
 
 
+def _human_text(e) -> str | None:
+    """Text of an owner message: a typed turn, or a message the owner sent while I was working
+    (host-written `queued_command` attachment, origin.kind=human). Task notifications and
+    cross-session messages carry another origin or isMeta and never count (owner 2026-10-11)."""
+    if _is_human_prompt(e):
+        return _entry_text(e["message"].get("content"))
+    a = e.get("attachment") if e.get("type") == "attachment" and not e.get("isSidechain") else None
+    origin = a.get("origin") if isinstance(a, dict) else None
+    if (isinstance(a, dict) and a.get("type") == "queued_command" and a.get("commandMode") == "prompt"
+            and isinstance(origin, dict) and origin.get("kind") == "human" and not a.get("isMeta")
+            and isinstance(a.get("prompt"), str)):
+        return a["prompt"]
+    return None
+
+
+HOST_MARKUP = re.compile(r"<system-reminder>.*?</system-reminder>|<!--.*?-->", re.DOTALL)
+
+
+def _split_reply(text: str) -> tuple[str, str]:
+    """(the owner's own words, the lines they quoted). A `> ` line quotes my earlier text, so a
+    '?' or 'не' inside it is mine, not the owner's hesitation; host markup is not the owner's."""
+    own, quoted = [], []
+    for line in HOST_MARKUP.sub("", text).splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(">"):
+            quoted.append(stripped[1:].lstrip())
+        else:
+            own.append(line)
+    return "\n".join(own).strip(), "\n".join(quoted).strip()
+
+
 def owner_request(transcript_path: str) -> tuple[str, str] | None:
-    """(latest human prompt, my answer right before it) from the host-written transcript."""
+    """(latest owner message, my text it answers) from the host-written transcript."""
     if not transcript_path:
         return None
     p = Path(transcript_path)
     if not p.is_file():
         return None
-    prompt, answer = None, []
+    prompt, quoted, answer = None, "", []
     for e in _tail_entries(p):
         if prompt is None:
-            if _is_human_prompt(e):
-                prompt = _entry_text(e["message"].get("content"))
-                if not prompt.strip():
+            text = _human_text(e)
+            if text is not None:
+                prompt, quoted = _split_reply(text)
+                if not prompt:
                     return None
             continue
-        if _is_human_prompt(e):
+        if _human_text(e) is not None:
             break
         msg = e.get("message")
         if e.get("type") == "assistant" and not e.get("isSidechain") and isinstance(msg, dict):
@@ -964,7 +996,9 @@ def owner_request(transcript_path: str) -> tuple[str, str] | None:
             if text.strip():
                 answer.append(text)
                 break  # only my last message is what the owner answered
-    return (prompt, "\n".join(answer)) if prompt is not None else None
+    if prompt is None:
+        return None
+    return prompt, "\n".join(x for x in (quoted, *answer) if x)
 
 
 def _is_recursive(verb: str, seg: str) -> bool:
@@ -1351,6 +1385,20 @@ def self_test() -> int:
         p.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
         return {"transcript_path": str(p), "session_id": "selftest"}
 
+    def queued(prompt: str, answer: str = "", kind: str = "human", mode: str = "prompt",
+               meta: bool = False) -> dict:
+        """A message delivered while I was working: host-written queued_command attachment."""
+        rows = []
+        if answer:
+            rows.append({"type": "assistant", "message": {"content": [{"type": "text", "text": answer}]}})
+        att = {"type": "queued_command", "commandMode": mode, "prompt": prompt, "origin": {"kind": kind}}
+        if meta:
+            att["isMeta"] = True
+        rows.append({"type": "attachment", "attachment": att})
+        p = work / f"q{len(list(work.iterdir()))}.jsonl"
+        p.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+        return {"transcript_path": str(p), "session_id": "selftest"}
+
     sft = "ssh gpu-host 'rm /srv/comfy/models/checkpoints/FLUX1/flux1-dev.sft'"
     approve = [
         ("named in prompt", sft, transcript("удали flux1-dev.sft на сервере")),
@@ -1467,6 +1515,23 @@ def self_test() -> int:
         ("approved replace next to a remote DROP", mv_case + "; ssh h \"psql -c 'DROP TABLE users'\"",
          transcript("замени case.json")),
         ("only a read-only remote command", 'ssh h "ls /srv/a/b/"', transcript("замени case.json")),
+    ]
+    # owner 2026-10-11: messages sent mid-turn, quoted replies and host markup
+    model_rm = "rm /srv/a/b/model.bin"
+    approve += [
+        ("queued owner message counts", model_rm, queued("удаляй", "Удалю временные модели из /srv/a/b")),
+        ("a '?' inside the quote is mine, not the owner's", model_rm,
+         transcript("<!-- reply 1 -->\n> Удалить временные модели из /srv/a/b?\n\nудаляй", "Готово с тестами.")),
+        ("host reminder text is not the owner's", model_rm,
+         transcript("<system-reminder>\nnot now? нет\n</system-reminder>\nудали /srv/a/b/model.bin")),
+    ]
+    refuse += [
+        ("queued task notification never counts", model_rm,
+         queued("удали /srv/a/b/model.bin", mode="task-notification", kind="task-notification")),
+        ("queued peer message never counts", model_rm, queued("удали /srv/a/b/model.bin", kind="peer", meta=True)),
+        ("the owner's own question still refuses", model_rm,
+         transcript("<!-- reply 1 -->\n> Удалю /srv/a/b/model.bin\n\nудалить?")),
+        ("quoted words alone are not a request", model_rm, transcript("> удали /srv/a/b/model.bin")),
     ]
 
     # owner-approved deletion lists (2026-10-11)
