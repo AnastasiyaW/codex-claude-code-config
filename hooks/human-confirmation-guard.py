@@ -1020,7 +1020,7 @@ def target_hard_limit(target: str) -> str | None:
     if any(c not in {".", ".."} and (c.endswith((".", " ")) or re.search(r"~\d", c)) for c in t.split("/")):
         return "ambiguous Windows name (trailing dot/space or 8.3 short name)"
     wsl = re.match(r"^/mnt/([a-zA-Z])(/.*)?$", t)
-    # review 2026-10-11 F3: on Windows "/Users/x/AppData/Roaming" is "<current drive>:/Users/...";
+    # review 2026-10-11 F3: on Windows a drive-less "/<home>/AppData/Roaming" is "<current drive>:/<home>/...";
     # judge a drive-less path as if it were on a drive too.
     on_drive = f"c:{t}" if sys.platform == "win32" and t.startswith("/") and not t.startswith("//") else None
     if (PROTECTED.search(t) or (wsl and PROTECTED.search(f"{wsl.group(1)}:{wsl.group(2) or '/'}"))
@@ -1441,7 +1441,7 @@ def self_test() -> int:
     refuse.append(("list edited after it was shown", call.replace(str(lst.as_posix()), changed.as_posix()).replace(dig, cdig),
                    transcript("да", f"Удалю. deletion-list: {changed.as_posix()} sha256:{cdig}")))
     if sys.platform == "win32":
-        refuse.append(("drive-less AppData Roaming (F3)", "rm /Users/someone/AppData/Roaming/app/x/state.bin",
+        refuse.append(("drive-less AppData Roaming (F3)", "rm " + HOME_FIX[2:] + "/AppData/Roaming/app/x/state.bin",
                        transcript("удали state.bin")))
         dl = DELETION_LIST_DIR / "driveless.txt"
         dl.write_text("/tmp/work/run1\n", encoding="utf-8")
@@ -1563,11 +1563,11 @@ def self_test() -> int:
         f"git -c alias.zz='!python {LIST_SCRIPT.as_posix()} {lst.as_posix()} --sha {dig}' zz",
         "python -c \"import subprocess; subprocess.run(['rm','-rf','C:/w/proj/data'])\"",
         "python -c \"import os; os.system('del C:/w/proj/db.sqlite')\"",
-        "Add-Content C:/Users/x/.claude/logs/deletion-approvals.jsonl '{}'",
+        "Add-Content " + HOME_FIX + "/.claude/logs/deletion-approvals.jsonl '{}'",
     ]
     sneaky += [
         # review round 11: names split by shell quoting or built from a variable; `&` after git
-        "printf x >> C:/Users/x/.claude/logs/deletion-app''rovals.jsonl",
+        "printf x >> " + HOME_FIX + "/.claude/logs/deletion-app''rovals.jsonl",
         f"python {LIST_SCRIPT.parent.as_posix()}/delete_from_''list.py {lst.as_posix()} --sha {dig}",
         f"python {LIST_SCRIPT.parent.as_posix()}/${{N}}list.py {lst.as_posix()} --sha {dig}",
         f"git status & python {LIST_SCRIPT.as_posix()} {lst.as_posix()} --sha {dig}",
