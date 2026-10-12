@@ -95,7 +95,10 @@ DESTRUCTIVE_INTENT = [
     # it is a strict read-only --show call or a one-line git command (review round 9).
     r"\brm\s+-[a-z]*r[a-z]*\s+",      # rm -rf, rm -r, rm -Rf, etc
     r"\brmdir\s+",
-    r"(?:^|[;&|])\s*mv\s+",
+    r"(?:^|[;&|])\s*mv\s+",  # wrapped forms (sudo/env/(/{/\mv//bin/mv) are unwrapped by command_core()
+    # review 2026-10-12: `ls | xargs mv -t /x` and `find . -exec mv {} /x \;` passed untouched
+    r"\bxargs(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+mv\s+",
+    r"-exec(?:dir)?\s+(?:sudo\s+)?mv\s+",
     r"\bmove-item\b",
     # PowerShell, which this guard explicitly accepts as a tool and which is the
     # primary shell on this machine. An independent review scanned the raw list
@@ -428,6 +431,98 @@ def move_overwrite_targets(segment: str) -> list[str] | None:
     return [operands[1]]
 
 
+# Owner 2026-10-12 ("поправь хук, чтобы ты такое делала сама" after a deploy swap was refused):
+# `test ! -e f.bak && cp -p f f.bak && mv f.new f` loses nothing - the old content survives in a
+# backup that provably did not exist before (review 2026-10-12: cp onto an existing file destroys
+# it) - so that mv is not a deletion. && only (each step runs only if the previous succeeded);
+# plain names only (no glob, variable, quote or redirect). The three steps must be adjacent: any
+# step between them (cd, pushd, touch, a redirect) could move or rewrite what the check proved, so
+# none is allowed. Approval is by step position, so an identical second mv later in the command is
+# judged on its own (review 2026-10-12).
+# No -a/-r: a directory (or a symlink to one) is then refused by cp and && stops the chain;
+# `cp -a link` would copy the link, not the files behind it (review 2026-10-12).
+BACKUP_COPY_FLAGS = {"-p", "--preserve"}
+PLAIN_WORD = re.compile(r"[A-Za-z0-9_./~+-]+")
+
+
+# review 2026-10-12: `(mv n f)`, `{ mv n f; }`, `sudo -u root mv`, `sudo -n mv`, `\mv`, `/bin/mv`,
+# `env -u X mv`, `timeout 5 mv`, `nice -n 9 mv`, `FOO=1 mv`, `! mv`, `then mv`, `eval 'mv ..'` all
+# passed because the patterns only saw a bare `mv` at a segment start. Matching the raw text would
+# also hit quoted words, so the segment start is walked word by word instead.
+_MV_WRAPPERS = {"sudo", "env", "nice", "ionice", "stdbuf", "timeout", "nohup", "time", "command",
+                "builtin", "exec", "eval", "!", "then", "do", "else", "elif", "(", "{", ""}
+
+
+def command_core(seg: str) -> str:
+    """`mv ...` when the command a segment runs is mv behind wrappers, flags (with one value each),
+    assignments or numbers - `sudo -u r /usr/bin/env -i /bin/mv a b` -> `mv a b`; else seg."""
+    toks = seg.split()
+    after_flag = False
+    for i, tok in enumerate(toks):
+        word = tok.lstrip("({\\'\"").rsplit("/", 1)[-1]
+        if word == "mv":
+            return " ".join(["mv"] + toks[i + 1:])
+        if word in _MV_WRAPPERS:
+            after_flag = False
+        elif tok.startswith("-"):
+            after_flag = True
+        elif re.fullmatch(r"\w+=\S*|\d+[smhd]?", tok):
+            after_flag = False
+        elif after_flag:  # the value of the previous flag (`-u root`, `-n 9`)
+            after_flag = False
+        else:
+            return seg  # the command is something else (`git mv`, `grep mv`)
+    return seg
+
+
+def _norm_name(path: str) -> str:
+    return os.path.normpath(path.replace("\\", "/")).replace("\\", "/")
+
+
+def backed_up_moves(text: str) -> set[int]:
+    """Index of the mv step when the WHOLE of text is `[cd DIR &&] test ! -e BAK && cp -p DST BAK
+    && mv NEW DST` (or `[ ! -e BAK ]`), else nothing.
+
+    Whole-command shape, by review 2026-10-12: a step after the mv could clobber BAK without
+    naming it (`> ?`, `> B`, $'\\x62'); a step before the test could redefine `test`/`cp` (a shell
+    function, PATH) so no backup is made. Only a plain `cd` may come first."""
+    steps = [(seg.split(), sep) for seg, sep in split_steps(executable_text(text))]
+    while steps and not steps[-1][0]:
+        steps.pop()
+    mv_index = len(steps) - 1  # index in decide()'s segment list (same split)
+    if len(steps) == 4 and len(steps[0][0]) == 2 and steps[0][0][0] == "cd" \
+            and PLAIN_WORD.fullmatch(steps[0][0][1]) and steps[1][1] == "&&":
+        steps = steps[1:]
+    if len(steps) != 3:
+        return set()
+    (test, _), (cp, cp_sep), (mv, mv_sep) = steps
+    if cp_sep != "&&" or mv_sep != "&&" or not all(PLAIN_WORD.fullmatch(t) for t in cp + mv):
+        return set()  # also rejects > < $ * quotes
+    if test[:3] == ["test", "!", "-e"] and len(test) == 4:
+        bak = test[3]
+    elif test[:3] == ["[", "!", "-e"] and len(test) == 5 and test[4] == "]":
+        bak = test[3]
+    else:
+        return set()
+    cp_ops = [t for t in cp[1:] if not t.startswith("-")]
+    mv_ops = [t for t in mv[1:] if not t.startswith("-")]
+    if cp[0].rsplit("/", 1)[-1] != "cp" or len(cp_ops) != 2 \
+            or any(t not in BACKUP_COPY_FLAGS for t in cp[1:] if t.startswith("-")):
+        return set()
+    dst = move_overwrite_targets(" ".join(mv))  # it already accepts /bin/mv
+    if mv[0].rsplit("/", 1)[-1] != "mv" or not dst or len(mv_ops) != 2:
+        return set()
+    # Equalities that GRANT the exemption compare raw strings: normpath would make `x/../f` equal
+    # `f` although x may be a symlink, and on a case-sensitive disk `B` is not `b`. Differences it
+    # REQUIRES are normalised and case-folded, the cautious direction (review rounds 4-5).
+    src, new = cp_ops[0], mv_ops[0]
+    if cp_ops[1] != bak or dst[0] != src:
+        return set()
+    if _norm_name(new).casefold() in (_norm_name(bak).casefold(), _norm_name(src).casefold()):
+        return set()
+    return {mv_index}
+
+
 def is_ephemeral_docker_rm(segment: str) -> bool:
     """Allow exactly the owner-approved stopped-container cleanup, never force.
 
@@ -511,8 +606,14 @@ def remote_command(segment: str) -> str | None:
 def split_segments(text: str) -> list[str]:
     """Split on && || ; | newline, but never inside '...' or "..." (a commit
     message saying "step; del old" is not a del command - review round 2)."""
-    out: list[str] = []
+    return [seg for seg, _ in split_steps(text)]
+
+
+def split_steps(text: str) -> list[tuple[str, str]]:
+    """split_segments with the separator that preceded each segment ("" for the first)."""
+    out: list[tuple[str, str]] = []
     buf: list[str] = []
+    sep = ""
     quote = None
     i = 0
     while i < len(text):
@@ -529,17 +630,17 @@ def split_segments(text: str) -> list[str]:
             quote = c
             buf.append(c)
         elif text.startswith(("&&", "||"), i):
-            out.append("".join(buf))
-            buf = []
+            out.append(("".join(buf), sep))
+            buf, sep = [], text[i:i + 2]
             i += 2
             continue
         elif c in ";|\n":
-            out.append("".join(buf))
-            buf = []
+            out.append(("".join(buf), sep))
+            buf, sep = [], c
         else:
             buf.append(c)
         i += 1
-    out.append("".join(buf))
+    out.append(("".join(buf), sep))
     return out
 
 
@@ -607,6 +708,7 @@ def decide(cmd: str) -> tuple[bool, str | None]:
     if GLOB_SCRIPT.search(cmd):  # review round 10: the script name hidden behind a shell glob
         return False, "python script given by a glob"
     whole_hit = any_match(cmd, DESTRUCTIVE_INTENT, command=True)
+    safe_moves = backed_up_moves(cmd)
     flagged = False
     for inner in substitutions(cmd):
         ok, ihit = decide(inner)
@@ -618,7 +720,7 @@ def decide(cmd: str) -> tuple[bool, str | None]:
         # executable_text (shared helper) does not honour \" and would mask `echo \"a; rm x; b\"`
         # as a quoted echo argument; with escaped quotes present judge the raw split as well.
         segments += split_segments(cmd)
-    for seg in (s.strip() for s in segments):
+    for idx, seg in enumerate(s.strip() for s in segments):  # idx past the first split: no exemption
         if not seg:
             continue
         if is_ephemeral_docker_rm(seg):
@@ -633,12 +735,15 @@ def decide(cmd: str) -> tuple[bool, str | None]:
                 return False, rhit or "remote-delete"
             flagged = flagged or bool(rhit)
             continue
+        if idx in safe_moves:
+            flagged = True
+            continue
         targets = delete_targets(seg)
         if targets is None:
             hidden = hidden_deletes(seg)
             if hidden:
                 targets = [t for h in hidden for t in (delete_targets(h) or [])] or []
-        seg_hit = any_match(seg, DESTRUCTIVE_INTENT)
+        seg_hit = any_match(seg, DESTRUCTIVE_INTENT) or any_match(command_core(seg), DESTRUCTIVE_INTENT)
         if targets is None and not seg_hit:
             continue
         flagged = True
@@ -1088,7 +1193,7 @@ def _delete_targets_in(cmd: str, allow_move: bool, allow_delete: bool) -> list[t
             return None
         if seg_targets is None and hidden_deletes(seg):
             return None
-        seg_hit = any_match(seg, DESTRUCTIVE_INTENT)
+        seg_hit = any_match(seg, DESTRUCTIVE_INTENT) or any_match(command_core(seg), DESTRUCTIVE_INTENT)
         if seg_targets is None and not seg_hit:
             continue
         if not seg_targets:
@@ -1425,6 +1530,8 @@ def main() -> None:
         "Перезапуск (reboot, systemctl reboot, shutdown -r, virsh reboot <vm>, Restart-Computer) "
         "проходит, если последнее сообщение владельца просит перезапустить или отвечает «да» на мой "
         "ответ с предложением перезапуска, и в команде нет ничего разрушительного, кроме перезапуска.\n\n"
+        "Подмена файла без просьбы: `test ! -e BAK && cp -p DST BAK && mv NEW DST` - три соседних "
+        "шага, простые имена (старое содержимое остаётся в свежей копии).\n\n"
         "Без просьбы проходят только routine build/cache/temp targets; DROP/docker/git/kill "
         "и корни дисков/домашние папки/маски не проходят никогда."
     )
@@ -1454,8 +1561,96 @@ def self_test() -> int:
         "cat > s.sh <<'EOF'\nrm -rf /workspace/sample/project\nEOF",   # heredoc body is not executed
         "ls -la",
         "tailscale ssh ws@bench-vm docker rm bench-a bench-a2 bench-b",
+        # owner 2026-10-12: deploy swap with the old file copied aside first
+        "test ! -e app.py.bak-1 && cp -p app.py app.py.bak-1 && mv app.py.new app.py",
+        "[ ! -e app.py.bak ] && cp app.py app.py.bak && mv -f app.py.new app.py",
+        "ssh host 'cd /opt/app && test ! -e app.py.bak-1 && cp -p app.py app.py.bak-1 && mv app.py.new app.py'",
+        "test ! -e f.bak && cp -p f f.bak && /bin/mv f.new f",            # round 6: path-qualified mv
+        "grep -e x mv.log",
+        # round 5 false positives: quoted words, xargs/sh -c not running mv
+        'git commit -m "docs: { mv old new } example"',
+        "echo a | sed 's/a/(mv b)/'",
+        "echo ok | awk '{ mv = 1; print mv }'",
+        "ls | xargs grep mv file",
+        "git mv a b",
+        "sudo git mv a b",
     ]
     block_cases = [
+        # the swap is safe only when a fresh backup is guaranteed to exist and stay intact
+        "mv app.py.new app.py",
+        "sudo mv app.py.new app.py",                                     # review 2026-10-12
+        "cp -p app.py app.py.bak && mv app.py.new app.py",               # backup may overwrite a file
+        "cp -p app.py keep.db && mv app.py.new app.py",
+        "test ! -e b && cp -p app.py b; mv app.py.new app.py",           # ; - mv runs even if cp failed
+        "test ! -e b && cp -p app.py b || mv app.py.new app.py",
+        "test ! -e b; cp -p app.py b && mv app.py.new app.py",           # the test does not gate cp
+        "test ! -e b && touch b && cp -p app.py b && mv app.py.new app.py",
+        "test ! -e b && cp -p app.py b && cd /srv && mv app.py.new app.py",  # another app.py
+        "test ! -e b && cp -p app.py b && echo x > b && mv app.py.new app.py",
+        "test ! -e b && cp -p app.py b && cp -p other b && mv app.py.new app.py",
+        "test ! -e $B && cp -p app.py $B && mv app.py.new app.py",
+        "test ! -e b && cp -p app.py b && mv b app.py",                  # moving the backup itself
+        "test ! -e b && cp -p app.py b && mv a.new app.py && mv b.new app.py",
+        "test ! -e b && cp -p f b && mv n f && touch n && mv n f",       # review: same text, 2nd swap
+        "test ! -e b && cp -r app.py b && mv app.py.new app.py",         # unknown cp flag
+        "test ! -e b && cp -p f b && pushd /x && mv n f",                # another f
+        "test ! -e b && pushd /x && cp -p f b && mv n f",                # b checked elsewhere
+        "test ! -e b && cp -p f b && mv \"n f\" f",
+        "test ! -e b && cp -p f keep.db && mv n f",                       # checked b, copied onto keep.db
+        "test ! -e b && cp -p f b && mv n f && cp other b",               # round 3: backup overwritten after
+        "test ! -e b && cp -p f b && mv n f && sed -i s/a/c/ b",
+        "test ! -e b && cp -p f b && mv n f && cp -p f b",
+        "test ! -e b && cp -p f b && mv n f && cat /dev/null > ?",       # round 4: unnamed clobber
+        "test ! -e b && cp -p f b && mv n f && cat /dev/null > B",
+        "test ! -e b && cp -p f b && mv n f && python -m py_compile f",  # nothing after the swap at all
+        "test ! -e b && cp -p f b && mv B f",                             # NEW is the backup (case)
+        "test ! -e b && cp -p f b && mv ./b f",
+        "test ! -e B && cp -p f b && mv n f",                             # checked B, wrote b (Linux)
+        "test ! -e b && cp -p f b && mv n F",
+        # review round 5: redefined test/cp before the check; `..` aliasing; wrapped mv
+        "cp() { :; }; test ! -e b && cp -p f b && mv n f",
+        "test() { return 0; }; test ! -e keep.db && cp -p app.py keep.db && mv app.py.new app.py",
+        "export PATH=/tmp/d:$PATH && test ! -e b && cp -p f b && mv n f",
+        "ln -s ../outer/sub x && test ! -e b && cp -p x/../f b && mv n f",
+        "test ! -e b && cp -p x/../f b && mv n f",
+        "cd /a && cd /b && test ! -e b && cp -p f b && mv n f",
+        "true && cp -p f keep.db && mv n f",                              # no absence test at all
+        "cd $D && test ! -e b && cp -p f b && mv n f",                    # literal dir only
+        "\\mv n f",
+        "/bin/mv n f",
+        "command mv n f",
+        "env X=1 mv n f",
+        "nohup mv n f",
+        "exec mv n f",
+        "time mv n f",
+        # round 6: wrapper words the first version mis-parsed or did not know
+        "sudo -n mv /srv/prod/a /srv/prod/b",
+        "sudo -- mv a b",
+        "sudo -u root -- mv a b",
+        "ssh h 'sudo -n mv a b'",
+        "/usr/bin/env -i mv a b",
+        "env -u HOME mv a b",
+        "nice -n 10 mv a b",
+        "timeout 5 mv a b",
+        "stdbuf -o0 mv a b",
+        "command -p mv a b",
+        "exec -a x mv a b",
+        "FOO=1 mv a b",
+        "! mv a b",
+        "if true; then mv a b; fi",
+        "for x in 1; do mv a b; done",
+        "eval 'mv a b'",
+        "true || test ! -e keep.db && cp -p app.py keep.db && mv app.py.new app.py",  # test skipped
+        "ssh h 'false | test ! -e b && cp -p f b && mv n f' && true || test ! -e z && cp -p q z && mv w q",
+        "test ! -e b && cp -a d b && mv n d",                             # -a copies a link, not files
+        "(mv n f)",
+        "{ mv n f; }",
+        "bash -c 'mv n f'",
+        "sudo -u root mv n f",
+        "(sudo mv n f)",
+        "ls | xargs mv -t /x",
+        "find . -name '*.py' -exec mv {} /x \\;",
+        "test ! -e b && cp -p app.py b && mv app.py.new other.py",       # other.py had no backup
         f"rm -rf {tmp}",                                   # the temp root itself
         f"rm -rf {tmp}/../Users",                           # traversal
         "rm -rf $TMPDIR/x",                                 # unexpanded variable
