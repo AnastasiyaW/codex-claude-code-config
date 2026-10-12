@@ -216,7 +216,11 @@ _PRINTS_OR_SEARCHES = re.compile(
     # check, which still refuses `{ echo 'x'; } | sh`.
     r"^\s*[({]?\s*(?:sudo\s+|timeout\s+\S+\s+)*"
     r"(?:echo|printf|grep|egrep|fgrep|rg|ag|findstr|"
-    r"write-output|write-host|select-string)(?=\s|$)",
+    r"write-output|write-host|select-string|"
+    # 2026-10-12: a commit message or a PR/issue body is text, and a move mentioned in it blocked
+    # the command. Only these exact subcommands: `git -c core.editor=... commit` (config before the
+    # subcommand) and `gh alias`/`gh api` stay unmasked, since those can run what they carry.
+    r"git\s+commit|gh\s+(?:pr|issue)\s+(?:create|comment|edit)|gh\s+release\s+create)(?=\s|$)",
     re.IGNORECASE,
 )
 _QUOTED_ARG = re.compile(r"""'[^']*'|"[^"]*\"""")

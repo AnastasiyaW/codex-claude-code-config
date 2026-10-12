@@ -1574,6 +1574,11 @@ def self_test() -> int:
         "ls | xargs grep mv file",
         "git mv a b",
         "sudo git mv a b",
+        # 2026-10-12: commit messages and PR/issue bodies are text
+        'git commit -m "docs: copy first && mv new over old"',
+        'gh pr create --title t --body "step one | mv a b"',
+        "GIT_EDITOR=vim git commit -m 'docs | notes; and more'",
+        "git log --pretty='%h | %s'",
     ]
     block_cases = [
         # the swap is safe only when a fresh backup is guaranteed to exist and stay intact
@@ -1640,6 +1645,10 @@ def self_test() -> int:
         "if true; then mv a b; fi",
         "for x in 1; do mv a b; done",
         "eval 'mv a b'",
+        # 2026-10-12: masking a commit message keeps a substitution and what follows the quotes
+        'git commit -m "$(mv a b)"',
+        'git commit -m "x" ; mv a b',
+        'gh pr create --body "$(mv a b)"',
         "true || test ! -e keep.db && cp -p app.py keep.db && mv app.py.new app.py",  # test skipped
         "ssh h 'false | test ! -e b && cp -p f b && mv n f' && true || test ! -e z && cp -p q z && mv w q",
         "test ! -e b && cp -a d b && mv n d",                             # -a copies a link, not files
