@@ -192,7 +192,12 @@ DESTRUCTIVE_INTENT = [
     r"\btaskkill\b",
     r"\bdocker\s+kill\b",                         # fourth review 2026-10-12: forced stops that were never gated
     r"\bsystemctl\s+kill\b",
-    r"\bfuser\b[^|;&\n]*\s-\w*k",
+    r"\bfuser\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*k[A-Za-z]*\b",   # fifth review: only a real -k flag, not -v ./x-bak
+    r"\bfuser\b[^|;&\n]*\s--kill\b",
+    # fifth review: quoted, trailing and long-form SIGKILL spellings
+    r"\bkill\b[^|;&\n]*\s[\"']?-(?:9|KILL|SIGKILL)[\"']?(?=\s|$)",
+    r"\bkill\b[^|;&\n]*\s[\"']?-[sn]\s*[\"']?(?:9|KILL|SIGKILL)\b",
+    r"\bkill\b[^|;&\n]*\s--signal[= ]\s*[\"']?(?:9|KILL|SIGKILL)\b",
     r"\bkillall\b",
     r"\bshutdown\s+",
     r"\breboot\b",
@@ -994,11 +999,14 @@ INLINE_PY_DELETE = re.compile(
     r"\.\s*unlink\s*\(|\.\s*rmdir\s*\(|\bsend2trash\b|"
     # review round 10: a shell delete launched from inline Python
     r"(?:os\s*\.\s*system|os\s*\.\s*popen|subprocess)[^\n]*?\b(?:rm|del|rd|rmdir|erase|remove-item|unlink)\b|"
-    # fourth review 2026-10-12: a forced kill from inline Python
-    r"\bos\s*\.\s*kill(?:pg)?\s*\(|\.\s*kill\s*\(\s*\)",
+    # fourth review 2026-10-12: a forced kill from inline Python (fifth review: only with a python token, so a
+    # commit message or a grep for ".kill()" is text, not a kill)
+    r"\b(?:python3?|py)(?:\.exe)?\b[^\n]*?(?:\bos\s*\.\s*kill(?:pg)?\s*\(|\.\s*kill\s*\(\s*\))",
     re.IGNORECASE)
-# PowerShell: `kill` and `spps` are aliases of Stop-Process (forced). Only when the tool is PowerShell.
-PS_STOP_ALIAS = re.compile(r"(?:^|[;&|({]\s*)(?:kill|spps)\b", re.IGNORECASE | re.MULTILINE)
+# PowerShell: `kill` and `spps` are aliases of Stop-Process (forced). Only when the tool is PowerShell; quoted
+# text is stripped first and `Kill-Something` is a different command (fifth review).
+PS_STOP_ALIAS = re.compile(r"(?:^|[;&|({]\s*)(?:kill|spps)(?![\w-])", re.IGNORECASE | re.MULTILINE)
+PS_QUOTED = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'")
 
 
 def _benign_list_mention(cmd: str) -> bool:
@@ -1334,8 +1342,9 @@ def _span_targets(span: str, forced_only: bool = False) -> list[str]:
 
 
 def _forced(seg: str) -> bool:
-    """A forced kill (SIGKILL, killall): gated. systemctl stop is a graceful stop and counts as unforced."""
-    return any_match(seg, DESTRUCTIVE_INTENT) is not None and not re.match(r"(?:sudo\s+)?systemctl\b", seg.strip())
+    """An explicit SIGKILL. killall/pkill/kill default to SIGTERM and systemctl stop is graceful (fifth review)."""
+    return re.search(r"\s[\"']?-(?:9|KILL|SIGKILL)\b|\s-[sn]\s*[\"']?(?:9|KILL|SIGKILL)\b|--signal", seg,
+                     re.IGNORECASE) is not None
 
 
 def prose_forced(text: str) -> set[str]:
@@ -1464,6 +1473,8 @@ def _restart_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[
 
 def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[bool, str]:
     """A stop passes on the owner's own request to stop/kill, or on a bare yes to my proposal to stop."""
+    if event.get("tool_name") == "PowerShell":   # fifth review: there `kill` is Stop-Process; no Windows path yet
+        return False, "process stops are approved only for POSIX shells"
     if CONFIRM_ONLY.fullmatch(prompt):
         if not STOP_MENTION.search(answer):
             return False, "a bare 'yes' to an answer that proposed no stop"
@@ -1486,7 +1497,8 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
         if CONFIRM_ONLY.fullmatch(prompt):
             return False
         if t.isdigit():
-            return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*)\s*[:#№]?\s*(?:\d+[\s,]+)*" + t + r"(?!\d)",
+            return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*|\bубей(?:те)?|\bприбей(?:те)?|\bостанов\w*)"
+                             r"\s*[:#№]?\s*(?:\d+[\s,]+)*" + t + r"(?!\d)",
                              prompt, re.IGNORECASE) is not None
         return re.search(r"(?<![\w.\-/~:])" + re.escape(t) + r"(?![\w\-/]|\.\w)", prompt) is not None
     # third review 2026-10-12: when the owner names operands herself ("останови процесс 4242"), my proposal
@@ -1729,7 +1741,7 @@ def main() -> None:
     # No destructive intent, or every destructive segment deletes only routine
     # build/cache/temp targets -> allow silently.
     allowed, hit = decide(cmd)
-    if allowed and event.get("tool_name") == "PowerShell" and PS_STOP_ALIAS.search(cmd):
+    if allowed and event.get("tool_name") == "PowerShell" and PS_STOP_ALIAS.search(PS_QUOTED.sub(" ", cmd)):
         allowed, hit = False, "powershell kill/spps alias (Stop-Process)"   # never a graceful SIGTERM there
     if allowed:
         if hit:
@@ -2324,6 +2336,8 @@ def self_test() -> int:
         ("stop with read-only companions", "ssh h 'kill 4242; sleep 20; ps -eo pid,args | grep -c train'",
          transcript("останови процесс 4242")),
         ("owner names the pid", "kill -s KILL 4242", transcript("убей pid 4242")),
+        ("graceful killall on a stop request", "killall python3", transcript("останови python3")),
+        ("bare pid after убей", "kill -9 4242", transcript("убей 4242")),
     ]
     refuse += [
         ("stop not asked", "ssh h 'kill -9 4242'", transcript("проверь сервер")),
@@ -2373,6 +2387,7 @@ def self_test() -> int:
         ("proposed SIGTERM, forced kill run", "kill -9 4242", transcript("да", "Остановлю: `kill 4242`")),
         ("owner says stop, forced kill run", "kill -9 4242", transcript("останови процесс 4242")),
         ("proposed TERM, kill -s 9 run", "kill -s 9 4242", transcript("да", "Остановлю: `kill -s TERM 4242`")),
+        ("proposed TERM, quoted -9 run", "kill \"-9\" 4242", transcript("да", "Остановлю: `kill 4242`")),
     ]
 
     for name, cmd, ev in approve:
