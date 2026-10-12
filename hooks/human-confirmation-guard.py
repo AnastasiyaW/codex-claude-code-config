@@ -1061,6 +1061,13 @@ def forced_kill(cmd: str) -> bool:
         # seventh review 2026-10-12: the verb may sit anywhere - after (, {, !, then, do, xargs, setsid, timeout,
         # find -exec - so every kill-verb token is examined, with the arguments that follow it
         toks = [t.lstrip("({!").rstrip(")};") for t in toks]
+        # eighth review: code inside a string still runs (eval, sh -c behind sudo -u, trap, bash <<<, xargs sh -c);
+        # any multi-word token that mentions a kill verb is read again as a command
+        for t in toks:
+            if re.search(r"\s", t) and re.search(r"\b(?:kill|pkill|killall|timeout)\b", t) and forced_kill(t):
+                return True
+        # threat model boundary (deletion-confirm-and-verify.md): a verb hidden in a variable (`K=kill; $K -9 1`) is
+        # deliberate masking by the same user, which this guard does not claim to stop
         for j, t in enumerate(toks):
             base = t.rsplit("/", 1)[-1].lower()
             if base in KILL_VERBS and _args_forced(toks[j + 1:]):
@@ -2553,7 +2560,10 @@ def self_test() -> int:
               # seventh review: the verb behind keywords, parentheses and wrappers
               f"(kill {d}9 4242)", f"if true; then kill {d}9 4242; fi", f"echo 4242 | xargs kill {d}9",
               f"setsid kill {d}9 4242", f"timeout {d}s KILL 5 sleep 9", f"VAR='a b' kill {d}9 4242",
-              f"find /proc {d}maxdepth 0 {d}exec kill {d}9 4242 ;"):
+              f"find /proc {d}maxdepth 0 {d}exec kill {d}9 4242 ;",
+              # eighth review: kill inside a string that a shell runs
+              f'eval "kill {d}09 4242"', f"sudo {d}u root sh {d}c 'kill {d}s 09 4242'",
+              f"bash <<< 'kill {d}KILL 4242'", f"trap 'kill {d}09 4242' EXIT", f"xargs {d}I{{}} sh {d}c 'kill {d}09 {{}}'"):
         if not forced_kill(c):
             fails.append(f"SIGKILL spelling must be read as forced: {c}")
     for c in ("kill 4242", f"kill {d}15 4242", f"kill {d}s TERM 4242", f"pkill {d}f train.py",
