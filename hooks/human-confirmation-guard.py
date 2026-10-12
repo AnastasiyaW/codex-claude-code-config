@@ -1210,7 +1210,7 @@ def _claude_limit(path: str) -> str | None:
     return None
 
 
-def target_hard_limit(target: str) -> str | None:
+def target_hard_limit(target: str, recursive: bool = False) -> str | None:
     """Why a target may never be deleted on request, or None."""
     t = _norm(target)
     if not t or re.search(r"[$%`*?\[\]{}@()]", t):
@@ -1237,7 +1237,13 @@ def target_hard_limit(target: str) -> str | None:
         return claude
     parts = [p for p in re.sub(r"^[A-Za-z]:", "", t).split("/") if p]
     low = [p.lower() for p in parts]
-    if len(parts) < 3:
+    # Owner 2026-10-12 («удали установщик и архив из E:\Firefox-setup» was refused): a FILE inside a
+    # folder that sits directly in a Windows drive root is not "root-level". Still a hard limit: the
+    # drive root, a folder directly in it, anything recursive, and a last part without an extension
+    # (could be a folder). System folders are already caught by PROTECTED above.
+    depth2_file = (len(parts) == 2 and not recursive and re.match(r"^[A-Za-z]:/", t)
+                   and "." in parts[1].strip(".") and low[0] not in {"users", "home"})
+    if len(parts) < 3 and not depth2_file:
         return "root-level path"
     if low[0] in {"home", "users"} and len(parts) < 3:
         return "home folder or its direct child"
@@ -1312,7 +1318,7 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
     is regenerable); then one audit record."""
     text = named_in.replace("\\", "/")
     for t, recursive in targets:
-        why = target_hard_limit(t)
+        why = target_hard_limit(t, recursive)
         if why:
             return False, f"{t}: hard limit ({why})"
         full = _norm(t).rstrip("/")
@@ -1347,6 +1353,12 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
                     continue
                 return False, f"{t}: irreplaceable ({why}) - the owner must name it in her own message"
         if _named(hay, full):
+            continue
+        # Owner 2026-10-12 («удали установщик и архив из E:\Firefox-setup»): "из <folder>" names the
+        # folder by its full path; a non-recursive file with an extension directly inside it is covered.
+        # Files elsewhere, recursion and edit-like "из <file>" phrasing still need their own name.
+        parent = full.rsplit("/", 1)[0]
+        if from_phrase and not recursive and "." in base.strip(".") and parent and _named(hay, parent):
             continue
         if general and not from_phrase:
             continue  # regenerable: the general go-ahead is enough
@@ -1566,6 +1578,9 @@ def self_test() -> int:
         # owner 2026-10-12: an ordinary folder directly in a home folder, named by the owner herself
         ("home child named by owner", "ssh h 'rm -rf /" + "home/someuser/lora-cache-20260823'",
          transcript("удали lora-cache-20260823")),
+        # owner 2026-10-12: files in a folder directly on a drive root, general request naming the folder
+        ("files in a drive-root folder", "ssh h \"del E:\\Firefox-setup\\FirefoxSetup.exe E:\\Firefox-setup\\nastya-ff-profile.tar\"",
+         transcript("удали установщик и архив из E:\\Firefox-setup")),
     ]
     refuse = [
         ("no transcript", sft, {}),
@@ -1578,6 +1593,14 @@ def self_test() -> int:
          sft, transcript("посмотри статус", meta_after="удали flux1-dev.sft")),
         ("root-level path", "rm -rf /" + "home/someuser", transcript("удали someuser")),
         ("drive-level path", "Remove-Item -Recurse C:\\Users", transcript("удали Users")),
+        # owner 2026-10-12: files inside a drive-root folder pass, the folder itself and recursion do not
+        ("drive-root folder itself", "ssh h \"rd /s /q E:\\Firefox-setup\"",
+         transcript("удали папку E:\\Firefox-setup")),
+        ("recursive at depth 2", "rm -rf E:/Firefox-setup/old.d", transcript("удали E:/Firefox-setup/old.d")),
+        ("from-folder covers only that folder", "rm E:/other/run/app.log", transcript("удали логи из E:/logs")),
+        ("from-folder does not cover recursion", "rm -r E:/logs/old.d", transcript("удали старое из E:/logs")),
+        ("from-folder does not cover a subfolder file", "rm E:/logs/sub/a.log", transcript("удали логи из E:/logs")),
+        ("no extension at depth 2", "rm E:/Firefox-setup/data", transcript("удали E:/Firefox-setup/data")),
         ("glob", "ssh h 'rm /srv/a/b/*.sft'", transcript("удали *.sft")),
         ("variable", "ssh h 'F=/srv/a/b/x.sft; rm $F'", transcript("удали x.sft")),
         (".git", "rm -rf C:/work/repo/.git/objects", transcript("удали objects")),
