@@ -183,7 +183,10 @@ DESTRUCTIVE_INTENT = [
     # Process / system
     r"\bkill\s+-9\b",
     r"\bkill\s+-KILL\b",
-    r"\bpkill\s+-9\b",
+    r"\bkill\s+-SIGKILL\b",                       # review 2026-10-12: these SIGKILL spellings were never gated
+    r"\bkill\s+-s\s*(?:9|KILL|SIGKILL)\b",
+    r"\bpkill\s+-(?:9|KILL|SIGKILL)\b",
+    r"\bpkill\s+(?:-\S+\s+)*-(?:s\s*)?(?:9|KILL|SIGKILL)\b",
     r"\bkillall\b",
     r"\bshutdown\s+",
     r"\breboot\b",
@@ -813,26 +816,31 @@ STOP_INTENT = re.compile(
     r"(?:^|[.!;:\n])\s*(?:please\s+)?(?:kill|stop|terminate)\b", re.IGNORECASE)
 STOP_MENTION = re.compile(r"останов|убить|убей|прибей|заверш|стопн|kill|stop|terminat", re.IGNORECASE)
 NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|заверш|трог)|"
-                           r"\bпочему\b|\bзачем\b|\bwhy\b|\bhow\b", re.IGNORECASE)
+                           r"\bпочему\b|\bзачем\b|\bwhy\b|\bhow\b|"
+                           # exclusions make the target list ambiguous (re-review 2026-10-12, finding 1)
+                           r"\bкроме\b|\bбез\b|\bно\s+не\b|\bа\s+не\b|\bexcept\b|\bbut\b|\bnot\b|\bexcluding\b",
+                           re.IGNORECASE)
 _PID = r"(?!1\b)[1-9]\d*"
-_PAT = r"(?=[^'\"\n]*[A-Za-z0-9_]{3})"   # a pattern/name with >= 3 literal word characters: never '.', '.*', '^'
+_SIG = r"(?:-(?:9|15|2|KILL|TERM|INT|SIGKILL|SIGTERM|SIGINT)|-s\s+(?:9|15|2|KILL|TERM|INT|SIGKILL|SIGTERM|SIGINT))"
+# a pkill/killall pattern: a plain literal of >= 3 word characters, no regex metacharacters ('ss.d|abc' hit sshd)
+_LIT = r"[A-Za-z][\w\-/=:.]{2,}(?:[ ][\w\-/=:.]+)*"   # '.' allowed; the pattern is then matched as a regex
+                                                      # against STOP_PROTECTED_CMDLINES in stop_only
 STOP_SEGMENT = re.compile(
-    r"(?:sudo\s+(?:-\S+\s+)*)?(?:"
-    r"kill(?:\s+-(?:9|15|KILL|TERM|INT|s\s+(?:KILL|TERM|INT)))?(?:\s+" + _PID + r")+|"
-    r"pkill(?:\s+-(?:9|15|KILL|TERM|INT))?(?:\s+-[fx])*\s+(?:'" + _PAT + r"[^'\n]+'|\"" + _PAT + r"[^\"\n]+\"|"
-    + _PAT + r"[A-Za-z][\w.\-/]*)|"
-    r"killall(?:\s+-(?:9|15|KILL|TERM|INT))?\s+" + _PAT + r"[A-Za-z][\w.\-]*|"
+    r"(?:sudo\s+)?(?:"
+    r"kill(?:\s+" + _SIG + r")?(?:\s+" + _PID + r")+|"
+    r"pkill(?:\s+" + _SIG + r")?(?:\s+-[fx])*\s+(?:'" + _LIT + r"'|\"" + _LIT + r"\"|[A-Za-z][\w\-]{2,})|"
+    r"killall(?:\s+" + _SIG + r")?\s+[A-Za-z][\w\-]{2,}|"
     r"systemctl\s+stop\s+[A-Za-z][\w@.\-]{2,})\s*;?", re.IGNORECASE)
-STOP_TARGET = re.compile(
-    r"\b(?:kill(?:\s+-\S+)*((?:\s+\d+)+)|pkill(?:\s+-\S+)*\s+('[^']*'|\"[^\"]*\"|\S+)|"
-    r"killall(?:\s+-\S+)*\s+(\S+)|systemctl\s+stop\s+(\S+))", re.IGNORECASE)
 # Never stopped on a stop request: the box's own access, tunnels and mounts (review 2026-10-12, finding 4).
 STOP_PROTECTED = re.compile(r"\b(?:sshd?|systemd|init|networking|networkmanager|rclone|cloudflared|tailscaled?|"
                             r"dockerd|containerd|kubelet|wg-quick|openvpn|autossh)\b", re.IGNORECASE)
+STOP_PROTECTED_CMDLINES = ("sshd", "sshd: root@pts/0", "/usr/sbin/sshd -D", "ssh -W host:22", "systemd", "init",
+                           "/sbin/init", "NetworkManager", "rclone mount gdrive: /mnt", "cloudflared tunnel run",
+                           "tailscaled", "dockerd", "containerd", "kubelet", "openvpn", "autossh -M 0", "wg-quick up wg0")
 # Read-only commands allowed beside a stop or a restart (review 2026-10-12, finding 1).
 STOP_COMPANION = re.compile(
     r"(?:sleep\s+\d+|ps(?:\s+-[A-Za-z]+(?:\s+[\w,]+)?)*|pgrep(?:\s+-[A-Za-z]+)*\s+(?:'[^'\n]*'|\"[^\"\n]*\"|[\w.\-]+)|"
-    r"nvidia-smi(?:\s+--[\w-]+(?:=[\w.,-]+)?)*|uptime|date|echo\s+[\w=.:-]*|"
+    r"nvidia-smi(?:\s+(?:--query-[\w-]+=[\w.,-]+|--format=[\w.,-]+|--id=\d+|-i\s+\d+))*|uptime|date|echo\s+[\w=.:-]*|"
     r"grep(?:\s+-[A-Za-z]+)*\s+(?:'[^'\n]*'|\"[^\"\n]*\"|[\w.:\-\[\]]+)|head(?:\s+-n?\s*\d+)?|tail(?:\s+-n?\s*\d+)?|"
     r"wc\s+-l|cut\s+-c\s*[\d-]+)\s*;?")
 # Anything that makes the request not a plain go-ahead: negation, "keep", "no", a question.
@@ -1254,11 +1262,45 @@ def stop_targets(cmd: str) -> list[str]:
         if remote and remote != UNPARSED:
             out += stop_targets(remote)
             continue
-        for m in STOP_TARGET.finditer(seg):
-            if m.group(1):
-                out += m.group(1).split()
-            else:
-                out.append((m.group(2) or m.group(3) or m.group(4)).strip("'\""))
+        if STOP_SEGMENT.fullmatch(seg):
+            out += _segment_targets(seg)
+    return out
+
+
+def _segment_targets(seg: str) -> list[str]:
+    """The operands of ONE stop segment that STOP_SEGMENT accepted, by the same tokens the shell sees
+    (re-review 2026-10-12, finding 2: a separate target regex missed `kill -s TERM 22`)."""
+    toks = shlex.split(seg.rstrip(" ;"))
+    if toks and toks[0] == "sudo":
+        toks = toks[1:]
+    verb, args = toks[0].lower(), toks[1:]
+    if verb == "systemctl":
+        return args[1:]
+    ops, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a == "-s":
+            skip = True
+            continue
+        if a.startswith("-"):
+            continue
+        ops.append(a)
+    if not ops:
+        raise ValueError(f"stop segment without an operand: {seg}")   # fail closed: caller refuses
+    return ops
+
+
+def prose_targets(text: str) -> list[str]:
+    """Stop operands of every stop command written in my proposal (code spans or plain text)."""
+    out: list[str] = []
+    for m in re.finditer(r"\b(?:sudo\s+)?(?:kill|pkill|killall|systemctl\s+stop)\b[^\n`;|&]*", text, re.IGNORECASE):
+        cand = m.group(0).strip()
+        while cand and not STOP_SEGMENT.fullmatch(cand):
+            cand = cand.rsplit(" ", 1)[0] if " " in cand else ""
+        if cand:
+            out += _segment_targets(cand)
     return out
 
 
@@ -1267,7 +1309,22 @@ def stop_only(cmd: str) -> bool:
     least one, everything else is read-only, and no target is the box's own access/tunnel/mount daemon."""
     if not _only_segments(cmd, STOP_SEGMENT, STOP_COMPANION):
         return False
-    return not any(STOP_PROTECTED.search(t) for t in stop_targets(cmd))
+    try:
+        targets = stop_targets(cmd)
+    except ValueError:
+        return False
+    # residual risk (documented): a pid is checked only for being named, not resolved to its process here
+    if not targets or any(STOP_PROTECTED.search(t) for t in targets):
+        return False
+    for t in targets:   # pkill/killall match by regex: 'ss.d' hits sshd although no word says so
+        if not t.isdigit():
+            try:
+                rx = re.compile(t)
+            except re.error:
+                return False
+            if any(rx.search(c) for c in STOP_PROTECTED_CMDLINES):
+                return False
+    return True
 
 
 def image_rm_only(cmd: str) -> bool:
@@ -1350,10 +1407,23 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
         return False, "the request negates, hesitates or asks a question"
     elif not STOP_INTENT.search(prompt):
         return False, "the latest request does not ask to stop a process"
-    # every pid / name / pattern / unit is named by the owner or in my proposal she answered (finding 4, 5)
-    def named(text: str, t: str) -> bool:   # a whole token; a sentence's full stop or comma may follow it
-        return re.search(r"(?<![\w.\-/~:])" + re.escape(t) + r"(?![\w\-/]|\.\w)", text) is not None
-    unnamed = [t for t in stop_targets(cmd) if not (named(prompt, t) or named(answer, t))]
+    # every operand comes from a stop command in my proposal she answered, or the owner names it herself:
+    # a name/pattern as a whole token, a pid only next to "pid"/"процесс"/"kill" (re-review: "в 22:30" is
+    # not pid 22); a bare yes approves only operands of the proposal's own commands.
+    try:
+        proposed = set(prose_targets(answer))
+        targets = stop_targets(cmd)
+    except ValueError:
+        return False, "cannot parse the stop command or the proposal"
+
+    def owner_named(t: str) -> bool:
+        if CONFIRM_ONLY.fullmatch(prompt):
+            return False
+        if t.isdigit():
+            return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*)\s*[:#№]?\s*(?:\d+[\s,]+)*" + t + r"(?!\d)",
+                             prompt, re.IGNORECASE) is not None
+        return re.search(r"(?<![\w.\-/~:])" + re.escape(t) + r"(?![\w\-/]|\.\w)", prompt) is not None
+    unnamed = [t for t in targets if t not in proposed and not owner_named(t)]
     if unnamed:
         return False, f"stop targets not named in the request or the proposal: {', '.join(unnamed)}"
     try:
@@ -2169,18 +2239,21 @@ def self_test() -> int:
     ]
     # owner 2026-10-12: stopping a process on her request (approve) and its negative controls
     approve += [
-        ("stop asked, pid in my answer", "ssh h 'kill -9 4242'",
-         transcript("останови обучение", "Обучение идёт процессом 4242.")),
-        ("kill asked, pkill pattern", "ssh h \"pkill -9 -f 'train.py --run a'\"",
-         transcript("убей старую очередь", "Очередь: train.py --run a")),
-        ("bare yes to my stop proposal", "killall -9 python3", transcript("да", "Остановить все python3?")),
+        ("stop asked, pid in my proposal", "ssh h 'kill -9 4242'",
+         transcript("останови обучение", "Остановлю обучение: `kill -9 4242`.")),
+        ("kill asked, pkill pattern in my proposal", "ssh h \"pkill -9 -f 'train.py --run a'\"",
+         transcript("убей старую очередь", "Очередь: `pkill -9 -f 'train.py --run a'`")),
+        ("bare yes to my stop proposal", "killall -9 python3",
+         transcript("да", "Остановить все python3? `killall -9 python3`")),
         ("systemctl stop asked", "ssh h 'sudo systemctl stop worker'", transcript("stop the worker")),
         ("stop with read-only companions", "ssh h 'kill 4242; sleep 20; ps -eo pid,args | grep -c train'",
-         transcript("останови 4242")),
+         transcript("останови процесс 4242")),
+        ("owner names the pid", "kill -s KILL 4242", transcript("убей pid 4242")),
     ]
     refuse += [
         ("stop not asked", "ssh h 'kill -9 4242'", transcript("проверь сервер")),
-        ("stop negated", "ssh h 'kill -9 4242'", transcript("не останавливай 4242")),
+        ("stop negated", "ssh h 'kill -9 4242'", transcript("не останавливай процесс 4242")),
+        ("exclusion with both pids named", "kill -9 4242 22", transcript("убей процессы 4242 22 кроме 22")),
         ("stop asked as a question", "ssh h 'kill -9 4242'", transcript("остановить 4242?")),
         ("why-question names the target", "kill -9 4242", transcript("почему 4242 не остановить сейчас")),
         ("bare yes to an answer without a stop", "kill -9 4242", transcript("да", "Проверила API.")),
@@ -2205,6 +2278,15 @@ def self_test() -> int:
         ("question about a kill", "kill -9 4242", transcript("посмотри, почему kill -9 4242 не сработал")),
         ("kill as a noun", "pkill -9 python3", transcript("this will kill performance of python3")),
         ("systemctl stop --all", "systemctl stop --all", transcript("stop --all")),
+        # re-review 2026-10-12 REJECT findings, each must stay refused
+        ("a time read as a pid", "kill -9 4242 22", transcript("Убей процесс 4242, в 22:30 он висел")),
+        ("exclusion read as inclusion", "kill -9 4242 22", transcript("убей процесс 4242, но не 22")),
+        ("english exclusion", "kill -9 4242 22", transcript("Kill pid 4242 except 22")),
+        ("bare yes, number only mentioned", "kill -9 22", transcript("да", "Порт 22 тоже занят, остановить?")),
+        ("second stop form hides a target", "kill -9 4242 && kill -s TERM 22", transcript("убей процесс 4242")),
+        ("regex pattern hits sshd", "pkill -9 -f 'ss.d|abc'", transcript("убей ss.d|abc")),
+        ("dotted pattern hits sshd", "pkill -9 -f 'ss.d: root'", transcript("убей 'ss.d: root'")),
+        ("nvidia-smi reset is not read-only", "kill -9 4242 && nvidia-smi --gpu-reset", transcript("убей процесс 4242")),
     ]
 
     for name, cmd, ev in approve:
