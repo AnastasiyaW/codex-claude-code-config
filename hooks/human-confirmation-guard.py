@@ -799,6 +799,23 @@ IMAGE_RM_COMPANION = re.compile(
 SSH_PLAIN = re.compile(r"ssh\s+[A-Za-z0-9][A-Za-z0-9_.@-]*\s+(?:'[^']*'|\"[^\"]*\")\s*")
 IMAGE_RM_SEGMENT = re.compile(
     r"(?:sudo\s+)?docker\s+(?:rmi|image\s+rm)(?:\s+" + IMAGE_REF + r")+(?:\s+2>&1)?\s*;?")
+# Owner 2026-10-12 ("исправь хук: если я сказала надо сделать, хук не должен мешать"): asking to stop or
+# kill a process approves a command that is nothing but a stop: kill/pkill/killall of named processes or
+# numeric pids, or systemctl stop of a unit. Never pid 1 / -1 (all processes), never with a delete beside it.
+STOP_INTENT = re.compile(
+    r"\b(?:останови(?:те)?|остановить|остановим|останавливай(?:те)?|убей(?:те)?|убить|убьём|прибей(?:те)?|"
+    r"заверши(?:те)?|завершить|выключи(?:те)?\s+процесс|стопни(?:те)?|тормозни(?:те)?)\b|"
+    r"\bkill\b|\bstop\b|\bterminate\b", re.IGNORECASE)
+STOP_MENTION = re.compile(r"останов|убить|убей|прибей|заверш|стопн|kill|stop|terminat", re.IGNORECASE)
+NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|заверш|трог)",
+                           re.IGNORECASE)
+_PID = r"(?!1\b)[1-9]\d*"
+STOP_SEGMENT = re.compile(
+    r"(?:sudo\s+(?:-\S+\s+)*)?(?:"
+    r"kill(?:\s+-(?:9|15|KILL|TERM|INT|s\s+(?:KILL|TERM|INT)))?(?:\s+" + _PID + r")+|"
+    r"pkill(?:\s+-(?:9|15|KILL|TERM|INT))?(?:\s+-[fx])*\s+(?:'[^'\n]+'|\"[^\"\n]+\"|[\w.\-/]+)|"
+    r"killall(?:\s+-(?:9|15|KILL|TERM|INT))?\s+[\w.\-]+|"
+    r"systemctl\s+stop\s+[\w@.\-]+)\s*;?", re.IGNORECASE)
 # Anything that makes the request not a plain go-ahead: negation, "keep", "no", a question.
 NOT_A_GO = re.compile(
     r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:удал|снос|снес|стир|сотр|трог|чист|убир|замен|перезапис)|"
@@ -1210,6 +1227,12 @@ def restart_only(cmd: str) -> bool:
     return _only_segments(cmd, RESTART_SEGMENT)
 
 
+def stop_only(cmd: str) -> bool:
+    """True when every destructive part of cmd (ssh unwrapped) is a plain process/unit stop and there is
+    at least one. A delete, DROP, poweroff or anything else destructive beside it -> False."""
+    return _only_segments(cmd, STOP_SEGMENT)
+
+
 def image_rm_only(cmd: str) -> bool:
     """True when every destructive part of cmd (ssh unwrapped) is `docker rmi <name:tag|@digest>...`
     without flags and there is at least one."""
@@ -1276,6 +1299,27 @@ def _restart_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[
     except OSError:
         return False, "cannot write the approval audit record"
     return True, "restart"
+
+
+def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[bool, str]:
+    """A stop passes on the owner's own request to stop/kill, or on a bare yes to my proposal to stop."""
+    if CONFIRM_ONLY.fullmatch(prompt):
+        if not STOP_MENTION.search(answer):
+            return False, "a bare 'yes' to an answer that proposed no stop"
+    elif NOT_A_GO.search(prompt) or NOT_A_STOP_GO.search(prompt):
+        return False, "the request negates, hesitates or asks a question"
+    elif not STOP_INTENT.search(prompt):
+        return False, "the latest request does not ask to stop a process"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "action": "stop",
+                                 "request": prompt[:300], "command": cmd[:500]},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, "process stop"
 
 
 def _image_rm_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[bool, str]:
@@ -1384,6 +1428,8 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         return _restart_approval(cmd, prompt, answer, event)
     if image_rm_only(cmd):
         return _image_rm_approval(cmd, prompt, answer, event)
+    if stop_only(cmd):
+        return _stop_approval(cmd, prompt, answer, event)
     listed, why = list_delete_request(cmd, prompt, answer)
     if listed is None:
         return False, why
@@ -2074,6 +2120,25 @@ def self_test() -> int:
         ("shutdown without -r", "ssh h 'sudo shutdown now'", transcript("перезапусти сервер")),
         ("delete request does not cover restart", vm_reboot, transcript("удали /srv/a/b/x.bin")),
         ("restart hidden in a substitution", "echo $(reboot)", transcript("перезапусти сервер")),
+    ]
+    # owner 2026-10-12: stopping a process on her request (approve) and its negative controls
+    approve += [
+        ("stop asked", "ssh h 'kill -9 4242'", transcript("останови обучение")),
+        ("kill asked, pkill pattern", "ssh h \"pkill -9 -f 'train.py --run a'\"", transcript("убей старую очередь")),
+        ("bare yes to my stop proposal", "killall -9 python3", transcript("да", "Остановить старую очередь?")),
+        ("systemctl stop asked", "ssh h 'sudo systemctl stop worker'", transcript("stop the worker")),
+    ]
+    refuse += [
+        ("stop not asked", "ssh h 'kill -9 4242'", transcript("проверь сервер")),
+        ("stop negated", "ssh h 'kill -9 4242'", transcript("не останавливай обучение")),
+        ("stop asked as a question", "ssh h 'kill -9 4242'", transcript("остановить обучение?")),
+        ("bare yes to an answer without a stop", "kill -9 4242", transcript("да", "Проверила API.")),
+        ("kill -1 is every process", "kill -9 -1", transcript("убей всё")),
+        ("kill pid 1", "kill -9 1", transcript("убей процесс 1")),
+        ("stop plus a delete", "ssh h 'kill -9 4242; rm -rf /srv/a/b/c'", transcript("останови обучение")),
+        ("stop request does not cover poweroff", "ssh h 'sudo poweroff'", transcript("останови сервер")),
+        ("stop hidden in a substitution", "echo $(killall python3)", transcript("останови обучение")),
+        ("delete request does not cover a kill", "kill -9 4242", transcript("удали /srv/a/b/x.bin")),
     ]
 
     for name, cmd, ev in approve:
