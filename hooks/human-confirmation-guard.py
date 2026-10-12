@@ -187,17 +187,13 @@ DESTRUCTIVE_INTENT = [
     r"\bkill\s+-s\s*(?:9|KILL|SIGKILL)\b",
     r"\bpkill\s+-(?:9|KILL|SIGKILL)\b",
     r"\bpkill\s+(?:-\S+\s+)*-(?:s\s*)?(?:9|KILL|SIGKILL)\b",
-    r"\bkill\s+(?:-\S+\s+)*-n\s*9\b",            # third review 2026-10-12: kill -n 9 was ungated
     r"\bstop-process\b",                          # Windows stops were never gated; no approval path -> blocked
     r"\btaskkill\b",
     r"\bdocker\s+kill\b",                         # fourth review 2026-10-12: forced stops that were never gated
     r"\bsystemctl\s+kill\b",
     r"\bfuser\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*k[A-Za-z]*\b",   # fifth review: only a real -k flag, not -v ./x-bak
     r"\bfuser\b[^|;&\n]*\s--kill\b",
-    # fifth review: quoted, trailing and long-form SIGKILL spellings
-    r"\bkill\b[^|;&\n]*\s[\"']?-(?:9|KILL|SIGKILL)[\"']?(?=\s|$)",
-    r"\bkill\b[^|;&\n]*\s[\"']?-[sn]\s*[\"']?(?:9|KILL|SIGKILL)\b",
-    r"\bkill\b[^|;&\n]*\s--signal[= ]\s*[\"']?(?:9|KILL|SIGKILL)\b",
+    # other SIGKILL spellings (quoted, -09, trailing, --signal=KILL) are found by value: forced_kill() below
     r"\bkillall\b",
     r"\bshutdown\s+",
     r"\breboot\b",
@@ -1001,12 +997,88 @@ INLINE_PY_DELETE = re.compile(
     r"(?:os\s*\.\s*system|os\s*\.\s*popen|subprocess)[^\n]*?\b(?:rm|del|rd|rmdir|erase|remove-item|unlink)\b|"
     # fourth review 2026-10-12: a forced kill from inline Python (fifth review: only with a python token, so a
     # commit message or a grep for ".kill()" is text, not a kill)
-    r"\b(?:python3?|py)(?:\.exe)?\b[^\n]*?(?:\bos\s*\.\s*kill(?:pg)?\s*\(|\.\s*kill\s*\(\s*\))",
+    r"\b(?:python3?|py)(?:\.exe)?\b[^|;&\n]*?(?:\bos\s*\.\s*kill(?:pg)?\s*\(|\.\s*kill\s*\(\s*\))",
     re.IGNORECASE)
 # PowerShell: `kill` and `spps` are aliases of Stop-Process (forced). Only when the tool is PowerShell; quoted
 # text is stripped first and `Kill-Something` is a different command (fifth review).
 PS_STOP_ALIAS = re.compile(r"(?:^|[;&|({]\s*)(?:kill|spps)(?![\w-])", re.IGNORECASE | re.MULTILINE)
 PS_QUOTED = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'")
+# sixth review: PowerShell code inside a string still runs when handed to pwsh/powershell/iex
+PS_INVOKER = re.compile(r"\b(?:pwsh|powershell)(?:\.exe)?\b|\biex\b|\binvoke-expression\b", re.IGNORECASE)
+PS_STOP_ALIAS_ANY = re.compile(r"(?:^|[;&|({\"'\s])(?:kill|spps)(?![\w-])", re.IGNORECASE | re.MULTILINE)
+KILL_VERBS = {"kill", "pkill", "killall"}
+_SIGNAL_OPTS = {"-s", "-n", "--signal"}
+
+
+def _signal_forced(value: str) -> bool:
+    """SIGKILL by value: 9, 09, 0009, KILL, SIGKILL, any case. A value the shell would expand is unknown -> forced."""
+    v = value.strip()
+    if not v or re.search(r"[$`*?\[]", v):
+        return True
+    v = v.upper().removeprefix("SIG")
+    return v == "KILL" or (v.isdigit() and int(v) == 9)
+
+
+_WRAPPERS = {"sudo", "env", "command", "builtin", "exec", "nohup", "nice", "stdbuf", "time"}
+_WRAPPER_ARG_OPTS = {"-u", "-g", "-C", "-p", "-h", "-U", "-r", "-t", "-T", "-D", "-R", "-n", "--user", "--group"}
+
+
+def _strip_wrappers(toks: list[str]) -> list[str]:
+    """Drop `sudo -u root`, `env A=1`, `nohup`, `VAR=1` prefixes so the real command word comes first."""
+    i, in_wrap = 0, False
+    while i < len(toks):
+        t = toks[i]
+        if t.rsplit("/", 1)[-1].lower() in _WRAPPERS:
+            in_wrap, i = True, i + 1
+            continue
+        if in_wrap and t in _WRAPPER_ARG_OPTS:
+            i += 2
+            continue
+        if in_wrap and t.startswith("-"):
+            i += 1
+            continue
+        if re.fullmatch(r"[A-Za-z_]\w*=\S*", t):
+            i += 1
+            continue
+        break
+    return toks[i:]
+
+
+def forced_kill(cmd: str) -> bool:
+    """True when any kill/pkill/killall command word sends SIGKILL in any spelling the shell accepts
+    (sixth review 2026-10-12: kill -09, kill -'9', kill -\\9, pkill --signal=KILL, kill 4242 -9 were ungated).
+    Tokens come from shlex, so quotes and escapes are removed exactly as the shell removes them."""
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        remote = remote_command(seg)
+        if remote and remote != UNPARSED:
+            if forced_kill(remote):
+                return True
+            continue
+        try:
+            toks = shlex.split(seg, posix=True)
+        except ValueError:
+            return True   # unbalanced quoting around a kill: cannot read the signal, fail closed
+        toks = _strip_wrappers(toks)
+        if not toks or toks[0].rsplit("/", 1)[-1].lower() not in KILL_VERBS:
+            continue
+        args = toks[1:]
+        for i, a in enumerate(args):
+            if a in _SIGNAL_OPTS:
+                if i + 1 < len(args) and _signal_forced(args[i + 1]):
+                    return True
+            elif a.startswith("--signal="):
+                if _signal_forced(a.split("=", 1)[1]):
+                    return True
+            elif re.fullmatch(r"-[sn].+", a):
+                if _signal_forced(a[2:]):
+                    return True
+            elif a.startswith("-") and len(a) > 1 and a != "--" and not a.startswith("--"):
+                # -9, -09, -KILL, -kill, -SIGKILL; plain flags (-f, -x, -u) read as values that are not KILL/9
+                if not re.fullmatch(r"-[A-Za-z]{1,2}", a) and _signal_forced(a[1:]):
+                    return True
+            elif a.startswith("$"):
+                return True   # $'-9' and other expansions: unknown, fail closed
+    return False
 
 
 def _benign_list_mention(cmd: str) -> bool:
@@ -1342,9 +1414,9 @@ def _span_targets(span: str, forced_only: bool = False) -> list[str]:
 
 
 def _forced(seg: str) -> bool:
-    """An explicit SIGKILL. killall/pkill/kill default to SIGTERM and systemctl stop is graceful (fifth review)."""
-    return re.search(r"\s[\"']?-(?:9|KILL|SIGKILL)\b|\s-[sn]\s*[\"']?(?:9|KILL|SIGKILL)\b|--signal", seg,
-                     re.IGNORECASE) is not None
+    """An explicit SIGKILL in any spelling (forced_kill reads it by value); killall/pkill/kill default to SIGTERM
+    and systemctl stop is graceful (fifth review)."""
+    return forced_kill(seg)
 
 
 def prose_forced(text: str) -> set[str]:
@@ -1498,7 +1570,7 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
             return False
         if t.isdigit():
             return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*|\bубей(?:те)?|\bприбей(?:те)?|\bостанов\w*)"
-                             r"\s*[:#№]?\s*(?:\d+[\s,]+)*" + t + r"(?!\d)",
+                             r"\s*[:#№]?\s*(?:\d+[\s,]+)*" + t + r"(?!\d)(?![:.,/]\d)",   # "22:30" is a time
                              prompt, re.IGNORECASE) is not None
         return re.search(r"(?<![\w.\-/~:])" + re.escape(t) + r"(?![\w\-/]|\.\w)", prompt) is not None
     # third review 2026-10-12: when the owner names operands herself ("останови процесс 4242"), my proposal
@@ -1743,6 +1815,11 @@ def main() -> None:
     allowed, hit = decide(cmd)
     if allowed and event.get("tool_name") == "PowerShell" and PS_STOP_ALIAS.search(PS_QUOTED.sub(" ", cmd)):
         allowed, hit = False, "powershell kill/spps alias (Stop-Process)"   # never a graceful SIGTERM there
+    exe = executable_text(cmd)   # commit/PR message bodies are text, not commands (safety_common, 71f4dca)
+    if allowed and PS_INVOKER.search(exe) and PS_STOP_ALIAS_ANY.search(exe):
+        allowed, hit = False, "kill/spps handed to pwsh/powershell/iex"
+    if allowed and forced_kill(cmd):
+        allowed, hit = False, "SIGKILL (by value)"
     if allowed:
         if hit:
             log("INFO", "require_human_confirmation", "safe-target", hit, cmd[:200])
@@ -2388,6 +2465,7 @@ def self_test() -> int:
         ("owner says stop, forced kill run", "kill -9 4242", transcript("останови процесс 4242")),
         ("proposed TERM, kill -s 9 run", "kill -s 9 4242", transcript("да", "Остановлю: `kill -s TERM 4242`")),
         ("proposed TERM, quoted -9 run", "kill \"-9\" 4242", transcript("да", "Остановлю: `kill 4242`")),
+        ("a time is not a pid", "kill 22", transcript("останови 22:30 процесс 4242")),
     ]
 
     for name, cmd, ev in approve:
@@ -2441,6 +2519,18 @@ def self_test() -> int:
             fails.append(f"must be flagged as a delete: {s[:80]}")
     if decide(f"python {LIST_SCRIPT.as_posix()} {lst.as_posix()} --sha {dig}")[0]:
         fails.append("a list run must never pass decide() without the owner check")
+    # sixth review 2026-10-12: SIGKILL read by value, every spelling the shell accepts; graceful forms stay free
+    d = "-"
+    for c in (f"kill {d}09 4242", f"kill {d}s09 4242", f"kill {d}n 09 4242", f"pkill {d}{d}signal=KILL python3",
+              f"kill {d}'9' 4242", f"kill {d}\\9 4242", f"kill $'{d}9' 4242", f"kill 4242 {d}9", f"kill {d}kill 4242",
+              f"sudo {d}u root kill {d}9 4242", f"ssh h 'kill {d}09 4242'", f"env A=1 kill {d}SIGKILL 4242"):
+        if not forced_kill(c):
+            fails.append(f"SIGKILL spelling must be read as forced: {c}")
+    for c in ("kill 4242", f"kill {d}15 4242", f"kill {d}s TERM 4242", f"pkill {d}f train.py",
+              f"git log {d}{d}grep=kill {d}n 9", f"journalctl {d}u kill-switch {d}n 9", 'grep "kill -9" notes.md',
+              'python tools/fix.py && git commit -m "drop .kill() call"', f"fuser {d}v ./build {d}bak.log"):
+        if forced_kill(c) or not decide(c)[0]:
+            fails.append(f"graceful or unrelated command must pass: {c}")
     print(f"SCANNED owner-requests: approve={len(approve)} refuse={len(refuse)}")
     for f in fails:
         print("SELF-TEST FAIL:", f)
