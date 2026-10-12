@@ -187,6 +187,9 @@ DESTRUCTIVE_INTENT = [
     r"\bkill\s+-s\s*(?:9|KILL|SIGKILL)\b",
     r"\bpkill\s+-(?:9|KILL|SIGKILL)\b",
     r"\bpkill\s+(?:-\S+\s+)*-(?:s\s*)?(?:9|KILL|SIGKILL)\b",
+    r"\bkill\s+(?:-\S+\s+)*-n\s*9\b",            # third review 2026-10-12: kill -n 9 was ungated
+    r"\bstop-process\b",                          # Windows stops were never gated; no approval path -> blocked
+    r"\btaskkill\b",
     r"\bkillall\b",
     r"\bshutdown\s+",
     r"\breboot\b",
@@ -833,10 +836,15 @@ STOP_SEGMENT = re.compile(
     r"systemctl\s+stop\s+[A-Za-z][\w@.\-]{2,})\s*;?", re.IGNORECASE)
 # Never stopped on a stop request: the box's own access, tunnels and mounts (review 2026-10-12, finding 4).
 STOP_PROTECTED = re.compile(r"\b(?:sshd?|systemd|init|networking|networkmanager|rclone|cloudflared|tailscaled?|"
-                            r"dockerd|containerd|kubelet|wg-quick|openvpn|autossh)\b", re.IGNORECASE)
+                            r"dockerd|containerd|kubelet|wg-quick|wg|wireguard|openvpn|autossh|frpc|frps|socat|"
+                            r"ngrok|chisel|sshuttle|dropbear|stunnel|xray|v2ray|zerotier(?:-one)?|firewalld|"
+                            r"gpg-agent|tunnel)\b", re.IGNORECASE)
 STOP_PROTECTED_CMDLINES = ("sshd", "sshd: root@pts/0", "/usr/sbin/sshd -D", "ssh -W host:22", "systemd", "init",
                            "/sbin/init", "NetworkManager", "rclone mount gdrive: /mnt", "cloudflared tunnel run",
-                           "tailscaled", "dockerd", "containerd", "kubelet", "openvpn", "autossh -M 0", "wg-quick up wg0")
+                           "tailscaled", "dockerd", "containerd", "kubelet", "openvpn", "autossh -M 0", "wg-quick up wg0",
+                           "frpc -c frpc.toml", "socat TCP-LISTEN:2222", "ngrok tcp 22", "chisel client",
+                           "sshuttle -r h", "dropbear", "stunnel", "xray run", "v2ray run", "zerotier-one",
+                           "firewalld", "gpg-agent --daemon")
 # Read-only commands allowed beside a stop or a restart (review 2026-10-12, finding 1).
 STOP_COMPANION = re.compile(
     r"(?:sleep\s+\d+|ps(?:\s+-[A-Za-z]+(?:\s+[\w,]+)?)*|pgrep(?:\s+-[A-Za-z]+)*\s+(?:'[^'\n]*'|\"[^\"\n]*\"|[\w.\-]+)|"
@@ -1293,9 +1301,23 @@ def _segment_targets(seg: str) -> list[str]:
 
 
 def prose_targets(text: str) -> list[str]:
-    """Stop operands of every stop command written in my proposal (code spans or plain text)."""
+    """Stop operands of the stop commands my proposal wrote in `code` (third review 2026-10-12: a plain-text
+    "kill -9 4242 нельзя трогать" was read as a proposal). A span on a line that negates or asks is skipped."""
     out: list[str] = []
-    for m in re.finditer(r"\b(?:sudo\s+)?(?:kill|pkill|killall|systemctl\s+stop)\b[^\n`;|&]*", text, re.IGNORECASE):
+    for line in text.splitlines():
+        spans = re.findall(r"`([^`\n]+)`", line)
+        outside = re.sub(r"`[^`\n]+`", " ", line)
+        # a proposal may end with "?"; any other negation/hesitation on the line voids its commands
+        if not spans or NOT_A_GO.search(outside.replace("?", " ")) or NOT_A_STOP_GO.search(outside):
+            continue
+        for span in spans:
+            out += _span_targets(span)
+    return out
+
+
+def _span_targets(span: str) -> list[str]:
+    out: list[str] = []
+    for m in re.finditer(r"\b(?:sudo\s+)?(?:kill|pkill|killall|systemctl\s+stop)\b[^\n`;|&]*", span, re.IGNORECASE):
         cand = m.group(0).strip()
         while cand and not STOP_SEGMENT.fullmatch(cand):
             cand = cand.rsplit(" ", 1)[0] if " " in cand else ""
@@ -1319,7 +1341,7 @@ def stop_only(cmd: str) -> bool:
     for t in targets:   # pkill/killall match by regex: 'ss.d' hits sshd although no word says so
         if not t.isdigit():
             try:
-                rx = re.compile(t)
+                rx = re.compile(t, re.IGNORECASE)   # pkill -i / names differ in case (third review, finding 7)
             except re.error:
                 return False
             if any(rx.search(c) for c in STOP_PROTECTED_CMDLINES):
@@ -1423,6 +1445,10 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
             return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*)\s*[:#№]?\s*(?:\d+[\s,]+)*" + t + r"(?!\d)",
                              prompt, re.IGNORECASE) is not None
         return re.search(r"(?<![\w.\-/~:])" + re.escape(t) + r"(?![\w\-/]|\.\w)", prompt) is not None
+    # third review 2026-10-12: when the owner names operands herself ("останови процесс 4242"), my proposal
+    # cannot add others (4243); it counts only for a bare yes or a request that names no operand at all
+    if not CONFIRM_ONLY.fullmatch(prompt) and (re.search(r"\d{2,}", prompt) or any(owner_named(t) for t in targets)):
+        proposed = set()
     unnamed = [t for t in targets if t not in proposed and not owner_named(t)]
     if unnamed:
         return False, f"stop targets not named in the request or the proposal: {', '.join(unnamed)}"
@@ -2287,6 +2313,13 @@ def self_test() -> int:
         ("regex pattern hits sshd", "pkill -9 -f 'ss.d|abc'", transcript("убей ss.d|abc")),
         ("dotted pattern hits sshd", "pkill -9 -f 'ss.d: root'", transcript("убей 'ss.d: root'")),
         ("nvidia-smi reset is not read-only", "kill -9 4242 && nvidia-smi --gpu-reset", transcript("убей процесс 4242")),
+        # third review 2026-10-12 findings
+        ("negated mention is not a proposal", "kill -9 4242", transcript("да", "`kill -9 4242` нельзя трогать.")),
+        ("plain-text mention is not a proposal", "kill -9 4242", transcript("да", "Остановить kill -9 4242?")),
+        ("owner names one pid, proposal another", "kill -9 4243",
+         transcript("останови процесс 4242", "Предлагаю `kill -9 4243`.")),
+        ("tunnel daemon frpc", "pkill -9 -f frpc", transcript("да", "Остановить? `pkill -9 -f frpc`")),
+        ("case-folded tunnel", "pkill -9 -f Tunnel", transcript("убей Tunnel")),
     ]
 
     for name, cmd, ev in approve:
