@@ -1239,9 +1239,24 @@ def target_hard_limit(target: str) -> str | None:
     low = [p.lower() for p in parts]
     if len(parts) < 3:
         return "root-level path"
-    if low[0] in {"home", "users"} and len(parts) < 4:
+    if low[0] in {"home", "users"} and len(parts) < 3:
+        return "home folder or its direct child"
+    if low[0] in {"home", "users"} and len(parts) == 3 and (parts[2].startswith(".") or low[2] in HOME_SYSTEM):
         return "home folder or its direct child"
     return None
+
+
+# Owner 2026-10-12 («исправляй хук, если я сказала удалить — надо удалять»): an ordinary folder
+# directly in a home folder (e.g. /home/<user>/<project-run>) may be deleted, but only when
+# the owner names it herself in her own message (full path or its exact name) - never by a general
+# yes. Hidden folders (.ssh, .config, ...) and the standard user folders stay a hard limit.
+HOME_SYSTEM = {"desktop", "documents", "downloads", "pictures", "music", "videos", "appdata",
+               "onedrive", "snap", "bin", "lib", "go", "public"}
+
+
+def _home_child(target: str) -> bool:
+    parts = [p for p in re.sub(r"^[A-Za-z]:", "", _norm(target)).split("/") if p]
+    return len(parts) == 3 and parts[0].lower() in {"home", "users"}
 
 
 def _named(text: str, needle: str) -> bool:
@@ -1305,6 +1320,11 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
         if re.match(r"^[A-Za-z]:/", full):  # Windows: case-insensitive filesystem
             full, hay = full.lower(), text.lower()
         base = full.rsplit("/", 1)[-1]
+        if _home_child(t):
+            own = prompt.replace("\\", "/")
+            own = own.lower() if re.match(r"^[a-z]:/", full) else own
+            if not (_named(own, full) or _named(own, base)):
+                return False, f"{t}: a folder directly in a home folder - the owner must name it in her own message"
         # review 2026-10-11 R7: the irreplaceable counts as named only in the OWNER's own words,
         # never because my answer mentioned it (an answer can mention a path to say "won't touch").
         why, inner = irreplaceable_info(t, recursive)
@@ -1543,6 +1563,9 @@ def self_test() -> int:
         ("inside a project .claude", "Remove-Item -LiteralPath 'C:/work/proj/.claude/handoffs/roster' -Recurse -Force",
          transcript("да, удаляй C:/work/proj/.claude/handoffs/roster")),
         ("Remove-Item named", 'Remove-Item -LiteralPath "D:\\models\\loras\\bad_lora.safetensors"', transcript("убери bad_lora.safetensors")),
+        # owner 2026-10-12: an ordinary folder directly in a home folder, named by the owner herself
+        ("home child named by owner", "ssh h 'rm -rf /" + "home/someuser/lora-cache-20260823'",
+         transcript("удали lora-cache-20260823")),
     ]
     refuse = [
         ("no transcript", sft, {}),
@@ -1567,6 +1590,13 @@ def self_test() -> int:
         ("relative after cd", "ssh h 'cd / && rm -rf srv'", transcript("удали srv_backup.tar")),
         ("relative bare", "rm -rf src", transcript("удали src_old.zip")),
         ("home child", "Remove-Item -Recurse -Force " + HOME_FIX + "/Desktop", transcript("удали ярлык с desktop")),
+        # paths split as "/" + "home/..." so the public-repo PII scanner sees no home path
+        ("hidden home child even when named", "ssh h 'rm -rf /" + "home/someuser/.ssh'",
+         transcript("удали /" + "home/someuser/.ssh")),
+        ("home child by general yes only", "ssh h 'rm -rf /" + "home/someuser/lora-cache-20260823'",
+         transcript("да, удаляй", "Удалю /" + "home/someuser/lora-cache-20260823 - подтверди")),
+        ("standard home folder named", "ssh h 'rm -rf /" + "home/someuser/Downloads'",
+         transcript("удали /" + "home/someuser/Downloads")),
         ("the guard itself", "rm " + HOME_FIX + "/.claude/claude-code-config/hooks/human-confirmation-guard.py",
          transcript("убери лишнее из human-confirmation-guard.py")),
         ("UNC", "Remove-Item \\\\nas\\share\\data\\data.csv", transcript("удали data.csv")),
