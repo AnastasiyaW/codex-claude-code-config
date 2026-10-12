@@ -190,6 +190,9 @@ DESTRUCTIVE_INTENT = [
     r"\bkill\s+(?:-\S+\s+)*-n\s*9\b",            # third review 2026-10-12: kill -n 9 was ungated
     r"\bstop-process\b",                          # Windows stops were never gated; no approval path -> blocked
     r"\btaskkill\b",
+    r"\bdocker\s+kill\b",                         # fourth review 2026-10-12: forced stops that were never gated
+    r"\bsystemctl\s+kill\b",
+    r"\bfuser\b[^|;&\n]*\s-\w*k",
     r"\bkillall\b",
     r"\bshutdown\s+",
     r"\breboot\b",
@@ -990,8 +993,12 @@ INLINE_PY_DELETE = re.compile(
     r"\bshutil\s*\.\s*rmtree\b|\brmtree\s*\(|\bos\s*\.\s*(?:remove|unlink|rmdir|removedirs)\s*\(|"
     r"\.\s*unlink\s*\(|\.\s*rmdir\s*\(|\bsend2trash\b|"
     # review round 10: a shell delete launched from inline Python
-    r"(?:os\s*\.\s*system|os\s*\.\s*popen|subprocess)[^\n]*?\b(?:rm|del|rd|rmdir|erase|remove-item|unlink)\b",
+    r"(?:os\s*\.\s*system|os\s*\.\s*popen|subprocess)[^\n]*?\b(?:rm|del|rd|rmdir|erase|remove-item|unlink)\b|"
+    # fourth review 2026-10-12: a forced kill from inline Python
+    r"\bos\s*\.\s*kill(?:pg)?\s*\(|\.\s*kill\s*\(\s*\)",
     re.IGNORECASE)
+# PowerShell: `kill` and `spps` are aliases of Stop-Process (forced). Only when the tool is PowerShell.
+PS_STOP_ALIAS = re.compile(r"(?:^|[;&|({]\s*)(?:kill|spps)\b", re.IGNORECASE | re.MULTILINE)
 
 
 def _benign_list_mention(cmd: str) -> bool:
@@ -1315,15 +1322,50 @@ def prose_targets(text: str) -> list[str]:
     return out
 
 
-def _span_targets(span: str) -> list[str]:
+def _span_targets(span: str, forced_only: bool = False) -> list[str]:
     out: list[str] = []
     for m in re.finditer(r"\b(?:sudo\s+)?(?:kill|pkill|killall|systemctl\s+stop)\b[^\n`;|&]*", span, re.IGNORECASE):
         cand = m.group(0).strip()
         while cand and not STOP_SEGMENT.fullmatch(cand):
             cand = cand.rsplit(" ", 1)[0] if " " in cand else ""
-        if cand:
+        if cand and (not forced_only or _forced(cand)):
             out += _segment_targets(cand)
     return out
+
+
+def _forced(seg: str) -> bool:
+    """A forced kill (SIGKILL, killall): gated. systemctl stop is a graceful stop and counts as unforced."""
+    return any_match(seg, DESTRUCTIVE_INTENT) is not None and not re.match(r"(?:sudo\s+)?systemctl\b", seg.strip())
+
+
+def prose_forced(text: str) -> set[str]:
+    """Operands my proposal itself wrote with a forced signal (fourth review 2026-10-12: a proposed SIGTERM
+    `kill 4242` must not approve `kill -9 4242`)."""
+    out: set[str] = set()
+    for line in text.splitlines():
+        spans = re.findall(r"`([^`\n]+)`", line)
+        outside = re.sub(r"`[^`\n]+`", " ", line)
+        if not spans or NOT_A_GO.search(outside.replace("?", " ")) or NOT_A_STOP_GO.search(outside):
+            continue
+        for span in spans:
+            out.update(_span_targets(span, forced_only=True))
+    return out
+
+
+def stop_forced(cmd: str) -> set[str]:
+    out: set[str] = set()
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        remote = remote_command(seg)
+        if remote and remote != UNPARSED:
+            out |= stop_forced(remote)
+        elif STOP_SEGMENT.fullmatch(seg) and _forced(seg):
+            out.update(_segment_targets(seg))
+    return out
+
+
+# the owner asks for a forced kill in words (else her "останови" approves only what a SIGTERM would do)
+FORCE_WORDS = re.compile(r"\b(?:убей(?:те)?|убить|убьём|прибей(?:те)?|принудительно|насильно|force|sigkill)\b|"
+                         r"(?:^|[.!;:\n])\s*(?:please\s+)?kill\b|\s-9\b", re.IGNORECASE)
 
 
 def stop_only(cmd: str) -> bool:
@@ -1434,7 +1476,9 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
     # not pid 22); a bare yes approves only operands of the proposal's own commands.
     try:
         proposed = set(prose_targets(answer))
+        proposed_forced = prose_forced(answer)
         targets = stop_targets(cmd)
+        forced = stop_forced(cmd)
     except ValueError:
         return False, "cannot parse the stop command or the proposal"
 
@@ -1448,10 +1492,13 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
     # third review 2026-10-12: when the owner names operands herself ("останови процесс 4242"), my proposal
     # cannot add others (4243); it counts only for a bare yes or a request that names no operand at all
     if not CONFIRM_ONLY.fullmatch(prompt) and (re.search(r"\d{2,}", prompt) or any(owner_named(t) for t in targets)):
-        proposed = set()
+        proposed, proposed_forced = set(), set()
     unnamed = [t for t in targets if t not in proposed and not owner_named(t)]
     if unnamed:
         return False, f"stop targets not named in the request or the proposal: {', '.join(unnamed)}"
+    unforced = [t for t in forced if t not in proposed_forced and not (owner_named(t) and FORCE_WORDS.search(prompt))]
+    if unforced:
+        return False, f"a forced kill was neither proposed nor asked for: {', '.join(unforced)}"
     try:
         APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
         with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
@@ -1682,6 +1729,8 @@ def main() -> None:
     # No destructive intent, or every destructive segment deletes only routine
     # build/cache/temp targets -> allow silently.
     allowed, hit = decide(cmd)
+    if allowed and event.get("tool_name") == "PowerShell" and PS_STOP_ALIAS.search(cmd):
+        allowed, hit = False, "powershell kill/spps alias (Stop-Process)"   # never a graceful SIGTERM there
     if allowed:
         if hit:
             log("INFO", "require_human_confirmation", "safe-target", hit, cmd[:200])
@@ -2320,6 +2369,10 @@ def self_test() -> int:
          transcript("останови процесс 4242", "Предлагаю `kill -9 4243`.")),
         ("tunnel daemon frpc", "pkill -9 -f frpc", transcript("да", "Остановить? `pkill -9 -f frpc`")),
         ("case-folded tunnel", "pkill -9 -f Tunnel", transcript("убей Tunnel")),
+        # fourth review 2026-10-12: the signal is part of the approval
+        ("proposed SIGTERM, forced kill run", "kill -9 4242", transcript("да", "Остановлю: `kill 4242`")),
+        ("owner says stop, forced kill run", "kill -9 4242", transcript("останови процесс 4242")),
+        ("proposed TERM, kill -s 9 run", "kill -s 9 4242", transcript("да", "Остановлю: `kill -s TERM 4242`")),
     ]
 
     for name, cmd, ev in approve:
