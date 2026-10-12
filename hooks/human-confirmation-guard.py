@@ -1058,26 +1058,52 @@ def forced_kill(cmd: str) -> bool:
             toks = shlex.split(seg, posix=True)
         except ValueError:
             return True   # unbalanced quoting around a kill: cannot read the signal, fail closed
-        toks = _strip_wrappers(toks)
-        if not toks or toks[0].rsplit("/", 1)[-1].lower() not in KILL_VERBS:
-            continue
-        args = toks[1:]
-        for i, a in enumerate(args):
-            if a in _SIGNAL_OPTS:
-                if i + 1 < len(args) and _signal_forced(args[i + 1]):
-                    return True
-            elif a.startswith("--signal="):
-                if _signal_forced(a.split("=", 1)[1]):
-                    return True
-            elif re.fullmatch(r"-[sn].+", a):
-                if _signal_forced(a[2:]):
-                    return True
-            elif a.startswith("-") and len(a) > 1 and a != "--" and not a.startswith("--"):
-                # -9, -09, -KILL, -kill, -SIGKILL; plain flags (-f, -x, -u) read as values that are not KILL/9
-                if not re.fullmatch(r"-[A-Za-z]{1,2}", a) and _signal_forced(a[1:]):
-                    return True
-            elif a.startswith("$"):
-                return True   # $'-9' and other expansions: unknown, fail closed
+        # seventh review 2026-10-12: the verb may sit anywhere - after (, {, !, then, do, xargs, setsid, timeout,
+        # find -exec - so every kill-verb token is examined, with the arguments that follow it
+        toks = [t.lstrip("({!").rstrip(")};") for t in toks]
+        for j, t in enumerate(toks):
+            base = t.rsplit("/", 1)[-1].lower()
+            if base in KILL_VERBS and _args_forced(toks[j + 1:]):
+                return True
+            if base == "timeout" and _timeout_forced(toks[j + 1:]):
+                return True
+    return False
+
+
+def _args_forced(args: list[str]) -> bool:
+    for i, a in enumerate(args):
+        if a in _SIGNAL_OPTS:
+            if i + 1 < len(args) and _signal_forced(args[i + 1]):
+                return True
+        elif a.startswith("--signal="):
+            if _signal_forced(a.split("=", 1)[1]):
+                return True
+        elif re.fullmatch(r"-[sn].+", a):
+            if _signal_forced(a[2:]):
+                return True
+        elif a.startswith("-") and len(a) > 1 and not a.startswith("--"):
+            # -9, -09, -KILL, -kill, -SIGKILL, -$x; plain flags (-f, -x, -u) read as values that are not KILL/9
+            if not re.fullmatch(r"-[A-Za-z]{1,2}", a) and _signal_forced(a[1:]):
+                return True
+        elif a.startswith("$-"):
+            return True   # $'-9' after shlex: an ANSI-C signal, fail closed
+        # residual risk (accepted, seventh review): an unquoted $var that expands to -9 is not visible here
+    return False
+
+
+def _timeout_forced(args: list[str]) -> bool:
+    """`timeout -s KILL` / `--signal=KILL` sends SIGKILL itself; `-k`/`--kill-after` escalates to it."""
+    for i, a in enumerate(args):
+        if a in ("-k", "--kill-after") or a.startswith("--kill-after=") or re.fullmatch(r"-k\S+", a):
+            return True
+        if a in ("-s", "--signal") and i + 1 < len(args) and _signal_forced(args[i + 1]):
+            return True
+        if a.startswith("--signal=") and _signal_forced(a.split("=", 1)[1]):
+            return True
+        if re.fullmatch(r"-s.+", a) and _signal_forced(a[2:]):
+            return True
+        if not a.startswith("-"):
+            return False
     return False
 
 
@@ -2523,12 +2549,17 @@ def self_test() -> int:
     d = "-"
     for c in (f"kill {d}09 4242", f"kill {d}s09 4242", f"kill {d}n 09 4242", f"pkill {d}{d}signal=KILL python3",
               f"kill {d}'9' 4242", f"kill {d}\\9 4242", f"kill $'{d}9' 4242", f"kill 4242 {d}9", f"kill {d}kill 4242",
-              f"sudo {d}u root kill {d}9 4242", f"ssh h 'kill {d}09 4242'", f"env A=1 kill {d}SIGKILL 4242"):
+              f"sudo {d}u root kill {d}9 4242", f"ssh h 'kill {d}09 4242'", f"env A=1 kill {d}SIGKILL 4242",
+              # seventh review: the verb behind keywords, parentheses and wrappers
+              f"(kill {d}9 4242)", f"if true; then kill {d}9 4242; fi", f"echo 4242 | xargs kill {d}9",
+              f"setsid kill {d}9 4242", f"timeout {d}s KILL 5 sleep 9", f"VAR='a b' kill {d}9 4242",
+              f"find /proc {d}maxdepth 0 {d}exec kill {d}9 4242 ;"):
         if not forced_kill(c):
             fails.append(f"SIGKILL spelling must be read as forced: {c}")
     for c in ("kill 4242", f"kill {d}15 4242", f"kill {d}s TERM 4242", f"pkill {d}f train.py",
               f"git log {d}{d}grep=kill {d}n 9", f"journalctl {d}u kill-switch {d}n 9", 'grep "kill -9" notes.md',
-              'python tools/fix.py && git commit -m "drop .kill() call"', f"fuser {d}v ./build {d}bak.log"):
+              'python tools/fix.py && git commit -m "drop .kill() call"', f"fuser {d}v ./build {d}bak.log",
+              "kill $pid", 'kill "$pid"', f"kill {d}TERM $pid", f'pkill {d}f "$name"'):
         if forced_kill(c) or not decide(c)[0]:
             fails.append(f"graceful or unrelated command must pass: {c}")
     print(f"SCANNED owner-requests: approve={len(approve)} refuse={len(refuse)}")
