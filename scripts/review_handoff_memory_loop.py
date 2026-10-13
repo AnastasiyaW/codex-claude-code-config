@@ -156,6 +156,13 @@ def check_hooks(hooks_path: Path, findings: list[Finding]) -> dict:
         return result
 
     raw = read_text(hooks_path)
+    if "codex_hook_dispatch.py" in raw:   # one dispatcher entry per event: the handlers live in hooks.dispatch.json
+        dispatch = hooks_path.with_name("hooks.dispatch.json")
+        if not dispatch.exists():
+            findings.append(Finding("fail", "hooks", "hooks.json uses the dispatcher but hooks.dispatch.json is missing", str(dispatch)))
+            return result
+        raw = read_text(dispatch)
+        result["dispatch"] = str(dispatch)
     try:
         json.loads(raw)
         result["json_ok"] = True

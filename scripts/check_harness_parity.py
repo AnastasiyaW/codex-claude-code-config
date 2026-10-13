@@ -18,6 +18,9 @@ CFG = HOME / ".claude" / "claude-code-config"
 SOURCE = Path(__file__).resolve().parent.parent
 CLAUDE_CFG = HOME / ".claude" / "settings.json"
 CODEX_CFG = HOME / ".codex" / "hooks.json"
+CODEX_TRUST_CFG = CODEX_CFG   # what Codex itself runs and trusts (dispatcher entries when dispatch form is on)
+if "codex_hook_dispatch.py" in (CODEX_CFG.read_text(encoding="utf-8-sig") if CODEX_CFG.is_file() else ""):
+    CODEX_CFG = CODEX_CFG.with_name("hooks.dispatch.json")   # the real handler list (hooks/codex_hook_dispatch.py)
 
 # Asymmetries that are meant. The reason is the point: an allowlist without one is
 # where a real gap hides, and this file exists because a gap hid in a weaker check.
@@ -257,7 +260,7 @@ trusted = set(re.findall(r"hooks\.json:([a-z_]+:\d+:\d+)'\]",
                          codex_toml.read_text(encoding="utf-8") if codex_toml.is_file() else ""))
 untrusted = [f"{event}[{group.get('matcher') or '*'}] "
              + " ".join(re.findall(r"([\w.\-]+\.py)", hook.get("command", "")))
-             for event, groups in (json.loads(CODEX_CFG.read_text(encoding="utf-8-sig")).get("hooks") or {}).items()
+             for event, groups in (json.loads(CODEX_TRUST_CFG.read_text(encoding="utf-8-sig")).get("hooks") or {}).items()
              for g, group in enumerate(groups)
              for h, hook in enumerate(group.get("hooks", []))
              if f"{re.sub(r'(?<!^)(?=[A-Z])', '_', event).lower()}:{g}:{h}" not in trusted]

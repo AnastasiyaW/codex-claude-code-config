@@ -108,6 +108,9 @@ def survey(home: Path, codex_hooks_path: Path | None = None) -> list[tuple[str, 
         manifests.append(("Claude settings.json", settings_path))
     if codex_hooks_path.exists():
         manifests.append(("Codex hooks.json", codex_hooks_path))
+        dispatch = codex_hooks_path.with_name("hooks.dispatch.json")   # handlers run by codex_hook_dispatch.py
+        if dispatch.exists():
+            manifests.append(("Codex hooks.dispatch.json", dispatch))
     if not manifests:
         return []
     declared_by_name: dict[str, set[str]] = {}
