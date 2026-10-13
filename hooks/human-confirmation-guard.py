@@ -347,7 +347,18 @@ def _temp_roots() -> list[str]:
     import tempfile
     raw = {tempfile.gettempdir(), os.environ.get("TEMP", ""), os.environ.get("TMP", ""),
            "/tmp", "/var/tmp", "/private/tmp"}
+    # Windows per-user temp: apps keep writing %LOCALAPPDATA%\Temp even when TEMP is redirected
+    # (owner 2026-10-13: "почисти темп все папки")
+    if os.environ.get("LOCALAPPDATA"):
+        raw.add(os.path.join(os.environ["LOCALAPPDATA"], "Temp"))
     return sorted({_norm(r).rstrip("/").lower() for r in raw if r})
+
+
+# Temp by location (owner 2026-10-13, periodic painless cleanup): a drive's root temp/tmp folder,
+# and a repository's own .claude/tmp scratch - only inside a repo root (a .git dir or worktree file
+# beside .claude), only below the folder, never the folder itself.
+DRIVE_TEMP = re.compile(r"^[A-Za-z]:/(?:temp|tmp)/[^/]", re.IGNORECASE)
+REPO_CLAUDE_TMP = re.compile(r"^(.+)/\.claude/tmp/[^/]", re.IGNORECASE)
 
 
 def is_temp_target(target: str) -> bool:
@@ -355,6 +366,14 @@ def is_temp_target(target: str) -> bool:
     low = t.lower()
     if any(low.startswith(root + "/") and len(low) > len(root) + 1 for root in _temp_roots()):
         return True
+    if DRIVE_TEMP.match(t):
+        return True
+    m = REPO_CLAUDE_TMP.match(t)
+    if m:
+        repo = Path(m.group(1))
+        # review 2026-10-13: "C:" is drive-relative (resolves against the cwd), never a repo root
+        if repo.is_absolute() and len(repo.parts) >= 2 and (repo / ".git").exists():
+            return True
     parent, _, last = t.rpartition("/")
     if not any(re.match(p, last, re.IGNORECASE) for p in TEMP_NAME_PATTERNS):
         return False
@@ -372,8 +391,13 @@ def is_target_safe(target: str) -> bool:
         return False
     if re.match(r"^[A-Za-z]{2,}:", t):     # PowerShell provider (HKCU:, Env:, Cert:)
         return False
+    # Windows drops trailing dots/spaces: "C:/tmp/..." IS C:/tmp (review 2026-10-13)
+    if any(c in ("", ".") or c != c.rstrip(". ") for c in t.rstrip("/").split("/")[1:]):
+        return False
+    if "," in t:  # PowerShell reads "a,b" as two paths; dev_artifact_sweep calls this directly
+        return False
     if is_temp_target(t):
-        return True
+        return _temp_target_clear(t)
     for pat in SAFE_TARGET_PATTERNS:
         if re.search(pat, t, re.IGNORECASE):
             return True
@@ -897,16 +921,19 @@ PYTHON_NAMES = {"python", "python3", "py", "python.exe", "python3.exe", "py.exe"
 # regenerable; explicit confirmation only for the irreplaceable, e.g. database backups or a
 # database". Unnamed targets therefore pass a general go-ahead unless they look irreplaceable
 # (or a folder's contents cannot be inspected from here); those still have to be named.
-IRREPLACEABLE = re.compile(
+_DB_FILE_RE = (
     # database files, their journals and dumps, plain or compressed (review 2026-10-11 R4)
     r"\.(?:db|db3|sqlite\d?|sqlite\d?-(?:wal|shm)|db-(?:wal|shm)|mdb|accdb|dump|pgdump|sql|bak|backup|"
     r"kdbx|rdb|aof|ibd|mdf|ldf|ndf|frm|myd|myi|fdb|gdb|realm|ldb|sdf|ost|pst)"
     r"(?:\.(?:gz|bz2|xz|zst|7z|zip|tar|tgz))?$|-journal$|"
     # server data directories recognised by their marker files (review R5)
-    r"(?:^|/)(?:PG_VERSION|pg_wal|pg_xlog|ibdata\d*|dump\.rdb|appendonly\.aof|WiredTiger[^/]*)(?:/|$)|"
+    r"(?:^|/)(?:PG_VERSION|pg_wal|pg_xlog|ibdata\d*|dump\.rdb|appendonly\.aof|WiredTiger[^/]*)(?:/|$)")
+_DB_WORD_RE = (
     r"(?:^|/)[^/]*(?:backup|бэкап|бекап|snapshot|pgdata|postgres|mysql|mariadb|mongo|redis|"
-    r"dataset|датасет)[^/]*(?:/|$)",
-    re.IGNORECASE)
+    r"dataset|датасет)[^/]*(?:/|$)")
+# DB_FILE: the file itself is a database. IRREPLACEABLE adds names that suggest one (owner path only).
+DB_FILE = re.compile(_DB_FILE_RE, re.IGNORECASE)
+IRREPLACEABLE = re.compile(_DB_FILE_RE + "|" + _DB_WORD_RE, re.IGNORECASE)
 # The request itself names a file or path (then only named targets are covered).
 NAMES_FILE = re.compile(r"[\w\-]+\.[A-Za-z0-9]{1,8}\b|[\w\-.]+[\\/][\w\-.]")
 CONTENT_SCAN_CAP = 200_000  # simplification: bounded walk; a bigger folder must be named explicitly
@@ -926,7 +953,8 @@ def _kind(p: Path) -> str:
         return "missing"
     except OSError:
         return "error"
-    if stat.S_ISLNK(st.st_mode):
+    # review 2026-10-13: an NTFS junction is not S_ISLNK, yet a walk through it leaves temp
+    if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:  # REPARSE_POINT
         return "link"
     return "dir" if stat.S_ISDIR(st.st_mode) else "file"
 
@@ -938,6 +966,34 @@ def _sqlite_header(p: Path) -> bool | None:
             return fh.read(16) == b"SQLite format 3\x00"
     except OSError:
         return None
+
+
+def _temp_target_clear(t: str) -> bool:
+    """Inside temp the location decides, with exceptions (review 2026-10-13), each fail-closed:
+    a real database (extension, server marker or SQLite header - DB_FILE, not a word in a folder
+    name: car_dataset_inventory of jpgs in .claude/tmp is scratch), a link or a path that resolves
+    out of temp, and a folder too big or unreadable to check. A missing path (remote, already
+    gone) is judged by its name alone."""
+    p = Path(t)
+    kind = _kind(p)
+    if kind == "missing":
+        return not DB_FILE.search(t)
+    if kind in ("error", "link") or not is_temp_target(_norm(os.path.realpath(t))):
+        return False
+    if kind == "file":
+        return not DB_FILE.search(t) and _sqlite_header(p) is False
+    errors: list[OSError] = []
+    n = 0
+    for root, dirs, files in WALK(p, onerror=errors.append, followlinks=False):
+        for name in dirs + files:
+            n += 1
+            f = Path(root) / name
+            fk = _kind(f)
+            if n > CONTENT_SCAN_CAP or fk in ("error", "link") or DB_FILE.search(f.as_posix()):
+                return False
+            if fk == "file" and _sqlite_header(f) is not False:
+                return False
+    return not errors
 
 
 def irreplaceable_info(target: str, recursive: bool) -> tuple[str | None, list[str] | None]:
@@ -1922,6 +1978,15 @@ def main() -> None:
     )
 
 
+def _selftest_db_dir() -> Path:
+    """A temp folder whose only file is a SQLite database under an innocent name."""
+    import tempfile
+    d = Path(tempfile.gettempdir()) / "hcg-selftest-db"
+    d.mkdir(exist_ok=True)
+    (d / "cache.bin").write_bytes(b"SQLite format 3\x00" + b"\x00" * 84)
+    return d
+
+
 def self_test() -> int:
     """Negative controls: every must-block case blocks, every temp/build delete passes."""
     import tempfile
@@ -1939,6 +2004,9 @@ def self_test() -> int:
         f"Remove-Item -LiteralPath '{tmp}\\a.txt' -ErrorAction SilentlyContinue",
         f"rm -rf {repo_root.as_posix()}/tmp0c9bxbq2",
         f"rm -rf {repo_root.as_posix()}/pytest-of-sandbox",
+        f"rm -rf {repo_root.as_posix()}/.claude/tmp/car_dataset_inventory",  # repo scratch, any name
+        "rm -rf C:/temp/hcg-selftest-absent-run",            # judged by name when absent
+        'Remove-Item -Recurse -Force "D:\\tmp\\old-run"',
         "rm -rf build && rm -rf dist",
         f"del {tmp}\\stale.txt",
         'git commit -m "step; del old; rm tmp"',                  # quoted text is not a command
@@ -2078,6 +2146,20 @@ def self_test() -> int:
         "rm -f C:/work/audit.log",
         "rm -rf /workspace/sample/tmpabcdefgh/important",    # name above the target
         "rm -rf C:/work/tmpservers1",                        # mkdtemp-like name outside a repo root
+        "rm -rf C:/temp",                                    # drive temp folder itself
+        "rm -rf C:/tmp2/x",                                  # look-alike name
+        "rm -rf C:/work/temp/x",                             # temp not at the drive root
+        f"rm -rf {repo_root.as_posix()}/.claude/tmp",       # repo scratch folder itself
+        "rm -rf /workspace/no-repo/.claude/tmp/x",           # .claude/tmp outside a repo root
+        f"rm -rf {repo_root.as_posix()}/.claude/handoffs/x", # other .claude content
+        f"rm -rf {repo_root.as_posix()}/.claude/tmp/../handoffs",  # traversal out of the scratch
+        # independent review 2026-10-13: each of these passed before the fix
+        "rm -rf C:/tmp/important.sqlite",                    # a database inside temp
+        "rm -rf C:/tmp/pgdata/PG_VERSION",                   # server data inside temp
+        "rm -rf C:/.claude/tmp/x",                           # "C:" is not a repo root
+        "rm -rf C:/tmp/...",                                 # Windows reads it as C:/tmp itself
+        "rm -rf C:/tmp/x./y",                                # trailing-dot component
+        f"rm -rf {_selftest_db_dir().as_posix()}",           # SQLite header, innocent name
         "git commit -m 'ok'; del C:\\data\\x",               # real del after a quoted message
         "docker rm -f bench-a",
         "docker rm production-db",
@@ -2118,6 +2200,29 @@ def self_test() -> int:
                     "Get-ChildItem C:/srv | ForEach-Object -Process { del C:/srv/prod/db.sqlite }"]
     fails = [f"should allow: {c}" for c in allow_cases if not decide(c)[0]]
     fails += [f"should block: {c}" for c in block_cases if decide(c)[0]]
+    # review 2026-10-13: a drive-relative or relative "repo" resolves against the cwd, so the
+    # bypass shows only when the cwd is a repository - make it one for these two cases
+    if os.name == "nt":  # review 2026-10-13: a junction inside a temp child must not be walked into
+        import _winapi
+        jparent = Path(tempfile.mkdtemp(prefix="hcg-junction-"))
+        (jparent / "outside").mkdir()
+        (jparent / "child").mkdir()
+        _winapi.CreateJunction(str(jparent / "outside"), str(jparent / "child" / "j"))
+        if is_target_safe(str(jparent / "child")):
+            fails.append("should block: temp folder holding a junction")
+        os.rmdir(jparent / "child" / "j")  # removes the junction itself, not its target
+        for d in (jparent / "child", jparent / "outside", jparent):
+            os.rmdir(d)
+    if is_target_safe("C:/tmp/a,/work/b"):
+        fails.append("should block: comma-joined path list")
+    saved_cwd = os.getcwd()
+    try:
+        os.chdir(repo_root)
+        for c in (f"rm -rf {repo_root.drive}/.claude/tmp/x", "rm -rf ./.claude/tmp/x"):
+            if decide(c)[0]:
+                fails.append(f"should block (cwd is a repo): {c}")
+    finally:
+        os.chdir(saved_cwd)
 
     # owner-requested deletes: host transcript fixtures (approval + negative controls)
     global APPROVAL_LOG
@@ -2599,6 +2704,10 @@ def self_test() -> int:
         if forced_kill(c) or not decide(c)[0]:
             fails.append(f"graceful or unrelated command must pass: {c}")
     print(f"SCANNED owner-requests: approve={len(approve)} refuse={len(refuse)}")
+    import shutil  # 2026-10-13: every run left an hcg-selftest-* dir in TEMP (603 found)
+    shutil.rmtree(work, ignore_errors=True)
+    if work.exists():
+        fails.append(f"self-test fixture dir not removed: {work}")
     for f in fails:
         print("SELF-TEST FAIL:", f)
     print(f"SCANNED: allow={len(allow_cases)} block={len(block_cases)}")
