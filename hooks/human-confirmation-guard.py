@@ -818,8 +818,8 @@ IMAGE_RM_SEGMENT = re.compile(
 #   the owner or in my proposal she answered, match-everything patterns and infrastructure daemons refused,
 #   read-only companions only, plain `ssh host '...'` only.
 STOP_INTENT = re.compile(
-    r"\b(?:останови(?:те)?|остановить|остановим|останавливай(?:те)?|убей(?:те)?|убить|убьём|"
-    r"прибей(?:те)?|заверши(?:те)?|завершить|стопни(?:те)?|тормозни(?:те)?)\b|"
+    r"\b(?:останови(?:те)?|остановить|остановим|останавливай(?:те)?|убей(?:те)?|убить|убьём|убивай(?:те)?|"
+    r"прибей(?:те)?|прибивай(?:те)?|заверши(?:те)?|завершить|стопни(?:те)?|тормозни(?:те)?)\b|"
     r"(?:^|[.!;:\n])\s*(?:please\s+)?(?:kill|stop|terminate)\b", re.IGNORECASE)
 STOP_MENTION = re.compile(r"останов|убить|убей|прибей|заверш|стопн|kill|stop|terminat", re.IGNORECASE)
 NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|заверш|трог)|"
@@ -828,6 +828,8 @@ NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+
                            r"\bкроме\b|\bбез\b|\bно\s+не\b|\bа\s+не\b|\bexcept\b|\bbut\b|\bnot\b|\bexcluding\b",
                            re.IGNORECASE)
 _PID = r"(?!1\b)[1-9]\d*"
+_TK_FLAG = r"(?:/{1,2}|-)[TF]\b"        # git-bash needs //T, cmd takes /T
+_TK_PID = r"(?:/{1,2}|-)PID"
 _SIG = r"(?:-(?:9|15|2|KILL|TERM|INT|SIGKILL|SIGTERM|SIGINT)|-s\s+(?:9|15|2|KILL|TERM|INT|SIGKILL|SIGTERM|SIGINT))"
 # a pkill/killall pattern: a plain literal of >= 3 word characters, no regex metacharacters ('ss.d|abc' hit sshd)
 _LIT = r"[A-Za-z][\w\-/=:.]{2,}(?:[ ][\w\-/=:.]+)*"   # '.' allowed; the pattern is then matched as a regex
@@ -837,7 +839,11 @@ STOP_SEGMENT = re.compile(
     r"kill(?:\s+" + _SIG + r")?(?:\s+" + _PID + r")+|"
     r"pkill(?:\s+" + _SIG + r")?(?:\s+-[fx])*\s+(?:'" + _LIT + r"'|\"" + _LIT + r"\"|[A-Za-z][\w\-]{2,})|"
     r"killall(?:\s+" + _SIG + r")?\s+[A-Za-z][\w\-]{2,}|"
-    r"systemctl\s+stop\s+[A-Za-z][\w@.\-]{2,})\s*;?", re.IGNORECASE)
+    r"systemctl\s+stop\s+[A-Za-z][\w@.\-]{2,}|"
+    # Windows (owner 2026-10-13: «поправь хук чтобы сама убивала по моей просьбе»): taskkill by pid only,
+    # never /IM (an image name would hit every copy, e.g. all claude.exe); /T and /F are flags, /F = forced
+    r"taskkill(?:\s+" + _TK_FLAG + r")*(?:\s+" + _TK_PID + r"\s+" + _PID + r"(?:\s+" + _TK_FLAG + r")*)+)\s*;?",
+    re.IGNORECASE)
 # Never stopped on a stop request: the box's own access, tunnels and mounts (review 2026-10-12, finding 4).
 STOP_PROTECTED = re.compile(r"\b(?:sshd?|systemd|init|networking|networkmanager|rclone|cloudflared|tailscaled?|"
                             r"dockerd|containerd|kubelet|wg-quick|wg|wireguard|openvpn|autossh|frpc|frps|socat|"
@@ -1404,6 +1410,11 @@ def _segment_targets(seg: str) -> list[str]:
     verb, args = toks[0].lower(), toks[1:]
     if verb == "systemctl":
         return args[1:]
+    if verb.removesuffix(".exe") == "taskkill":
+        ops = [args[i + 1] for i, a in enumerate(args[:-1]) if re.fullmatch(_TK_PID, a, re.IGNORECASE)]
+        if not ops:
+            raise ValueError(f"taskkill without /PID: {seg}")
+        return ops
     ops, skip = [], False
     for a in args:
         if skip:
@@ -1437,7 +1448,8 @@ def prose_targets(text: str) -> list[str]:
 
 def _span_targets(span: str, forced_only: bool = False) -> list[str]:
     out: list[str] = []
-    for m in re.finditer(r"\b(?:sudo\s+)?(?:kill|pkill|killall|systemctl\s+stop)\b[^\n`;|&]*", span, re.IGNORECASE):
+    for m in re.finditer(r"\b(?:sudo\s+)?(?:kill|pkill|killall|systemctl\s+stop|taskkill)\b[^\n`;|&]*", span,
+                         re.IGNORECASE):
         cand = m.group(0).strip()
         while cand and not STOP_SEGMENT.fullmatch(cand):
             cand = cand.rsplit(" ", 1)[0] if " " in cand else ""
@@ -1449,6 +1461,8 @@ def _span_targets(span: str, forced_only: bool = False) -> list[str]:
 def _forced(seg: str) -> bool:
     """An explicit SIGKILL in any spelling (forced_kill reads it by value); killall/pkill/kill default to SIGTERM
     and systemctl stop is graceful (fifth review)."""
+    if re.match(r"\s*taskkill\b", seg, re.IGNORECASE):
+        return re.search(r"(?:^|\s)(?:/{1,2}|-)F\b", seg, re.IGNORECASE) is not None
     return forced_kill(seg)
 
 
@@ -1478,7 +1492,7 @@ def stop_forced(cmd: str) -> set[str]:
 
 
 # the owner asks for a forced kill in words (else her "останови" approves only what a SIGTERM would do)
-FORCE_WORDS = re.compile(r"\b(?:убей(?:те)?|убить|убьём|прибей(?:те)?|принудительно|насильно|force|sigkill)\b|"
+FORCE_WORDS = re.compile(r"\b(?:убей(?:те)?|убить|убьём|убивай(?:те)?|прибей(?:те)?|прибивай(?:те)?|принудительно|насильно|force|sigkill)\b|"
                          r"(?:^|[.!;:\n])\s*(?:please\s+)?kill\b|\s-9\b", re.IGNORECASE)
 
 
@@ -1602,8 +1616,10 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
         if CONFIRM_ONLY.fullmatch(prompt):
             return False
         if t.isdigit():
-            return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*|\bубей(?:те)?|\bприбей(?:те)?|\bостанов\w*)"
-                             r"\s*[:#№]?\s*(?:\d+[\s,]+)*" + t + r"(?!\d)(?![:.,/]\d)",   # "22:30" is a time
+            # a pid list may be joined by commas or "и"/"and" (owner 2026-10-13: «да, убей 37116 и 31004»)
+            return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*|\bубей(?:те)?|\bубивай(?:те)?|\bприбей(?:те)?|"
+                             r"\bостанов\w*)"
+                             r"\s*[:#№]?\s*(?:\d+(?:[\s,]+|\s+(?:и|and)\s+))*" + t + r"(?!\d)(?![:.,/]\d)",
                              prompt, re.IGNORECASE) is not None
         return re.search(r"(?<![\w.\-/~:])" + re.escape(t) + r"(?![\w\-/]|\.\w)", prompt) is not None
     # third review 2026-10-12: when the owner names operands herself ("останови процесс 4242"), my proposal
