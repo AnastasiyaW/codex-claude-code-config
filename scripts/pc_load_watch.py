@@ -15,7 +15,14 @@ Auto-kill (owner 2026-10-11: "всё что висит без дела боле�
   * IDLE      - the process together with its children spent < IDLE_CPU_S
                 CPU-seconds over the last IDLE_MIN (30) minutes;
   * ORPHAN    - its parent is gone (or the parent PID now belongs to a younger
-                process), older than ORPHAN_GRACE_MIN.
+                process) AND its subtree did nothing for ORPHAN_GRACE_MIN. A busy
+                orphan is a backgrounded job, not a hung one: the first version
+                killed 40-minute background test runs and they reported exit 0.
+  * PAST TIMEOUT - a `timeout <limit>` wrapper still alive TIMEOUT_GRACE_MIN after
+                its own limit (2026-10-13: a 3 h scraper hung on past 13:42).
+  * RUNAWAY SCAN - a whole-drive walk (`find /`, `rg ... C:/`, `du /`, `dir /s C:/`)
+                running longer than SCAN_MAX_MIN (2026-10-13: `find / -name x` ran 11 h
+                and pushed two rclone mounts to ~27 and ~16 cores).
 Never killed: GUI apps and claude.exe, the Codex app-server, MCP servers,
 rclone mounts, ssh tunnels (-W/-L/-R/-D/-N: a parentless `ssh -W` carries a
 mount), this tool and its ancestors/children, and any command line containing a
@@ -73,6 +80,14 @@ SHELLS = {"bash.exe", "sh.exe", "cmd.exe", "powershell.exe", "pwsh.exe"}
 PROTECT_DEFAULT = ("claude extensions", "mcp", "app-server", "pc_load_watch", "--listen", "rclone")
 _SSH_TUNNEL = re.compile(r"(^|\s)-[a-z]*[wlrdns]")   # -W/-L/-R/-D/-N tunnels, -s sftp (rclone transport)
 _CODEX_EXEC = re.compile(r'codex(?:\.exe)?"?\s+exec\b')   # one-shot run; the app passes "-c ..." first
+TIMEOUT_GRACE_MIN = 10
+# `ssh host <command>` is idle locally while the remote command works; its own idleness says
+# nothing. 2026-10-13 an orphaned remote-command ssh was killed at 12 min.
+SSH_REMOTE_MIN = 180
+SCAN_MAX_MIN = 60
+_WALKERS = {"find.exe", "rg.exe", "grep.exe", "du.exe", "tree.com", "fd.exe", "ls.exe"}
+_ROOT_ARG = re.compile(r'(?:^|\s)(?:/|[a-z]:[\\/]?|/[a-z]/?)(?:\s|$)', re.I)
+_DUR = re.compile(r"^(\d+(?:\.\d+)?)([smhd]?)$")
 AUTOSTART_MIN = 10            # parentless and born this soon after boot = logon autostart daemon
 
 
@@ -216,6 +231,37 @@ def kill_tree(pid: int) -> list[int]:
     return [k for k in killed if not psutil.pid_exists(k)]  # verified gone
 
 
+def _timeout_limit_min(cmd: str) -> float | None:
+    """Limit of a GNU `timeout [opts] DURATION cmd` wrapper, in minutes."""
+    parts = cmd.split()
+    for tok in parts[1:]:
+        if tok.startswith("-"):
+            continue
+        m = _DUR.match(tok)
+        if not m:
+            return None
+        return float(m.group(1)) * {"": 1 / 60, "s": 1 / 60, "m": 1, "h": 60, "d": 1440}[m.group(2)]
+    return None
+
+
+def _runaway(r: dict) -> str | None:
+    if r["name"] == "timeout.exe":
+        lim = _timeout_limit_min(r["cmd"])
+        if lim is not None and r["age_min"] >= lim + TIMEOUT_GRACE_MIN:
+            return "PAST TIMEOUT"
+    walker = r["name"] in _WALKERS or (r["name"] == "cmd.exe" and " dir " in f" {r['cmd'].lower()} " and "/s" in r["cmd"].lower())
+    if walker and r["age_min"] >= SCAN_MAX_MIN and _ROOT_ARG.search(r["cmd"].lower().replace('"', "").split(r["name"], 1)[-1]):
+        return "RUNAWAY SCAN"
+    return None
+
+
+def _patience(r: dict, minutes: int) -> int:
+    """Remote ssh jobs get SSH_REMOTE_MIN: their work happens on the other host."""
+    if r["name"] == "ssh.exe" and len(r["cmd"].split()) > 2 and minutes:
+        return max(minutes, SSH_REMOTE_MIN)
+    return minutes
+
+
 def _idle_since(r: dict, history: list[dict], now: int, idle_min: int) -> bool:
     """Subtree spent < IDLE_CPU_S over at least idle_min minutes of recorded history."""
     if r["tree_delta_s"] >= 0.05:
@@ -307,11 +353,14 @@ def analyse(s: dict, history: list[dict], do_kill: bool, hook_age: int = HOOK_MA
             continue
         if _is_hook(r["cmd"]) and r["age_min"] >= hook_age and r["tree_delta_s"] < 0.05:
             targets[r["pid"]] = ("HUNG HOOK", r)
+        elif _runaway(r):
+            targets[r["pid"]] = (_runaway(r), r)
         elif _protected(r, extra, boot, listeners):
             continue
-        elif not r["parent_alive"] and r["age_min"] >= ORPHAN_GRACE_MIN:
+        elif (not r["parent_alive"] and r["age_min"] >= _patience(r, ORPHAN_GRACE_MIN)
+              and _idle_since(r, history, s["epoch"], _patience(r, ORPHAN_GRACE_MIN))):
             targets[r["pid"]] = ("ORPHAN", r)
-        elif r["age_min"] >= idle_min and _idle_since(r, history, s["epoch"], idle_min):
+        elif r["age_min"] >= _patience(r, idle_min) and _idle_since(r, history, s["epoch"], _patience(r, idle_min)):
             targets[r["pid"]] = (f"IDLE {idle_min}+ min", r)
     # kill only the topmost target of each tree; kill_tree takes the children with it
     for pid, (why, r) in targets.items():

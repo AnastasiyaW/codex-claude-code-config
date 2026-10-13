@@ -56,7 +56,7 @@ def test_kill_policy():
         row(11, "powershell.exe", "powershell -File a.ps1 -Loop", parent=False, age_min=60 * 5),
         row(12, "powershell.exe", "powershell -File lan-forward.ps1", parent=False),  # protect.txt
         row(13, "pwsh.exe", "C:\\x\\pwsh.exe"),                                       # bare shell
-        row(14, "ssh.exe", "ssh nas -s sftp"),                                # rclone transport
+        row(14, "ssh.exe", "ssh nas -s sftp", age_min=240),                          # past ssh patience                                # rclone transport
         row(15, "ssh.exe", "ssh -W host:22 jump"),                                    # tunnel
         row(16, "node.exe", long_mcp),                                                # mcp past 300 chars
         row(17, "codex.exe", "codex.exe -c features.prefer_mxc=true -c x=exec_policy"),  # the app
@@ -68,9 +68,27 @@ def test_kill_policy():
         row(23, "python.exe", "python child.py", ppid=19),                            # dies with 19
     ]
     rows[1]["ctime"] = BOOT + 120                                                     # logon autostart
-    hist = [{"epoch": NOW - 31 * 60, "cpu": {f"{r['pid']}:{r['ctime']}": 5.0 for r in rows}}]
+    hist = [{"epoch": NOW - m * 60, "cpu": {f"{r['pid']}:{r['ctime']}": 5.0 for r in rows}} for m in (190, 31)]
     got = verdicts(rows, hist)
     assert got == {10: "ORPHAN", 18: "IDLE 30+ min", 19: "IDLE 30+ min"}, got
+
+
+def test_busy_orphan_and_runaways():
+    gitfind = r"C:\Program Files\Git\usr\bin\find.exe"
+    rows = [
+        row(50, "bash.exe", "bash -c ./publish.sh", parent=False, tree_cpu=400.0),        # busy background job
+        row(51, "timeout.exe", "timeout.exe 3h python scrape.py", parent=True, age_min=200),  # 3 h + 20 min
+        row(52, "timeout.exe", "timeout.exe 3h python scrape.py", parent=True, age_min=150),  # within limit
+        row(53, "find.exe", f"{gitfind} / -name x.h", tree_cpu=900.0, age_min=660),        # 11 h whole-disk walk
+        row(54, "find.exe", f"{gitfind} /d/work/proj -name x.h", tree_cpu=900.0, age_min=660),  # one tree
+        row(55, "find.exe", f"{gitfind} / -name x.h", tree_cpu=900.0, age_min=20),          # young
+        row(56, "rg.exe", "rg.exe -l foo C:\\", tree_cpu=900.0, age_min=90),               # whole drive
+        row(57, "ssh.exe", "ssh host docker exec -i api python -", parent=False, age_min=40),  # remote job
+        row(58, "ssh.exe", "ssh host docker exec -i api python -", parent=False, age_min=200),  # 3 h+ idle
+    ]
+    hist = [{"epoch": NOW - m * 60, "cpu": {f"{r['pid']}:{r['ctime']}": 5.0 for r in rows}} for m in (190, 31)]
+    got = verdicts(rows, hist)
+    assert got == {51: "PAST TIMEOUT", 53: "RUNAWAY SCAN", 56: "RUNAWAY SCAN", 58: "ORPHAN"}, got
 
 
 def test_idle_needs_history():
@@ -129,6 +147,7 @@ if __name__ == "__main__":
     test_hook_matcher()
     test_kill_policy()
     test_idle_needs_history()
+    test_busy_orphan_and_runaways()
     test_listening_server_is_not_idle()
     test_remount_only_when_hung_across_runs()
     test_mount_probe_flags_silence()
