@@ -822,7 +822,8 @@ STOP_INTENT = re.compile(
     r"прибей(?:те)?|прибивай(?:те)?|заверши(?:те)?|завершить|стопни(?:те)?|тормозни(?:те)?)\b|"
     r"(?:^|[.!;:\n])\s*(?:please\s+)?(?:kill|stop|terminate)\b", re.IGNORECASE)
 STOP_MENTION = re.compile(r"останов|убить|убей|прибей|заверш|стопн|kill|stop|terminat", re.IGNORECASE)
-NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|заверш|трог)|"
+NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|приб|стоп|тормоз|"
+                           r"заверш|трог)|"
                            r"\bпочему\b|\bзачем\b|\bwhy\b|\bhow\b|"
                            # exclusions make the target list ambiguous (re-review 2026-10-12, finding 1)
                            r"\bкроме\b|\bбез\b|\bно\s+не\b|\bа\s+не\b|\bexcept\b|\bbut\b|\bnot\b|\bexcluding\b",
@@ -830,6 +831,7 @@ NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+
 _PID = r"(?!1\b)[1-9]\d*"
 _TK_FLAG = r"(?:/{1,2}|-)[TF]\b"        # git-bash needs //T, cmd takes /T
 _TK_PID = r"(?:/{1,2}|-)PID"
+_TK_PIDNUM = r"(?!(?:0|1|4)\b)[1-9]\d*"   # review 2026-10-13: Windows pid 4 is System
 _SIG = r"(?:-(?:9|15|2|KILL|TERM|INT|SIGKILL|SIGTERM|SIGINT)|-s\s+(?:9|15|2|KILL|TERM|INT|SIGKILL|SIGTERM|SIGINT))"
 # a pkill/killall pattern: a plain literal of >= 3 word characters, no regex metacharacters ('ss.d|abc' hit sshd)
 _LIT = r"[A-Za-z][\w\-/=:.]{2,}(?:[ ][\w\-/=:.]+)*"   # '.' allowed; the pattern is then matched as a regex
@@ -842,7 +844,7 @@ STOP_SEGMENT = re.compile(
     r"systemctl\s+stop\s+[A-Za-z][\w@.\-]{2,}|"
     # Windows (owner 2026-10-13: «поправь хук чтобы сама убивала по моей просьбе»): taskkill by pid only,
     # never /IM (an image name would hit every copy, e.g. all claude.exe); /T and /F are flags, /F = forced
-    r"taskkill(?:\s+" + _TK_FLAG + r")*(?:\s+" + _TK_PID + r"\s+" + _PID + r"(?:\s+" + _TK_FLAG + r")*)+)\s*;?",
+    r"taskkill(?:\s+" + _TK_FLAG + r")*(?:\s+" + _TK_PID + r"\s+" + _TK_PIDNUM + r"(?:\s+" + _TK_FLAG + r")*)+)\s*;?",
     re.IGNORECASE)
 # Never stopped on a stop request: the box's own access, tunnels and mounts (review 2026-10-12, finding 4).
 STOP_PROTECTED = re.compile(r"\b(?:sshd?|systemd|init|networking|networkmanager|rclone|cloudflared|tailscaled?|"
@@ -1611,6 +1613,12 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
         forced = stop_forced(cmd)
     except ValueError:
         return False, "cannot parse the stop command or the proposal"
+    if not targets:   # review 2026-10-13: never approve a stop whose operands we could not read
+        return False, "stop command without readable targets"
+    # /T kills the whole tree: only when my proposal itself wrote taskkill with /T (review 2026-10-13)
+    if re.search(r"\btaskkill\b[^;&|]*?(?:^|\s)(?:/{1,2}|-)T\b", cmd, re.IGNORECASE) and not re.search(
+            r"`[^`\n]*\btaskkill\b[^`\n]*\s(?:/{1,2}|-)T\b[^`\n]*`", answer, re.IGNORECASE):
+        return False, "taskkill /T (process tree) was not in my proposal"
 
     def owner_named(t: str) -> bool:
         if CONFIRM_ONLY.fullmatch(prompt):
@@ -1619,7 +1627,9 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
             # a pid list may be joined by commas or "и"/"and" (owner 2026-10-13: «да, убей 37116 и 31004»)
             return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*|\bубей(?:те)?|\bубивай(?:те)?|\bприбей(?:те)?|"
                              r"\bостанов\w*)"
-                             r"\s*[:#№]?\s*(?:\d+(?:[\s,]+|\s+(?:и|and)\s+))*" + t + r"(?!\d)(?![:.,/]\d)",
+                             r"\s*[:#№]?\s*(?:\d+(?:[\s,]+|\s+(?:и|and)\s+))*" + t + r"(?!\d)(?![:.,/]\d)"
+                             # review 2026-10-13: "убей 37116 и 22 часа" - a number before a time unit is no pid
+                             r"(?!\s*(?:час|мин|сек|ч\b|h\b|m\b|s\b|hours?|min|sec))",
                              prompt, re.IGNORECASE) is not None
         return re.search(r"(?<![\w.\-/~:])" + re.escape(t) + r"(?![\w\-/]|\.\w)", prompt) is not None
     # third review 2026-10-12: when the owner names operands herself ("останови процесс 4242"), my proposal
