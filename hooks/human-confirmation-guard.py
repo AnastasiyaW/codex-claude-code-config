@@ -817,6 +817,29 @@ NOT_A_RESTART_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит
 RESTART_SEGMENT = re.compile(
     r"(?:sudo\s+(?:-\S+\s+)*)?(?:reboot|systemctl\s+reboot|shutdown\s+-r(?:\s+(?:now|\+\d+))?|"
     r"virsh\s+reboot\s+[\w.-]+|restart-computer(?:\s+-force)?)\s*;?", re.IGNORECASE)
+# Owner 2026-10-14 ("для виртуалок не надо моего да на перегрузку, это не опасное действие"):
+# restarting one of OUR test VMs needs no approval. Closed lists, not a "looks like a VM" guess:
+# a rented VPS is also a VM but may run production, and a KVM host carries several guests.
+# Names are private infrastructure, so they come from LOCAL_CONFIG (keys below); a missing key
+# means an empty list, i.e. no exception. Keep signer VMs and machines people work on out of it.
+def _cfg_set(key: str) -> frozenset:
+    return frozenset(x for x in (_CFG.get(key) or []) if isinstance(x, str) and x)
+
+
+TEST_VM_SSH_HOSTS = _cfg_set("test_vm_ssh_hosts")          # guests restarted from inside (ssh alias)
+TEST_VM_VIRSH_DOMAINS = _cfg_set("test_vm_virsh_domains")  # guests restarted with virsh reboot
+TEST_VM_VIRSH_HOSTS = _cfg_set("test_vm_virsh_hosts")      # KVM hosts where virsh may run
+TEST_VM_JUMP_HOSTS = _cfg_set("test_vm_jump_hosts")        # hops allowed on the way
+# -F only with a listed file: any other ssh config could carry a ProxyCommand that runs a command.
+TEST_VM_SSH_CONFIGS = _cfg_set("test_vm_ssh_configs")
+TEST_VM_SSH_SAFE_O = re.compile(r"(?:BatchMode=yes|ConnectTimeout=\d+|ControlMaster=no|ControlPath=none)",
+                                re.IGNORECASE)
+TEST_VM_POSIX_RESTART = re.compile(
+    r"(?:sudo\s+(?:-n\s+)?)?(?:reboot|systemctl\s+reboot|shutdown\s+-r(?:\s+(?:now|\+\d+))?)", re.IGNORECASE)
+# Windows guest: `shutdown /r [/t N] [/f] [/c word]`, `Restart-Computer [-Force]`. /s /p /h are not restarts.
+TEST_VM_WINDOWS_RESTART = re.compile(
+    r"shutdown(?:\.exe)?\s+/r(?:\s+/t\s+\d{1,3}|\s+/f|\s+/c\s+[\w.-]+)*|restart-computer(?:\s+-force)?",
+    re.IGNORECASE)
 # Owner 2026-10-12 ("да, почисти старые образы на сервере" was refused): a docker image is
 # rebuildable from git, so asking to clean images approves removing images named by tag or digest.
 # No flags: without -f docker refuses an image a container still uses, so a live service is safe.
@@ -1446,6 +1469,68 @@ def restart_only(cmd: str) -> bool:
     return _only_segments(cmd, RESTART_SEGMENT, STOP_COMPANION)
 
 
+def _test_vm_ssh_hop(segment: str) -> tuple[str, str] | None:
+    """(host, remote command) of `[timeout N] ssh [safe opts] host CMD`, or None when the segment
+    is not ssh or carries any option outside the closed safe set."""
+    try:
+        toks = shlex.split(segment, posix=True)
+    except ValueError:
+        return None
+    i = 2 if toks[:1] == ["timeout"] and len(toks) > 1 and re.fullmatch(r"\d+[smhd]?", toks[1]) else 0
+    # exactly `ssh`: review 2026-10-14 found `id&/usr/bin/ssh` and `./ssh` passing via rsplit("/")
+    if i >= len(toks) or toks[i].lower() not in {"ssh", "ssh.exe"}:
+        return None
+    i += 1
+    while i < len(toks) and toks[i].startswith("-"):
+        opt = toks[i]
+        if opt in {"-n", "-T", "-q"}:
+            i += 1
+        elif opt == "-o" and i + 1 < len(toks) and TEST_VM_SSH_SAFE_O.fullmatch(toks[i + 1]):
+            i += 2
+        elif opt == "-F" and i + 1 < len(toks) and toks[i + 1] in TEST_VM_SSH_CONFIGS:
+            i += 2
+        else:
+            return None
+    if i + 1 >= len(toks) or not re.fullmatch(r"[\w.@-]+", toks[i]):
+        return None
+    return toks[i], " ".join(toks[i + 1:])
+
+
+def test_vm_restart(cmd: str) -> str | None:
+    """Name of the test VM when cmd is exactly one restart of a listed test VM, else None.
+
+    Shape: zero or more ssh hops through TEST_VM_JUMP_HOSTS, then either a restart run on a
+    TEST_VM_SSH_HOSTS guest, or `virsh reboot <domain>` on a TEST_VM_VIRSH_HOSTS host. One segment
+    per level; no substitution, redirection or second command anywhere."""
+    # Deliberate second layer (the restart regexes are full matches and host lists are exact): a
+    # real restart needs none of these at any nesting level. Review 2026-10-14: a single `&` is
+    # not a segment separator here and `${IFS}` slipped past a `$(`-only filter.
+    if substitutions(cmd) or re.search(r"[&|;$(){}<>`#*?\r\n\\]", cmd):
+        return None
+    seg, hosts = cmd.strip(), []
+    for _ in range(4):
+        parts = [s.strip() for s in split_segments(executable_text(seg)) if s.strip()]
+        if len(parts) != 1:
+            return None
+        seg = parts[0]
+        hop = _test_vm_ssh_hop(seg)
+        if hop is None:
+            break
+        hosts.append(hop[0])
+        seg = hop[1].strip()
+    else:
+        return None
+    if any(h not in TEST_VM_JUMP_HOSTS for h in hosts[:-1]):
+        return None
+    last = hosts[-1] if hosts else ""
+    if last in TEST_VM_SSH_HOSTS and (TEST_VM_POSIX_RESTART.fullmatch(seg) or TEST_VM_WINDOWS_RESTART.fullmatch(seg)):
+        return last
+    m = re.fullmatch(r"(?:sudo\s+(?:-n\s+)?)?virsh\s+reboot\s+([\w.-]+)", seg)
+    if m and last in TEST_VM_VIRSH_HOSTS and m.group(1) in TEST_VM_VIRSH_DOMAINS:
+        return m.group(1)
+    return None
+
+
 def stop_targets(cmd: str) -> list[str]:
     """pids, process names/patterns and units a stop command acts on (ssh unwrapped, quotes stripped)."""
     out: list[str] = []
@@ -1938,6 +2023,19 @@ def main() -> None:
     if allowed:
         if hit:
             log("INFO", "require_human_confirmation", "safe-target", hit, cmd[:200])
+        allow()
+
+    vm = test_vm_restart(cmd)
+    if vm:
+        try:
+            APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                     "session": event.get("session_id"), "action": "test-vm-restart",
+                                     "vm": vm, "command": cmd[:500]}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass   # the audit line is a record; the approval itself is the closed VM list
+        log("INFO", "require_human_confirmation", "test-vm-restart", hit or "", vm)
         allow()
 
     ok, why = approved_by_owner(cmd, event)
@@ -2565,6 +2663,51 @@ def self_test() -> int:
         ("delete request does not cover restart", vm_reboot, transcript("удали /srv/a/b/x.bin")),
         ("restart hidden in a substitution", "echo $(reboot)", transcript("перезапусти сервер")),
     ]
+    # owner 2026-10-14: a test VM restart needs no approval at all; everything else still does
+    global TEST_VM_SSH_HOSTS, TEST_VM_VIRSH_DOMAINS, TEST_VM_VIRSH_HOSTS, TEST_VM_JUMP_HOSTS, TEST_VM_SSH_CONFIGS
+    TEST_VM_SSH_HOSTS = frozenset({"win-guest"})
+    TEST_VM_VIRSH_DOMAINS = frozenset({"win-guest", "lin-guest"})
+    TEST_VM_VIRSH_HOSTS = frozenset({"kvm-host"})
+    TEST_VM_JUMP_HOSTS = frozenset({"jump", "kvm-host"})
+    cfg = "/srv/runs/access/ssh_config"
+    TEST_VM_SSH_CONFIGS = frozenset({cfg})
+    vm_ok = [
+        f"ssh jump 'ssh -n -F {cfg} win-guest \"shutdown /r /t 5 /c test-restart\"'",
+        f"timeout 120 ssh jump 'ssh -n -F {cfg} win-guest Restart-Computer -Force'",
+        "ssh kvm-host 'sudo virsh reboot lin-guest'",
+        "ssh -o ControlMaster=no -o ControlPath=none kvm-host 'virsh reboot win-guest'",
+    ]
+    vm_bad = [
+        "ssh jump 'sudo reboot'",                                          # a jump VPS itself
+        "ssh kvm-host 'sudo reboot'",                                      # the host, not a guest
+        "ssh kvm-host 'virsh reboot signer-guest'",                        # unlisted domain
+        "ssh jump 'virsh reboot lin-guest'",                               # virsh on a non-listed host
+        f"ssh jump 'ssh -n -F {cfg} win-guest \"shutdown /s /t 0\"'",      # power off
+        "ssh jump 'ssh -F /tmp/x.cfg win-guest \"shutdown /r\"'",          # foreign -F
+        "ssh -o ProxyCommand=calc kvm-host 'virsh reboot lin-guest'",      # option runs a command
+        "ssh kvm-host 'virsh reboot lin-guest; rm -rf /srv/a'",            # second command
+        "ssh kvm-host 'virsh destroy lin-guest'",                          # not a restart
+        "ssh other 'ssh kvm-host virsh reboot lin-guest'",                 # unlisted jump host
+        "echo $(ssh kvm-host 'virsh reboot lin-guest')",                   # substitution
+        "ssh kvm-host 'virsh reboot lin-guest' > /tmp/o",                  # redirection
+        # review 2026-10-14 bypasses, kept as negative controls
+        "id&/usr/bin/ssh kvm-host 'virsh reboot lin-guest'",
+        "rm${IFS}-rf${IFS}/srv/data&/usr/bin/ssh kvm-host 'virsh reboot lin-guest'",
+        f"ssh jump 'sudo${{IFS}}reboot&/usr/bin/ssh -n -F {cfg} win-guest shutdown /r'",
+        "./ssh kvm-host 'virsh reboot lin-guest'",
+        "/usr/bin/ssh kvm-host 'virsh reboot lin-guest'",
+        "ssh -oProxyCommand=calc kvm-host 'virsh reboot lin-guest'",
+        f"ssh jump 'ssh -n -F {cfg} win-guest \"shutdown /r /m \\\\\\\\other\"'",
+        f"ssh jump 'ssh -n -F {cfg} win-guest \"shutdown /r /t 5 extra\"'",
+        f"ssh jump 'ssh -n -F {cfg} win-guest Restart-Computer -ComputerName other'",
+        "ssh 'kvm host' 'virsh reboot lin-guest'",
+    ]
+    for c in vm_ok:
+        if not test_vm_restart(c):
+            fails.append(f"test VM restart should pass without approval: {c}")
+    for c in vm_bad:
+        if test_vm_restart(c):
+            fails.append(f"must NOT pass as a test VM restart: {c}")
     # owner 2026-10-12: stopping a process on her request (approve) and its negative controls
     approve += [
         ("stop asked, pid in my proposal", "ssh h 'kill -9 4242'",
