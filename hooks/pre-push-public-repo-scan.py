@@ -469,12 +469,15 @@ def agent_b_claude(diff: str) -> dict | None:
     # the user-task hook from turning it into a durable work order.
     # The same reviewer under another login when this one is out of quota: the
     # verdict is still required, only the account changes (see fallback_config_dirs).
-    for config_dir in [None] + fallback_config_dirs():
-        r = _agent_b_call(claude, prompt, config_dir)
+    # After the subscription logins come the monthly API-credit keys of the same accounts.
+    attempts = [(d, None, d or "main login") for d in [None] + fallback_config_dirs()]
+    attempts += [(API_KEY_CONFIG_DIR, key, f"API credits {org}") for org, key in fallback_api_keys()]
+    for config_dir, api_key, label in attempts:
+        r = _agent_b_call(claude, prompt, config_dir, api_key)
         if r.returncode == 0 or not _QUOTA_RE.search((r.stdout or "") + (r.stderr or "")):
             break
-        print(f"[pre-push] Agent B: {'main login' if config_dir is None else config_dir} is out of "
-              "quota; trying the next configured login", file=sys.stderr)
+        print(f"[pre-push] Agent B: {label} is out of quota; trying the next configured login",
+              file=sys.stderr)
     if r.returncode != 0:
         # Distinguish "found but errored" (e.g. not logged in) from "not found",
         # so the failure is legible instead of mislabeled as missing.
@@ -483,12 +486,23 @@ def agent_b_claude(diff: str) -> dict | None:
         print(f"[pre-push] Agent B: claude CLI found ({claude}) but call failed: {hint}",
               file=sys.stderr)
         return None
-    out = r.stdout.strip()
-    # Extract JSON from response
-    m = re.search(r'\{"verdict"\s*:\s*"(SAFE|BLOCK)"\s*,\s*"reason"\s*:\s*"([^"]+)"\}', out)
-    if not m:
-        return None
-    return {"verdict": m.group(1), "reason": m.group(2)}
+    return parse_verdict(r.stdout or "")
+
+
+def parse_verdict(out: str) -> dict | None:
+    """The first JSON object in the reply that carries verdict SAFE|BLOCK and a reason; else None.
+    A real JSON parse, not a regex: a reason quoting code (print(\\"x\\")) has escaped quotes,
+    and the old `"([^"]+)"` pattern read that as no verdict and blocked a safe push (2026-10-14)."""
+    decoder = json.JSONDecoder()
+    for start in (i for i, ch in enumerate(out) if ch == "{"):
+        try:
+            obj, _ = decoder.raw_decode(out, start)
+        except ValueError:
+            continue
+        if (isinstance(obj, dict) and obj.get("verdict") in ("SAFE", "BLOCK")
+                and isinstance(obj.get("reason"), str) and obj["reason"]):
+            return {"verdict": obj["verdict"], "reason": obj["reason"]}
+    return None
 
 
 # A usage limit or an empty API balance is an account state, not a verdict.
@@ -509,13 +523,44 @@ def fallback_config_dirs() -> list[str]:
     return [d for d in dirs if isinstance(d, str) and os.path.isdir(d)]
 
 
-def _agent_b_call(claude: str, prompt: str, config_dir: str | None) -> subprocess.CompletedProcess:
+API_KEY_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".claude-agent-b", "api-credits")
+
+
+def fallback_api_keys() -> list[tuple[str, str]]:
+    """(account, key) pairs from ~/.secrets/anthropic-api-credits.env (ANTHROPIC_API_KEY_<ACC>=...),
+    in file order. Missing file = no API fallback (the scan stays fail-closed)."""
+    path = os.path.join(os.path.expanduser("~"), ".secrets", "anthropic-api-credits.env")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    pairs = []
+    for line in lines:
+        m = re.match(r"\s*ANTHROPIC_API_KEY_(\w+)\s*=\s*(\S+)", line)
+        if m:
+            pairs.append((m.group(1), m.group(2).strip("\"'")))
+    return pairs
+
+
+def _agent_b_call(claude: str, prompt: str, config_dir: str | None,
+                  api_key: str | None = None) -> subprocess.CompletedProcess:
     # This is an inner machine review, not a direct user request.  Its prompt
     # contains imperative security-review instructions, so explicitly prevent
     # the user-task hook from turning it into a durable work order.
     environment = os.environ.copy()
     environment["CLAUDE_USER_TASK_CAPTURE"] = "0"
-    if config_dir is not None:
+    # A push started inside the desktop app inherits CLAUDE_CODE_ENTRYPOINT=claude-desktop, and the
+    # child `claude -p` then reports itself as interactive Claude Code. Monthly API credits do not
+    # cover that: measured 2026-10-14, the same key answered as sdk-cli and got "Credit balance is
+    # too low" as cli. This review is headless, so it never carries the parent's entrypoint.
+    environment.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    if api_key is not None:
+        os.makedirs(config_dir, exist_ok=True)
+        environment["CLAUDE_CONFIG_DIR"] = config_dir
+        environment["ANTHROPIC_API_KEY"] = api_key
+        environment.pop("ANTHROPIC_AUTH_TOKEN", None)
+    elif config_dir is not None:
         environment["CLAUDE_CONFIG_DIR"] = config_dir
         environment.pop("ANTHROPIC_API_KEY", None)   # the login, not a stray key, answers
     # The public diff is adversarial input.  Run the semantic classifier without
@@ -748,6 +793,43 @@ def self_test() -> int:
         check("semantic review opts out of user-task capture",
               environment.get("CLAUDE_USER_TASK_CAPTURE") if isinstance(environment, dict) else None,
               "0")
+
+        print("verdict parsing:")
+        check("escaped quotes in the reason still parse",
+              parse_verdict('{"verdict": "SAFE", "reason": "adds print(\\"hi\\")"}\n'),
+              {"verdict": "SAFE", "reason": 'adds print("hi")'})
+        check("prose before the object is skipped",
+              (parse_verdict('Sure. {"verdict": "BLOCK", "reason": "key"}') or {}).get("verdict"), "BLOCK")
+        check("unknown verdict is no verdict", parse_verdict('{"verdict": "MAYBE", "reason": "x"}'), None)
+        check("empty reason is no verdict", parse_verdict('{"verdict": "SAFE", "reason": ""}'), None)
+        check("no JSON is no verdict", parse_verdict("looks fine to me"), None)
+
+        # every login out of quota -> the API-credit keys are tried, without the desktop entrypoint
+        global fallback_config_dirs, fallback_api_keys
+        saved_dirs, saved_keys = fallback_config_dirs, fallback_api_keys
+        calls: list[dict] = []
+
+        def quota_then_ok(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+            calls.append(kw["env"])
+            if kw["env"].get("ANTHROPIC_API_KEY") != "k-two":
+                return subprocess.CompletedProcess(cmd, 1, "You've hit your weekly limit", "")
+            return subprocess.CompletedProcess(cmd, 0, '{"verdict": "SAFE", "reason": "fixture"}', "")
+
+        try:
+            fallback_config_dirs = lambda: []
+            fallback_api_keys = lambda: [("ONE", "k-one"), ("TWO", "k-two"), ("THREE", "k-three")]
+            run = quota_then_ok
+            os.environ["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop"
+            check("api-key fallback reaches a key with credit",
+                  agent_b_claude("fixture") or {}, {"verdict": "SAFE", "reason": "fixture"})
+            check("stops at the first key that answers", len(calls), 3)
+            check("desktop entrypoint is never inherited",
+                  any("CLAUDE_CODE_ENTRYPOINT" in e for e in calls), False)
+            fallback_api_keys = lambda: []
+            check("no keys and no logins left -> no verdict (fail-closed)", agent_b_claude("fixture"), None)
+        finally:
+            fallback_config_dirs, fallback_api_keys = saved_dirs, saved_keys
+            os.environ.pop("CLAUDE_CODE_ENTRYPOINT", None)
     finally:
         find_claude_cli, run = saved_find_claude_cli, saved_run
 
