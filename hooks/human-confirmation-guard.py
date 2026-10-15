@@ -1817,6 +1817,104 @@ def _image_rm_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple
     return True, "docker image removal"
 
 
+# Owner 2026-10-15 ("файлы, которые нельзя удалить, надо переносить внутрь темп", after a list delete hit
+# the root-level limit): a move INTO the system temp keeps the files until the temp sweep, so it is approved
+# on her request, in one shape only: `[cd DIR &&] mv -n SRC... DEST`. -n never overwrites; DEST is an existing
+# folder strictly inside a temp root; every SRC is an existing regular file by an absolute or cd-relative plain
+# name that passes the delete hard limits and is not irreplaceable (the sweep would delete a database later).
+MOVE_TEMP_INTENT = re.compile(r"(?:перенес|перенос|перемест|перелож|\bmove)\w*", re.IGNORECASE)
+TEMP_MENTION = re.compile(r"темп|\btemp\b|\btmp\b|временн", re.IGNORECASE)
+#   review 2026-10-15 (HOLD, fixed): negations after the verb and in English, "нельзя переносить", a destination
+#   with `..` or a junction out of temp, a source behind a junction, and a bare yes to my answer that negated.
+_MOVE_VERB = r"(?:перенос|перенес|перемест|перелож|move)"
+NOT_A_MOVE_GO = re.compile(
+    r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+)?(?:" + _MOVE_VERB[3:-1] + r"|трог)|"
+    r"нельзя\s+(?:\w+\s+)?" + _MOVE_VERB + r"|" + _MOVE_VERB + r"\w*(?:\s+\S+){0,4}\s+не\s+(?:надо|нужно|стоит|буду)|"
+    r"\b(?:don'?t|do\s+not|never|won'?t|will\s+not)\b|\bоставь|\?", re.IGNORECASE)
+
+
+def move_to_temp_parts(cmd: str) -> tuple[str | None, list[str], str] | None:
+    """(cd dir or None, sources, destination) when the WHOLE command is `[cd DIR &&] mv -n SRC... DEST`."""
+    m = re.fullmatch(r"\s*(?:cd\s+([^\s;&|<>`$()]+)\s*&&\s*)?(mv\s[^;&|<>`$()\n]+?)\s*", cmd)
+    if not m:
+        return None
+    try:
+        toks = shlex.split(m.group(2), posix=True)
+    except ValueError:
+        return None
+    flags = [t for t in toks[1:] if t.startswith("-")]
+    ops = [t for t in toks[1:] if not t.startswith("-")]
+    if toks[0] != "mv" or set(flags) not in ({"-n"}, {"--no-clobber"}) or len(ops) < 2:
+        return None
+    return m.group(1), ops[:-1], ops[-1]
+
+
+def _move_temp_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[bool, str]:
+    """Files go into a temp folder on the owner's own request, or on a bare yes to my proposal to do so."""
+    if event.get("tool_name") == "PowerShell":
+        return False, "a move into temp is approved only for POSIX mv"
+    base, sources, dest = move_to_temp_parts(cmd)
+    if any(op.startswith("~") for op in [*sources, dest] + ([base] if base else [])):
+        return False, "~ expands in the shell; use absolute paths"
+    if CONFIRM_ONLY.fullmatch(prompt):
+        said = answer.replace("\\", "/").lower()
+        if not (MOVE_TEMP_INTENT.search(answer) and TEMP_MENTION.search(answer)):
+            return False, "a bare 'yes' to an answer that proposed no move into temp"
+        # a proposal asks for the go-ahead, so its own question marks are not hesitation (re-review 2026-10-15)
+        if NOT_A_MOVE_GO.search(answer.replace("?", " ")):
+            return False, "my answer negates the move it is about"
+        dest_abs = _norm(dest) if re.match(r"^(?:/|[A-Za-z]:/)", _norm(dest)) else (
+            f"{_norm(base).rstrip('/')}/{_norm(dest)}" if base else "")
+        if not dest_abs or not re.search(r"(?<![\w.\-/])" + re.escape(dest_abs.rstrip("/").lower()) + r"(?![\w.\-])",
+                                         said):
+            return False, "my answer did not name the destination folder"
+    elif NOT_A_MOVE_GO.search(prompt):
+        return False, "the request negates, hesitates or asks a question"
+    elif not (MOVE_TEMP_INTENT.search(prompt) and TEMP_MENTION.search(prompt)):
+        return False, "the latest request does not ask to move files into temp"
+
+    def is_abs(p: str) -> bool:
+        return p.startswith("/") or re.match(r"^[A-Za-z]:/", p) is not None
+
+    def absolute(p: str) -> str | None:
+        p = _norm(p)
+        if is_abs(p):
+            return p
+        return f"{_norm(base).rstrip('/')}/{p}" if base and is_abs(_norm(base)) else None
+
+    d = absolute(dest)
+    if not d or re.search(r"(?:^|/)\.\.?(?:/|$)|[*?\[\]{}$`]", d):
+        return False, f"{dest}: the destination must be a plain absolute path"
+    real_d = _norm(os.path.realpath(d))   # a junction or symlink must not lead out of temp
+    if not (is_temp_target(d.rstrip("/")) and is_temp_target(real_d.rstrip("/"))) or not os.path.isdir(d):
+        return False, f"{dest}: the destination must be an existing folder inside a temp root"
+    for s in sources:
+        f = absolute(s)
+        if not f:
+            return False, f"{s}: relative name without an absolute cd"
+        if os.path.islink(f) or not os.path.isfile(f):
+            return False, f"{s}: only existing regular files are moved into temp"
+        for where in (f, _norm(os.path.realpath(f))):   # also the real place behind a junctioned folder
+            why = target_hard_limit(where, False)
+            if why:
+                return False, f"{s}: hard limit ({why})"
+            irr, _ = irreplaceable_info(where, False)
+            if irr:
+                return False, f"{s}: irreplaceable ({irr}) - the temp sweep would delete it"
+        if os.path.exists(os.path.join(d, os.path.basename(f))):
+            return False, f"{s}: a file of that name is already in the destination"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "action": "move-to-temp",
+                                 "request": prompt[:300], "command": cmd[:1000]},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, "move into temp"
+
+
 def _claude_limit(path: str) -> str | None:
     """Owner decision 2026-10-07: a project's .claude (handoffs, roster, worktrees) may be
     cleaned on request. The home one (rules, hooks, transcripts, settings) stays protected,
@@ -1903,6 +2001,8 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         return _image_rm_approval(cmd, prompt, answer, event)
     if stop_only(cmd):
         return _stop_approval(cmd, prompt, answer, event)
+    if move_to_temp_parts(cmd):
+        return _move_temp_approval(cmd, prompt, answer, event)
     listed, why = list_delete_request(cmd, prompt, answer)
     if listed is None:
         return False, why
