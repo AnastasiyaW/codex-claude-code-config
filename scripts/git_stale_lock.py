@@ -28,6 +28,17 @@ the lock is renamed to a tombstone, the tombstone is re-checked, and only then
 deleted; a lock that appeared in between is put back. Afterwards the tool checks
 the file is gone and `git status` exits 0. It never repairs a damaged index.
 
+Owner approval for a shared disk (owner 2026-10-15)
+--------------------------------------------------
+Check 1 also refuses when a share exposes the repo (D:\\ shared to a Hyper-V VM):
+a git on the other side is invisible here. With `--owner-approved` that one
+refusal is settled by the owner instead: human-confirmation-guard writes a
+one-shot record to the deletion-approvals log only after the owner's own message
+names the lock, and the tool removes only the locks named in a fresh, unused
+record. WSL and network-filesystem refusals stay; age, local owners and the
+identity-checked rename (which fails while a remote client holds the file open)
+are checked as before.
+
 Exit codes (see rules/absence-of-signal.md):
   0  nothing stale, or every stale lock removed and verified
   1  a lock exists but removal is refused, or the post-check failed
@@ -292,13 +303,58 @@ def remove_checked(lock: Path, snap: tuple[int, int, int]) -> str | None:
     return None
 
 
+APPROVAL_LOG = Path.home() / ".claude" / "logs" / "deletion-approvals.jsonl"
+CONSUMED = Path.home() / ".claude" / "state" / "git-lock-consumed-approvals.jsonl"
+APPROVAL_ACTION = "git-lock-owner"
+APPROVAL_MAX_AGE_S = 300
+
+
+def lock_key(path: Path | str) -> str:
+    """Same normalisation as human-confirmation-guard.git_lock_key."""
+    return str(path).replace("\\", "/").lower()
+
+
+def owner_approved_locks(log: Path = APPROVAL_LOG, consumed: Path = CONSUMED,
+                         now=None) -> tuple[set[str], str | None, str]:
+    """(lock keys, record line, why) of the newest fresh, unused guard record for a lock."""
+    import datetime
+    import json as _json
+    try:
+        lines = log.read_text(encoding="utf-8").splitlines()[-200:]
+    except OSError:
+        return set(), None, "no approval log"
+    try:
+        used = set(consumed.read_text(encoding="utf-8").splitlines())
+    except OSError:
+        used = set()
+    now = now or datetime.datetime.now()
+    for line in reversed(lines):
+        try:
+            rec = _json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("action") != APPROVAL_ACTION:
+            continue
+        if line in used:
+            return set(), None, "this approval was already used"
+        try:
+            age = (now - datetime.datetime.fromisoformat(rec["ts"])).total_seconds()
+        except (KeyError, ValueError):
+            return set(), None, "approval record without a valid time"
+        if not 0 <= age <= APPROVAL_MAX_AGE_S:
+            return set(), None, f"approval is {age:.0f}s old (max {APPROVAL_MAX_AGE_S}s)"
+        return {lock_key(x) for x in rec.get("locks") or []}, line, ""
+    return set(), None, "the guard has not recorded an owner approval for a git lock"
+
+
 def _real_hidden(dirs: list[Path]) -> list[str]:
     trust = load_trust()
     return [h for d in dirs for h in invisible_owner_hosts(d, trust_admin_shares=trust)]
 
 
 def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
-        hidden_fn=_real_hidden) -> int:
+        hidden_fn=_real_hidden, owner_approved: bool = False,
+        approval_fn=owner_approved_locks, consumed: Path = CONSUMED) -> int:
     dirs = git_dirs(repo)
     if not dirs:
         print(f"UNKNOWN: {repo} is not a git repository")
@@ -317,9 +373,24 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
     except Unverifiable as exc:
         print(f"UNKNOWN: cannot rule out an invisible owner: {exc}")
         return 2
+    approved: set[str] | None = None
     if hidden:
-        print(f"REFUSE: a lock owner could be invisible from here: {hidden}")
-        return 1
+        shares_only = all(h.startswith("share ") for h in hidden)
+        if not (owner_approved and remove and shares_only):
+            print(f"REFUSE: a lock owner could be invisible from here: {hidden}")
+            return 1
+        approved, line, why = approval_fn()
+        if line is None:
+            print(f"REFUSE: owner approval needed for a lock under {hidden}: {why}")
+            return 1
+        try:  # one-shot: the same approval cannot run twice
+            consumed.parent.mkdir(parents=True, exist_ok=True)
+            with consumed.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError as exc:
+            print(f"UNKNOWN: cannot record the used approval: {exc}")
+            return 2
+        print(f"OWNER-APPROVED: {sorted(approved)} under {hidden}")
     try:
         procs = procs_fn()
     except Exception as exc:  # cannot prove absence of an owner -> not green
@@ -345,6 +416,10 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
             verdict = 1
             continue
         stale_seen += 1
+        if approved is not None and lock_key(lock) not in approved:
+            print(f"REFUSE: {lock} is under a share and the owner did not name it")
+            verdict = 1
+            continue
         if not remove:
             print(f"STALE: {lock} {detail} (dry run; add --remove)")
             continue
@@ -440,6 +515,45 @@ def self_test() -> int:
         if run(repo, True, 600, no_procs, cannot_enumerate) != 2 or not lock.exists():
             failures.append("share enumeration failure was not UNKNOWN")
 
+        # --owner-approved: only the share refusal is settled, only by a fresh unused guard
+        # record, only for the locks it names.
+        import datetime
+        import json as _json
+        share = lambda dirs: ["share HostD -> D:\\"]  # noqa: E731
+        log, used = Path(td) / "approvals.jsonl", Path(td) / "used.jsonl"
+
+        def record(locks, age_s=0):
+            ts = (datetime.datetime.now() - datetime.timedelta(seconds=age_s)).isoformat(timespec="seconds")
+            log.write_text(_json.dumps({"ts": ts, "action": APPROVAL_ACTION, "locks": locks}) + "\n",
+                           encoding="utf-8")
+
+        def owner_run(hidden=share):
+            return module_run(repo, True, 600, no_procs, hidden, owner_approved=True,
+                              approval_fn=lambda: owner_approved_locks(log, used), consumed=used)
+
+        stale_lock()
+        if owner_run() != 1 or not lock.exists():
+            failures.append("share lock without an owner record was removed")
+        record([str(repo / ".git" / "other.lock")])
+        if owner_run() != 1 or not lock.exists():
+            failures.append("share lock removed on a record naming another lock")
+        record([str(lock)], age_s=3600)
+        if owner_run() != 1 or not lock.exists():
+            failures.append("share lock removed on a stale owner record")
+        record([str(lock)])
+        if owner_run(lambda dirs: ["share HostD -> D:\\", "WSL distributions running: ['x']"]) != 1 \
+                or not lock.exists():
+            failures.append("owner record overrode a WSL refusal")
+        record([str(lock)])
+        if module_run(repo, True, 600, no_procs, share, owner_approved=False) != 1 or not lock.exists():
+            failures.append("share lock removed without --owner-approved")
+        if owner_run() != 0 or lock.exists():
+            failures.append("share lock named by a fresh owner record was not removed")
+        stale_lock()
+        if owner_run() != 1 or not lock.exists():
+            failures.append("a used owner record was accepted twice")
+        lock.unlink()
+
     if not _covers("D:\\", "D:/x/y") or _covers("C:\\HomeShare", "C:/HomeShareX/y"):
         failures.append("share prefix match wrong (drive root / sibling name)")
 
@@ -455,10 +569,13 @@ def main() -> int:
     ap.add_argument("--remove", action="store_true")
     ap.add_argument("--min-age", type=float, default=DEFAULT_MIN_AGE)
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--owner-approved", action="store_true",
+                    help="a share exposes the repo: remove only locks the owner named "
+                         "(guard record in the deletion-approvals log)")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
-    return run(Path(a.repo).resolve(), a.remove, a.min_age)
+    return run(Path(a.repo).resolve(), a.remove, a.min_age, owner_approved=a.owner_approved)
 
 
 if __name__ == "__main__":
