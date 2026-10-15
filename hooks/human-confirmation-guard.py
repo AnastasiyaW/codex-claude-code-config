@@ -869,11 +869,125 @@ STOP_INTENT = re.compile(
     r"прибей(?:те)?|прибивай(?:те)?|заверши(?:те)?|завершить|стопни(?:те)?|тормозни(?:те)?)\b|"
     r"(?:^|[.!;:\n])\s*(?:please\s+)?(?:kill|stop|terminate)\b", re.IGNORECASE)
 STOP_MENTION = re.compile(r"останов|убить|убей|прибей|заверш|стопн|kill|stop|terminat", re.IGNORECASE)
+# owner 2026-10-15 («останови <unit> и убери из автозапуска» was refused): `systemctl disable`
+# rides the stop path only on a removal imperative tied to autostart; a stop verb alone never disables.
+#   review 2026-10-15 (REJECT, fixed): a bare autostart noun passed "добавь в автозапуск", "пусть останется",
+#   questions and past-tense reports; a bare yes passed without a disable command in the proposal.
+DISABLE_INTENT = re.compile(
+    r"\b(?:убери(?:те)?|убрать|выключи(?:те)?|выключить|отключи(?:те)?|отключить|сними(?:те)?|снять)\b"
+    r"[^.!?\n]{0,60}?автозапуск|"
+    r"автозапуск\w*[^.!?\n]{0,30}?\b(?:убери(?:те)?|выключи(?:те)?|отключи(?:те)?|сними(?:те)?)\b|"
+    r"\bremove\b[^.!?\n]{0,60}?\bfrom\s+(?:the\s+)?(?:autostart|boot)\b|"
+    # bare "disable" only opening the message or chained after a stop (third review: "Codex написал: disable x")
+    r"^\s*(?:да[\s,]+)?(?:please\s+)?disable\b|\b(?:then|and)\s+disable\b", re.IGNORECASE)
+# third review 2026-10-15: deferral as stems, not a closed word list («послезавтра», «через час», «в пятницу»)
+DEFERRED = (r"завтра|\bчерез\s+(?:\d|час|минут|день|дн|недел|пол)|\bпосле\b|\bпозже|\bпотом\b|"
+            r"\bв\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|\bещ[её]\s+чего|"
+            r"\btomorrow|\blater\b|\bafter\b|\bnext\s+(?:week|day|monday|tuesday|wednesday|thursday|friday)")
+NOT_A_DISABLE_GO = re.compile(r"\bдобав|\bвключ|\bверн|\bоставь|\bостан(?:ет|ется|утся|ься)\b|\bпусть\b|\bли\b|"
+                              r"\bуже\b|\bубрал[аи]?\b|\bпровер|\benable|\bkeep|\bre-?add|\brevert|\bundo|\bоткат|"
+                              # re-review 2026-10-15: conditional, deferred, sarcastic or excluding requests
+                              r"\bесли\b|\bкогда\b|\bконечно\b|\bпропусти|\bif\b|\bwhen\b|\bskip\b|" + DEFERRED,
+                              re.IGNORECASE)
+# re-review 2026-10-15: a proposal that declines, offers an alternative or lists options proposes nothing
+# («`… disable worker` — не нужно», «не стану», «вместо», «Вариант 1:», «можно `…`, но лучше»); applies to stop
+# proposals too. Third review: judged only on the clauses around the span, not the whole line
+# («Воркер не отвечает, останавливаю: `kill 4242`» is a proposal).
+PROPOSAL_NOT_GO = re.compile(r"\bне\b|\bвместо\b|\bвариант|\bили\b|\bно\b|\bлучше\b|\bошибоч|\binstead\b|\brather\b|"
+                             r"\boption\b|\bor\b|\bbut\b|\bbetter\b|\balternatively\b|\botherwise\b|\bcould\b|"
+                             r"\bwrong\b|\bincorrect\b|"
+                             # fifth review: a past report, a question about the past, a rollback/reference line
+                             r"\bзапускал|\bсделал|\bвыполнил|\bбыло\b|\bran\b|\bdid\b|\bdone\b|\bearlier\b|"
+                             r"\bwon'?t\b|\bnot\b", re.IGNORECASE)
+# fifth review: a rollback or reference line anywhere on the line is documentation, not a proposal
+REFERENCE_LINE = re.compile(r"\brollback\b|\bоткат|\bсправк|\breference\b|\brunbook\b", re.IGNORECASE)
+# fifth review: a bare yes to a disable needs my proposal to state the removal, not ask about the command
+DISABLE_PROPOSAL_VERB = re.compile(r"\bубер|\bубра|\bотключ|\bвыключ|\bсниму|\bremov|\bdisabl", re.IGNORECASE)
+_CLAUSE_SPLIT = re.compile(r"[,.;:!?—–]|\s-\s")
+
+
+def span_declined(line: str, span: str) -> bool:
+    """True when the clause holding `span`, or the clause right before or after it, declines or offers an
+    alternative."""
+    i = line.find("`" + span + "`")
+    if i < 0:
+        return True
+    before = _CLAUSE_SPLIT.split(re.sub(r"`[^`\n]+`", " ", line[:i]))
+    after = _CLAUSE_SPLIT.split(re.sub(r"`[^`\n]+`", " ", line[i + len(span) + 2:]))
+    near = " ".join(before[-2:] + after[:2])
+    return PROPOSAL_NOT_GO.search(near) is not None or REFERENCE_LINE.search(re.sub(r"`[^`\n]+`", " ", line)) is not None
+_DIS_V = r"(?:убери(?:те)?|убрать|выключи(?:те)?|отключи(?:те)?|сними(?:те)?)"
+_DIS_NOUN = r"(?:(?:юнит|сервис|службу)\s+)?"
+_DIS_FROM = r"из\s+автозапуска"
+# fourth review 2026-10-15: cancellations anywhere, numbered options and "could" voids a proposal or a request
+CANCEL_WORDS = re.compile(r"\bотбой\b|\bотмен|\bхотя\s+нет\b|\bстоп\b|\bне\s+дела|\bcancel|\babort\b|\bnever\s*mind\b",
+                          re.IGNORECASE)
+OPTION_LIST = re.compile(r"(?m)^\s*\d+[.)]\s|\s\d\)\s|\bpick\s+one\b|\bвыбира|\bкакой\b|\bwhich\b", re.IGNORECASE)
+
+
+def unit_disable_requested(prompt: str, unit: str) -> bool:
+    """The owner's own words remove THIS unit from autostart in one clause (fourth review 2026-10-15: a removal
+    verb and «автозапуск» across commas, or another unit's name, approved a disable)."""
+    # fifth review: the clause must open the message, a line or a sentence (not «Codex написал: убери …»), and
+    # fenced or quoted text is not the owner's request.
+    # simplification: the host is not compared with the one the owner names; same residual risk as every
+    # stop/delete approval here (a per-host check needs the ssh alias resolved against her words).
+    prompt = re.sub(r"```.*?```", " ", prompt, flags=re.DOTALL)
+    prompt = re.sub(r"«[^»]*»|\"[^\"\n]*\"|“[^”]*”", " ", prompt)
+    lead = r"(?:^|(?<=[.!\n]))\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?"
+    u = r"(?<![\w.\-/@])" + re.escape(unit) + r"(?:\.service)?(?![\w\-/@.])"
+    pats = tuple(lead + p for p in (
+        _DIS_V + r"\s+" + _DIS_NOUN + u + r"\s+" + _DIS_FROM,
+        _DIS_V + r"\s+" + _DIS_FROM + r"\s+" + _DIS_NOUN + u,
+        _DIS_V + r"\s+автозапуск\s+" + _DIS_NOUN + u,
+        r"(?:останови(?:те)?|stop)\s+" + u + r"\s+(?:и|and)\s+" + _DIS_V + r"\s+(?:е[её]\s+|его\s+)?" + _DIS_FROM,
+        r"disable\s+" + u,
+        r"stop\s+" + u + r",?\s+(?:then|and)\s+disable\s+" + u,
+        r"remove\s+" + u + r"\s+from\s+(?:the\s+)?autostart\b",
+    ))
+    return any(re.search(p, prompt, re.IGNORECASE | re.MULTILINE) for p in pats)
+
+
+DISABLE_SPAN = re.compile(r"\bsystemctl\s+disable\s+([A-Za-z][\w@.\-]{2,})(?=\s*$|\s*;)", re.IGNORECASE)
+
+
+def disable_units(cmd: str) -> list[str]:
+    """Units a command disables (ssh unwrapped); stop/kill operands are not included."""
+    out: list[str] = []
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        remote = remote_command(seg)
+        if remote and remote != UNPARSED:
+            out += disable_units(remote)
+        elif STOP_SEGMENT.fullmatch(seg) and re.search(r"\bsystemctl\s+disable\b", seg, re.IGNORECASE):
+            out += _segment_targets(seg)
+    return out
+
+
+def proposed_disable_units(answer: str) -> set[str]:
+    """Units my proposal itself wrote as `systemctl disable <unit>` in code, on a line that neither negates,
+    asks to keep or revert."""
+    out: set[str] = set()
+    plain = re.sub(r"`[^`\n]+`", " ", answer)
+    # one action only: a cancellation, a list of options or two command spans is no proposal to say yes to
+    if (CANCEL_WORDS.search(plain) or OPTION_LIST.search(plain) or not DISABLE_PROPOSAL_VERB.search(plain)
+            or len(re.findall(r"`[^`\n]+`", answer)) != 1):
+        return out
+    for line in answer.splitlines():
+        outside = re.sub(r"`[^`\n]+`", " ", line)
+        if NOT_A_GO.search(outside.replace("?", " ")) or NOT_A_STOP_GO.search(outside) or NOT_A_DISABLE_GO.search(outside):
+            continue
+        for span in re.findall(r"`([^`\n]+)`", line):
+            m = DISABLE_SPAN.search(span.strip())
+            if m and not span_declined(line, span):
+                out.add(m.group(1))
+    return out
 NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|приб|стоп|тормоз|"
                            r"заверш|трог)|"
                            r"\bпочему\b|\bзачем\b|\bwhy\b|\bhow\b|"
                            # exclusions make the target list ambiguous (re-review 2026-10-12, finding 1)
-                           r"\bкроме\b|\bбез\b|\bно\s+не\b|\bа\s+не\b|\bexcept\b|\bbut\b|\bnot\b|\bexcluding\b",
+                           r"\bкроме\b|\bбез\b|\bно\s+не\b|\bа\s+не\b|\bexcept\b|\bbut\b|\bnot\b|\bexcluding\b|"
+                           # review 2026-10-15: conditional, deferred, sarcastic or skipping requests are no go-ahead
+                           r"\bесли\b|\bкогда\b|\bконечно\b|\bпропусти|\bif\b|\bwhen\b|\bskip\b|" + DEFERRED,
                            re.IGNORECASE)
 _PID = r"(?!1\b)[1-9]\d*"
 _TK_FLAG = r"(?:/{1,2}|-)[TF]\b"        # git-bash needs //T, cmd takes /T
@@ -888,7 +1002,7 @@ STOP_SEGMENT = re.compile(
     r"kill(?:\s+" + _SIG + r")?(?:\s+" + _PID + r")+|"
     r"pkill(?:\s+" + _SIG + r")?(?:\s+-[fx])*\s+(?:'" + _LIT + r"'|\"" + _LIT + r"\"|[A-Za-z][\w\-]{2,})|"
     r"killall(?:\s+" + _SIG + r")?\s+[A-Za-z][\w\-]{2,}|"
-    r"systemctl\s+stop\s+[A-Za-z][\w@.\-]{2,}|"
+    r"systemctl\s+(?:stop|disable)\s+[A-Za-z][\w@.\-]{2,}|"
     # Windows (owner 2026-10-13: «поправь хук чтобы сама убивала по моей просьбе»): taskkill by pid only,
     # never /IM (an image name would hit every copy, e.g. all claude.exe); /T and /F are flags, /F = forced
     r"taskkill(?:\s+" + _TK_FLAG + r")*(?:\s+" + _TK_PID + r"\s+" + _TK_PIDNUM + r"(?:\s+" + _TK_FLAG + r")*)+)\s*;?",
@@ -897,7 +1011,9 @@ STOP_SEGMENT = re.compile(
 STOP_PROTECTED = re.compile(r"\b(?:sshd?|systemd|init|networking|networkmanager|rclone|cloudflared|tailscaled?|"
                             r"dockerd|containerd|kubelet|wg-quick|wg|wireguard|openvpn|autossh|frpc|frps|socat|"
                             r"ngrok|chisel|sshuttle|dropbear|stunnel|xray|v2ray|zerotier(?:-one)?|firewalld|"
-                            r"gpg-agent|tunnel)\b", re.IGNORECASE)
+                            r"gpg-agent|tunnel|getty(?:@[\w.-]+)?|dbus(?:-broker)?|polkit|udev|"
+                            r"xrdp(?:-sesman)?|x11vnc|vncserver(?:@[\w.:-]+)?|tigervnc\w*|anydesk|rustdesk)\b",
+                            re.IGNORECASE)   # getty: console login; dbus/polkit/udev: the box itself
 STOP_PROTECTED_CMDLINES = ("sshd", "sshd: root@pts/0", "/usr/sbin/sshd -D", "ssh -W host:22", "systemd", "init",
                            "/sbin/init", "NetworkManager", "rclone mount gdrive: /mnt", "cloudflared tunnel run",
                            "tailscaled", "dockerd", "containerd", "kubelet", "openvpn", "autossh -M 0", "wg-quick up wg0",
@@ -1585,7 +1701,8 @@ def prose_targets(text: str) -> list[str]:
         if not spans or NOT_A_GO.search(outside.replace("?", " ")) or NOT_A_STOP_GO.search(outside):
             continue
         for span in spans:
-            out += _span_targets(span)
+            if not span_declined(line, span):
+                out += _span_targets(span)
     return out
 
 
@@ -1619,7 +1736,8 @@ def prose_forced(text: str) -> set[str]:
         if not spans or NOT_A_GO.search(outside.replace("?", " ")) or NOT_A_STOP_GO.search(outside):
             continue
         for span in spans:
-            out.update(_span_targets(span, forced_only=True))
+            if not span_declined(line, span):
+                out.update(_span_targets(span, forced_only=True))
     return out
 
 
@@ -1738,11 +1856,13 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
     if event.get("tool_name") == "PowerShell":   # fifth review: there `kill` is Stop-Process; no Windows path yet
         return False, "process stops are approved only for POSIX shells"
     if CONFIRM_ONLY.fullmatch(prompt):
-        if not STOP_MENTION.search(answer):
+        if not STOP_MENTION.search(answer) and not proposed_disable_units(answer):
             return False, "a bare 'yes' to an answer that proposed no stop"
     elif NOT_A_GO.search(prompt) or NOT_A_STOP_GO.search(prompt):
         return False, "the request negates, hesitates or asks a question"
-    elif not STOP_INTENT.search(prompt):
+    elif not STOP_INTENT.search(prompt) and not (
+            DISABLE_INTENT.search(prompt)
+            and not re.search(r"\b(?:kill|pkill|killall|taskkill|systemctl\s+stop)\b", cmd, re.IGNORECASE)):
         return False, "the latest request does not ask to stop a process"
     # every operand comes from a stop command in my proposal she answered, or the owner names it herself:
     # a name/pattern as a whole token, a pid only next to "pid"/"процесс"/"kill" (re-review: "в 22:30" is
@@ -1756,6 +1876,21 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
         return False, "cannot parse the stop command or the proposal"
     if not targets:   # review 2026-10-13: never approve a stop whose operands we could not read
         return False, "stop command without readable targets"
+    try:
+        disabled = disable_units(cmd)
+    except ValueError:
+        return False, "cannot parse the disable command"
+    if disabled:
+        if CONFIRM_ONLY.fullmatch(prompt):
+            missing = [u for u in disabled if u not in proposed_disable_units(answer)]
+            if missing:
+                return False, f"a bare 'yes' to a proposal without `systemctl disable` of: {', '.join(missing)}"
+        elif not DISABLE_INTENT.search(prompt) or NOT_A_DISABLE_GO.search(prompt) or CANCEL_WORDS.search(prompt):
+            return False, "systemctl disable needs a request to remove the unit from autostart"
+        else:
+            unasked = [u for u in disabled if not unit_disable_requested(prompt, u)]
+            if unasked:
+                return False, f"the request does not remove these units from autostart: {', '.join(unasked)}"
     # /T kills the whole tree: only when my proposal itself wrote taskkill with /T (review 2026-10-13)
     if re.search(r"\btaskkill\b[^;&|]*?(?:^|\s)(?:/{1,2}|-)T\b", cmd, re.IGNORECASE) and not re.search(
             r"`[^`\n]*\btaskkill\b[^`\n]*\s(?:/{1,2}|-)T\b[^`\n]*`", answer, re.IGNORECASE):
@@ -1777,7 +1912,9 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
     # cannot add others (4243); it counts only for a bare yes or a request that names no operand at all
     if not CONFIRM_ONLY.fullmatch(prompt) and (re.search(r"\d{2,}", prompt) or any(owner_named(t) for t in targets)):
         proposed, proposed_forced = set(), set()
-    unnamed = [t for t in targets if t not in proposed and not owner_named(t)]
+    # a disable operand from a bare yes was already matched against the proposal's own disable commands
+    disable_ok = set(disabled) if CONFIRM_ONLY.fullmatch(prompt) else set()
+    unnamed = [t for t in targets if t not in proposed and t not in disable_ok and not owner_named(t)]
     if unnamed:
         return False, f"stop targets not named in the request or the proposal: {', '.join(unnamed)}"
     unforced = [t for t in forced if t not in proposed_forced and not (owner_named(t) and FORCE_WORDS.search(prompt))]
@@ -2862,6 +2999,15 @@ def self_test() -> int:
         ("owner names the pid", "kill -s KILL 4242", transcript("убей pid 4242")),
         ("graceful killall on a stop request", "killall python3", transcript("останови python3")),
         ("bare pid after убей", "kill -9 4242", transcript("убей 4242")),
+        ("disable asked with the unit named", "ssh h 'sudo systemctl disable llm-large'",
+         transcript("да, останови llm-large и убери из автозапуска")),
+        ("bare yes to a disable proposal", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Уберу из автозапуска: `sudo systemctl disable worker`")),
+        ("stop then disable in english", "ssh h 'sudo systemctl disable worker'",
+         transcript("stop worker, then disable worker")),
+        # third review 2026-10-15: proposals with an unrelated negation earlier in the line still count
+        ("negation in an earlier clause", "kill 4242",
+         transcript("да", "Воркер не отвечает, останавливаю: `kill 4242`")),
     ]
     refuse += [
         ("stop not asked", "ssh h 'kill -9 4242'", transcript("проверь сервер")),
@@ -2913,6 +3059,111 @@ def self_test() -> int:
         ("proposed TERM, kill -s 9 run", "kill -s 9 4242", transcript("да", "Остановлю: `kill -s TERM 4242`")),
         ("proposed TERM, quoted -9 run", "kill \"-9\" 4242", transcript("да", "Остановлю: `kill 4242`")),
         ("a time is not a pid", "kill 22", transcript("останови 22:30 процесс 4242")),
+        ("stop request does not cover disable", "ssh h 'sudo systemctl disable worker'", transcript("останови worker")),
+        ("disable of the access daemon", "ssh h 'sudo systemctl disable sshd'", transcript("убери sshd из автозапуска")),
+        ("disable of an unnamed unit", "ssh h 'sudo systemctl disable worker2'", transcript("убери worker из автозапуска")),
+        ("disable negated", "ssh h 'sudo systemctl disable worker'", transcript("не убирай worker из автозапуска")),
+        ("autostart words do not approve a kill", "kill 4242", transcript("убери процесс 4242 из автозапуска")),
+        # review 2026-10-15 REJECT findings, each must stay refused
+        ("add to autostart", "ssh h 'sudo systemctl disable worker'", transcript("добавь worker в автозапуск")),
+        ("turn autostart on", "ssh h 'sudo systemctl disable worker'", transcript("включи автозапуск worker")),
+        ("enable autostart", "ssh h 'sudo systemctl disable worker'", transcript("enable autostart for worker")),
+        ("stay in autostart", "ssh h 'sudo systemctl disable worker'",
+         transcript("worker должен остаться в автозапуске")),
+        ("question without a mark", "ssh h 'sudo systemctl disable worker'",
+         transcript("проверь, стоит ли worker в автозапуске.")),
+        ("past-tense report", "ssh h 'sudo systemctl disable worker'",
+         transcript("я уже убрала worker из автозапуска, проверь логи")),
+        ("stop, leave autostart", "ssh h 'sudo systemctl disable worker'",
+         transcript("останови worker, автозапуск пусть останется")),
+        ("bare yes to a stop-only proposal", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Остановлю: `sudo systemctl stop worker`, автозапуск оставлю.")),
+        ("bare yes to a revert proposal", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Верну как было, откатив `sudo systemctl disable worker`.")),
+        # re-review 2026-10-15 REJECT findings, each must stay refused
+        ("proposal declines the disable", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Остановлю worker: `sudo systemctl stop worker`.\n`sudo systemctl disable worker` — не нужно.")),
+        ("proposal will not disable", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "`sudo systemctl disable worker` делать не стану, перезапущу.")),
+        ("proposal offers an alternative", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Вместо `sudo systemctl disable worker` предлагаю просто перезапуск.")),
+        ("proposal lists options", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Вариант 1: `sudo systemctl disable worker`\nВариант 2: перезапуск\nКакой")),
+        ("english alternative", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Instead of `sudo systemctl disable worker` I restart it.")),
+        ("stop proposal declined", "ssh h 'sudo systemctl stop worker'",
+         transcript("да", "Не стану делать `sudo systemctl stop worker`, только посмотрю логи.")),
+        ("excluded unit", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker2 из автозапуска, а worker пропусти")),
+        ("conditional disable", "ssh h 'sudo systemctl disable worker'",
+         transcript("если worker упадёт ещё раз, убери его из автозапуска")),
+        ("deferred disable", "ssh h 'sudo systemctl disable worker'", transcript("завтра убери worker из автозапуска")),
+        ("sarcastic disable", "ssh h 'sudo systemctl disable worker'",
+         transcript("ага, конечно, отключи автозапуск worker")),
+        ("conditional stop", "ssh h 'sudo systemctl stop worker'", transcript("если worker упадёт, останови worker")),
+        ("deferred stop", "ssh h 'sudo systemctl stop worker'", transcript("останови worker завтра")),
+        ("stop with a skipped unit", "ssh h 'sudo systemctl stop worker'",
+         transcript("останови worker2, а worker пропусти")),
+        # third review 2026-10-15 findings
+        ("reported speech", "ssh h 'sudo systemctl disable worker'", transcript("Codex написал: disable worker. Что думаешь")),
+        ("log quote", "ssh h 'sudo systemctl disable worker'", transcript("в логе: disable worker")),
+        ("proposal prefers a restart", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Можно было бы `sudo systemctl disable worker`, но лучше перезапустить. Перезапустить?")),
+        ("stop proposal prefers waiting", "kill 4242", transcript("да", "Можно `kill 4242`, но лучше подождать.")),
+        ("english otherwise", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Otherwise `sudo systemctl disable worker` would do.")),
+        ("weekday", "ssh h 'sudo systemctl disable worker'", transcript("в пятницу убери worker из автозапуска")),
+        ("in an hour", "kill 4242", transcript("через час убей процесс 4242")),
+        ("day after tomorrow", "ssh h 'sudo systemctl disable worker'",
+         transcript("послезавтра убери worker из автозапуска")),
+        ("after review", "ssh h 'sudo systemctl disable worker'", transcript("после ревью убери worker из автозапуска")),
+        ("dbus", "ssh h 'sudo systemctl disable dbus'", transcript("убери dbus из автозапуска")),
+        # fourth review 2026-10-15 findings
+        ("autostart kept across a comma", "ssh h 'sudo systemctl disable worker'",
+         transcript("выключи worker, автозапуск нужен")),
+        ("autostart untouched", "ssh h 'sudo systemctl disable worker'",
+         transcript("выключи worker до перезагрузки, автозапуск сохрани")),
+        ("another unit removed", "ssh h 'sudo systemctl disable worker'",
+         transcript("останови worker и убери worker2 из автозапуска")),
+        ("english other unit", "ssh h 'sudo systemctl disable worker'", transcript("stop worker and disable worker2")),
+        ("numbered options", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "1) `sudo systemctl disable worker` 2) перезапуск\nКакой выбираешь")),
+        ("you could run", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "You could run `sudo systemctl disable worker`.")),
+        ("command called wrong", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Команда `sudo systemctl disable worker` здесь ошибочна. Перезапущу worker")),
+        ("retraction on a later line", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Уберу из автозапуска: `sudo systemctl disable worker`\nХотя нет, отбой.")),
+        ("request cancelled on the next line", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker из автозапуска\nотбой")),
+        ("remote desktop daemon", "ssh h 'sudo systemctl disable xrdp'", transcript("убери xrdp из автозапуска")),
+        # fifth review 2026-10-15 findings
+        ("reported russian request", "ssh h 'sudo systemctl disable worker'",
+         transcript("Codex написал: убери worker из автозапуска. Что думаешь")),
+        ("quoted ticket", "ssh h 'sudo systemctl disable worker'",
+         transcript("«убери worker из автозапуска» — так написано в тикете")),
+        ("fenced block", "ssh h 'sudo systemctl disable worker'",
+         transcript("вот лог:\n```\nубери worker из автозапуска\n```\nразберись")),
+        ("reported english request", "ssh h 'sudo systemctl disable worker'",
+         transcript("Codex says: remove worker from autostart. Thoughts")),
+        ("yes to a question about the past", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Ты запускала `sudo systemctl disable worker`?")),
+        ("yes to a past report", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Сделала `sudo systemctl disable worker`. Логи чистые.")),
+        ("yes to a rollback line", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Включу автозапуск worker.\nRollback: `sudo systemctl disable worker`")),
+        ("yes to a reference line", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Для справки, команда: `sudo systemctl disable worker`. Перезапустить")),
+        ("yes to a question about the command", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Это `sudo systemctl disable worker` из твоих заметок?")),
+        ("yes to an understanding check", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Понятно, что `sudo systemctl disable worker` сломает загрузку?")),
+        ("stop, do not", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker из автозапуска\nстоп, не делай")),
+        ("console login unit", "ssh h 'sudo systemctl disable getty@tty1'",
+         transcript("убери getty@tty1 из автозапуска")),
+        ("disable --now hides a stop form", "ssh h 'sudo systemctl disable --now worker'",
+         transcript("убери worker из автозапуска")),
     ]
 
     for name, cmd, ev in approve:
