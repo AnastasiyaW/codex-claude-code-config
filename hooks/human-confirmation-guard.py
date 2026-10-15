@@ -881,7 +881,7 @@ DISABLE_INTENT = re.compile(
     # bare "disable" only opening the message or chained after a stop (third review: "Codex написал: disable x")
     r"^\s*(?:да[\s,]+)?(?:please\s+)?disable\b|\b(?:then|and)\s+disable\b", re.IGNORECASE)
 # third review 2026-10-15: deferral as stems, not a closed word list («послезавтра», «через час», «в пятницу»)
-DEFERRED = (r"завтра|\bчерез\s+(?:\d|час|минут|день|дн|недел|пол)|\bпосле\b|\bпозже|\bпотом\b|"
+DEFERRED = (r"\bрано\b|\bне\s+сейчас\b|\btoo\s+early\b|\bnot\s+now\b|завтра|\bчерез\s+(?:\d|час|минут|день|дн|недел|пол)|\bпосле\b|\bпозже|\bпотом\b|"
             r"\bв\s+(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|\bещ[её]\s+чего|"
             r"\btomorrow|\blater\b|\bafter\b|\bnext\s+(?:week|day|monday|tuesday|wednesday|thursday|friday)")
 NOT_A_DISABLE_GO = re.compile(r"\bдобав|\bвключ|\bверн|\bоставь|\bостан(?:ет|ется|утся|ься)\b|\bпусть\b|\bли\b|"
@@ -903,6 +903,9 @@ PROPOSAL_NOT_GO = re.compile(r"\bне\b|\bвместо\b|\bвариант|\bил
 REFERENCE_LINE = re.compile(r"\brollback\b|\bоткат|\bсправк|\breference\b|\brunbook\b", re.IGNORECASE)
 # fifth review: a bare yes to a disable needs my proposal to state the removal, not ask about the command
 DISABLE_PROPOSAL_VERB = re.compile(r"\bубер|\bубра|\bотключ|\bвыключ|\bсниму|\bremov|\bdisabl", re.IGNORECASE)
+# an instruction for the owner to run it herself, or a statement about what a command does
+INSTRUCTION_LINE = re.compile(r"\bвыполни|\bзапусти|\bу\s+себя\b|\bсама\b|\byourself\b|\byou\s+can\s+run\b|"
+                              r"\brun\s+this\b|\bкоманда\b|\bthe\s+command\b", re.IGNORECASE)
 _CLAUSE_SPLIT = re.compile(r"[,.;:!?—–]|\s-\s")
 
 
@@ -912,10 +915,17 @@ def span_declined(line: str, span: str) -> bool:
     i = line.find("`" + span + "`")
     if i < 0:
         return True
-    before = _CLAUSE_SPLIT.split(re.sub(r"`[^`\n]+`", " ", line[:i]))
-    after = _CLAUSE_SPLIT.split(re.sub(r"`[^`\n]+`", " ", line[i + len(span) + 2:]))
-    near = " ".join(before[-2:] + after[:2])
-    return PROPOSAL_NOT_GO.search(near) is not None or REFERENCE_LINE.search(re.sub(r"`[^`\n]+`", " ", line)) is not None
+    tail = line[i + len(span) + 2:]
+    # owner 2026-10-15 (sixth review, chose for me «не знаю как лучше»): a proposal ends its line with the command;
+    # a span inside an explanation («`kill 4242` остановит воркер») or followed by more words is not offered
+    if re.fullmatch(r"[\s.?!]*", tail) is None:
+        return True
+    prefix = re.sub(r"`[^`\n]+`", " ", line[:i])
+    if INSTRUCTION_LINE.search(prefix):
+        return True
+    before = _CLAUSE_SPLIT.split(prefix)
+    near = " ".join(before[-2:])
+    return PROPOSAL_NOT_GO.search(near) is not None or REFERENCE_LINE.search(prefix) is not None
 _DIS_V = r"(?:убери(?:те)?|убрать|выключи(?:те)?|отключи(?:те)?|сними(?:те)?)"
 _DIS_NOUN = r"(?:(?:юнит|сервис|службу)\s+)?"
 _DIS_FROM = r"из\s+автозапуска"
@@ -1688,19 +1698,50 @@ def _segment_targets(seg: str) -> list[str]:
     return ops
 
 
-def prose_targets(text: str) -> list[str]:
-    """Stop operands of the stop commands my proposal wrote in `code` (third review 2026-10-12: a plain-text
-    "kill -9 4242 нельзя трогать" was read as a proposal). A span on a line that negates or asks is skipped."""
+# seventh review 2026-10-15: a bare yes approves only a command I offered as MY next action - an allow-list of
+# first-person present/future stop verbs or the question «Остановить?», right before the span on its line;
+# word lists of what disqualifies a line never closed (reported speech, hook refusals, past reports, headings).
+OFFER_LEAD = re.compile(
+    r"(?:^|[,.;!—–]\s*)(?:(?:я|i)\s+)?(?:остановлю|останавливаю|убью|убиваю|прибью|завершу|завершаю|"
+    r"(?:will|i'?ll)\s+(?:stop|kill|terminate)|stopping|killing|terminating|"
+    r"остановить|убить|прибить|завершить|stop\s+it|kill\s+it)\b[^.!?\n`]{0,60}[:?]\s*$",
+    re.IGNORECASE)
+
+
+def _offered_spans(text: str, strict: bool) -> list[str]:
+    """Code spans my answer offers. strict (a bare yes): the span ends its line, the text before it on that line
+    ends with OFFER_LEAD, the previous line sets no condition and the next line does not take it back."""
+    lines = text.splitlines()
     out: list[str] = []
-    for line in text.splitlines():
+    for n, line in enumerate(lines):
         spans = re.findall(r"`([^`\n]+)`", line)
         outside = re.sub(r"`[^`\n]+`", " ", line)
         # a proposal may end with "?"; any other negation/hesitation on the line voids its commands
         if not spans or NOT_A_GO.search(outside.replace("?", " ")) or NOT_A_STOP_GO.search(outside):
             continue
-        for span in spans:
-            if not span_declined(line, span):
-                out += _span_targets(span)
+        if strict:
+            if len(spans) != 1 or span_declined(line, spans[0]):
+                continue
+            if not OFFER_LEAD.search(re.sub(r"`[^`\n]+`", " ", line[:line.find("`")])):
+                continue
+            prev = next((x for x in reversed(lines[:n]) if x.strip()), "")
+            nxt = next((x for x in lines[n + 1:] if x.strip()), "")
+            if re.search(r"\bесли\b|\bif\b|\bкогда\b|\bwhen\b", prev, re.IGNORECASE) or (
+                    nxt and (PROPOSAL_NOT_GO.search(nxt) or NOT_A_GO.search(nxt.replace("?", " "))
+                             or CANCEL_WORDS.search(nxt))):
+                continue
+            out.append(spans[0])
+            continue
+        out += [s for s in spans if not span_declined(line, s)]
+    return out
+
+
+def prose_targets(text: str, strict: bool = False) -> list[str]:
+    """Stop operands of the stop commands my proposal wrote in `code` (third review 2026-10-12: a plain-text
+    "kill -9 4242 нельзя трогать" was read as a proposal)."""
+    out: list[str] = []
+    for span in _offered_spans(text, strict):
+        out += _span_targets(span)
     return out
 
 
@@ -1724,18 +1765,12 @@ def _forced(seg: str) -> bool:
     return forced_kill(seg)
 
 
-def prose_forced(text: str) -> set[str]:
+def prose_forced(text: str, strict: bool = False) -> set[str]:
     """Operands my proposal itself wrote with a forced signal (fourth review 2026-10-12: a proposed SIGTERM
     `kill 4242` must not approve `kill -9 4242`)."""
     out: set[str] = set()
-    for line in text.splitlines():
-        spans = re.findall(r"`([^`\n]+)`", line)
-        outside = re.sub(r"`[^`\n]+`", " ", line)
-        if not spans or NOT_A_GO.search(outside.replace("?", " ")) or NOT_A_STOP_GO.search(outside):
-            continue
-        for span in spans:
-            if not span_declined(line, span):
-                out.update(_span_targets(span, forced_only=True))
+    for span in _offered_spans(text, strict):
+        out.update(_span_targets(span, forced_only=True))
     return out
 
 
@@ -1866,8 +1901,9 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
     # a name/pattern as a whole token, a pid only next to "pid"/"процесс"/"kill" (re-review: "в 22:30" is
     # not pid 22); a bare yes approves only operands of the proposal's own commands.
     try:
-        proposed = set(prose_targets(answer))
-        proposed_forced = prose_forced(answer)
+        bare_yes = CONFIRM_ONLY.fullmatch(prompt) is not None
+        proposed = set(prose_targets(answer, strict=bare_yes))
+        proposed_forced = prose_forced(answer, strict=bare_yes)
         targets = stop_targets(cmd)
         forced = stop_forced(cmd)
     except ValueError:
@@ -3006,6 +3042,7 @@ def self_test() -> int:
         # third review 2026-10-15: proposals with an unrelated negation earlier in the line still count
         ("negation in an earlier clause", "kill 4242",
          transcript("да", "Воркер не отвечает, останавливаю: `kill 4242`")),
+        ("question-form proposal ending with the command", "kill 4242", transcript("да", "Остановить? `kill 4242`")),
     ]
     refuse += [
         ("stop not asked", "ssh h 'kill -9 4242'", transcript("проверь сервер")),
@@ -3170,6 +3207,20 @@ def self_test() -> int:
          transcript("да", "worker отключён из автозапуска: `sudo systemctl disable worker`")),
         ("yes, template names another unit", "ssh h 'sudo systemctl disable worker'",
          transcript("да", "Уберу worker2 из автозапуска: `sudo systemctl disable worker`")),
+        # owner 2026-10-15: bare yes to a stop proposal is as strict as the command's place on the line
+        ("yes to a kill explanation", "kill 4242", transcript("да", "Команда `kill 4242` остановит воркер.")),
+        ("yes to a kill instruction for the owner", "kill 4242",
+         transcript("да", "Чтобы остановить воркер, выполни у себя: `kill 4242`")),
+        ("too early to kill", "kill 4242", transcript("Убить процесс 4242 рано.")),
+        # seventh review 2026-10-15: a bare yes needs my first-person offer right before the command
+        ("yes to a question about the command", "kill 4242", transcript("да", "Ты спрашивала про `kill 4242`?")),
+        ("yes to a hook refusal report", "kill 4242", transcript("да", "Хук отказал мне в `kill 4242`.")),
+        ("yes to another agent's idea", "kill 4242", transcript("да", "Codex предлагает: `kill 4242`")),
+        ("yes to a past report", "kill 4242", transcript("да", "Вчера я убила его: `kill 4242`")),
+        ("yes to a heading", "kill 4242", transcript("да", "## `kill 4242`")),
+        ("offer taken back on the next line", "kill 4242",
+         transcript("да", "Остановлю воркер: `kill 4242`\nНо делать этого не буду.")),
+        ("offer under a condition", "kill 4242", transcript("да", "Если висит, то\nостановлю: `kill 4242`")),
         ("stop, do not", "ssh h 'sudo systemctl disable worker'",
          transcript("убери worker из автозапуска\nстоп, не делай")),
         ("console login unit", "ssh h 'sudo systemctl disable getty@tty1'",
