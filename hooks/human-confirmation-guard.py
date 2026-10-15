@@ -926,26 +926,25 @@ OPTION_LIST = re.compile(r"(?m)^\s*\d+[.)]\s|\s\d\)\s|\bpick\s+one\b|\bвыби�
 
 
 def unit_disable_requested(prompt: str, unit: str) -> bool:
-    """The owner's own words remove THIS unit from autostart in one clause (fourth review 2026-10-15: a removal
-    verb and «автозапуск» across commas, or another unit's name, approved a disable)."""
-    # fifth review: the clause must open the message, a line or a sentence (not «Codex написал: убери …»), and
-    # fenced or quoted text is not the owner's request.
+    """The owner's WHOLE message is one request to remove THIS unit from autostart (sixth review 2026-10-15:
+    every free-text heuristic leaked - a negation after the command, reported speech across lines - so the
+    request is a fixed grammar, matched against the entire message; anything else is refused)."""
     # simplification: the host is not compared with the one the owner names; same residual risk as every
     # stop/delete approval here (a per-host check needs the ssh alias resolved against her words).
-    prompt = re.sub(r"```.*?```", " ", prompt, flags=re.DOTALL)
-    prompt = re.sub(r"«[^»]*»|\"[^\"\n]*\"|“[^”]*”", " ", prompt)
-    lead = r"(?:^|(?<=[.!\n]))\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?"
-    u = r"(?<![\w.\-/@])" + re.escape(unit) + r"(?:\.service)?(?![\w\-/@.])"
-    pats = tuple(lead + p for p in (
-        _DIS_V + r"\s+" + _DIS_NOUN + u + r"\s+" + _DIS_FROM,
-        _DIS_V + r"\s+" + _DIS_FROM + r"\s+" + _DIS_NOUN + u,
-        _DIS_V + r"\s+автозапуск\s+" + _DIS_NOUN + u,
-        r"(?:останови(?:те)?|stop)\s+" + u + r"\s+(?:и|and)\s+" + _DIS_V + r"\s+(?:е[её]\s+|его\s+)?" + _DIS_FROM,
-        r"disable\s+" + u,
-        r"stop\s+" + u + r",?\s+(?:then|and)\s+disable\s+" + u,
-        r"remove\s+" + u + r"\s+from\s+(?:the\s+)?autostart\b",
-    ))
-    return any(re.search(p, prompt, re.IGNORECASE | re.MULTILINE) for p in pats)
+    u = re.escape(unit) + r"(?:\.service)?"
+    body = (
+        r"(?:(?:останови(?:те)?\s+" + u + r"\s+и\s+)?" + _DIS_V + r"\s+(?:е[её]\s+|его\s+)?" + _DIS_FROM + r"|"
+        + _DIS_V + r"\s+" + _DIS_NOUN + u + r"\s+" + _DIS_FROM + r"|"
+        + _DIS_V + r"\s+" + _DIS_FROM + r"\s+" + _DIS_NOUN + u + r"|"
+        + _DIS_V + r"\s+автозапуск\s+" + _DIS_NOUN + u + r"|"
+        r"(?:stop\s+" + u + r",?\s+(?:then|and)\s+)?disable\s+" + u + r"|"
+        r"remove\s+" + u + r"\s+from\s+(?:the\s+)?autostart)"
+    )
+    # the first form names the unit only in its stop clause: that clause is then required
+    if re.fullmatch(r"\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?" + body
+                    + r"(?:[\s,]+(?:please|пожалуйста))?\s*[.!]*\s*", prompt, re.IGNORECASE) is None:
+        return False
+    return re.search(r"(?<![\w.\-/@])" + u + r"(?![\w\-/@.])", prompt, re.IGNORECASE) is not None
 
 
 DISABLE_SPAN = re.compile(r"\bsystemctl\s+disable\s+([A-Za-z][\w@.\-]{2,})(?=\s*$|\s*;)", re.IGNORECASE)
@@ -972,14 +971,13 @@ def proposed_disable_units(answer: str) -> set[str]:
     if (CANCEL_WORDS.search(plain) or OPTION_LIST.search(plain) or not DISABLE_PROPOSAL_VERB.search(plain)
             or len(re.findall(r"`[^`\n]+`", answer)) != 1):
         return out
+    # sixth review: only my fixed first-person template counts («Уберу X из автозапуска: `… disable X`.»);
+    # an explanation, an instruction for the owner, a status report or another agent's action does not
     for line in answer.splitlines():
-        outside = re.sub(r"`[^`\n]+`", " ", line)
-        if NOT_A_GO.search(outside.replace("?", " ")) or NOT_A_STOP_GO.search(outside) or NOT_A_DISABLE_GO.search(outside):
-            continue
-        for span in re.findall(r"`([^`\n]+)`", line):
-            m = DISABLE_SPAN.search(span.strip())
-            if m and not span_declined(line, span):
-                out.add(m.group(1))
+        m = re.fullmatch(r"\s*(?:Уберу|Отключу|Сниму)\s+([A-Za-z][\w@.\-]{2,})\s+(?:из\s+автозапуска|с\s+автозапуска)\s*:\s*"
+                         r"`(?:sudo\s+)?systemctl\s+disable\s+([A-Za-z][\w@.\-]{2,})`\s*[.?]?\s*", line, re.IGNORECASE)
+        if m and m.group(1) == m.group(2):
+            out.add(m.group(2))
     return out
 NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|приб|стоп|тормоз|"
                            r"заверш|трог)|"
@@ -3002,7 +3000,7 @@ def self_test() -> int:
         ("disable asked with the unit named", "ssh h 'sudo systemctl disable llm-large'",
          transcript("да, останови llm-large и убери из автозапуска")),
         ("bare yes to a disable proposal", "ssh h 'sudo systemctl disable worker'",
-         transcript("да", "Уберу из автозапуска: `sudo systemctl disable worker`")),
+         transcript("да", "Уберу worker из автозапуска: `sudo systemctl disable worker`")),
         ("stop then disable in english", "ssh h 'sudo systemctl disable worker'",
          transcript("stop worker, then disable worker")),
         # third review 2026-10-15: proposals with an unrelated negation earlier in the line still count
@@ -3158,6 +3156,20 @@ def self_test() -> int:
          transcript("да", "Это `sudo systemctl disable worker` из твоих заметок?")),
         ("yes to an understanding check", "ssh h 'sudo systemctl disable worker'",
          transcript("да", "Понятно, что `sudo systemctl disable worker` сломает загрузку?")),
+        # sixth review 2026-10-15 findings
+        ("negation after the command", "ssh h 'sudo systemctl disable worker'",
+         transcript("Убрать worker из автозапуска не нужно.")),
+        ("english judgement after", "ssh h 'sudo systemctl disable worker'", transcript("Disable worker is a bad idea.")),
+        ("quoted across lines", "ssh h 'sudo systemctl disable worker'",
+         transcript("Codex предлагает:\nубери worker из автозапуска\nкак тебе такое")),
+        ("yes to an explanation", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Команда `sudo systemctl disable worker` уберёт его из автозапуска.")),
+        ("yes to an instruction for the owner", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Чтобы убрать worker из автозапуска, выполни у себя: `sudo systemctl disable worker`")),
+        ("yes to a status report", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "worker отключён из автозапуска: `sudo systemctl disable worker`")),
+        ("yes, template names another unit", "ssh h 'sudo systemctl disable worker'",
+         transcript("да", "Уберу worker2 из автозапуска: `sudo systemctl disable worker`")),
         ("stop, do not", "ssh h 'sudo systemctl disable worker'",
          transcript("убери worker из автозапуска\nстоп, не делай")),
         ("console login unit", "ssh h 'sudo systemctl disable getty@tty1'",
