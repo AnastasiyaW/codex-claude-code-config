@@ -506,7 +506,10 @@ def parse_verdict(out: str) -> dict | None:
 
 
 # A usage limit or an empty API balance is an account state, not a verdict.
-_QUOTA_RE = re.compile(r"hit your (weekly|daily|usage) limit|usage limit|Credit balance is too low", re.I)
+# Measured 2026-10-15: the main login answered "Your organization has disabled Claude subscription
+# access for Claude Code" while the whiskers login still reviewed fine.
+_QUOTA_RE = re.compile(r"hit your (weekly|daily|usage) limit|usage limit|Credit balance is too low"
+                       r"|disabled Claude subscription access", re.I)
 
 
 def fallback_config_dirs() -> list[str]:
@@ -827,6 +830,10 @@ def self_test() -> int:
                   any("CLAUDE_CODE_ENTRYPOINT" in e for e in calls), False)
             fallback_api_keys = lambda: []
             check("no keys and no logins left -> no verdict (fail-closed)", agent_b_claude("fixture"), None)
+            check("org-disabled subscription is an account state",
+                  bool(_QUOTA_RE.search("Your organization has disabled Claude subscription access for Claude Code")), True)
+            check("a real refusal is not an account state",
+                  bool(_QUOTA_RE.search('{"verdict": "BLOCK", "reason": "key"}')), False)
         finally:
             fallback_config_dirs, fallback_api_keys = saved_dirs, saved_keys
             os.environ.pop("CLAUDE_CODE_ENTRYPOINT", None)
