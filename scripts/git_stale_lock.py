@@ -23,21 +23,15 @@ removed only if ALL hold:
    the lock's mtime. A process that started after the lock existed could not
    have created it; mtime >= creation, so "started <= mtime" is conservative.
 
+A repo on a disk exposed by a Windows share (e.g. D:\\ shared to a VM) is not
+refused for that alone (owner 2026-10-15): its processes are invisible here, so
+the age margin rises to SHARE_MIN_AGE (30 min), and the rename below fails while
+a remote client holds the lock open. A running WSL distribution is still a refusal.
+
 Removal is identity-checked against the classified file (mtime_ns, size, inode):
 the lock is renamed to a tombstone, the tombstone is re-checked, and only then
 deleted; a lock that appeared in between is put back. Afterwards the tool checks
 the file is gone and `git status` exits 0. It never repairs a damaged index.
-
-Owner approval for a shared disk (owner 2026-10-15)
---------------------------------------------------
-Check 1 also refuses when a share exposes the repo (D:\\ shared to a Hyper-V VM):
-a git on the other side is invisible here. With `--owner-approved` that one
-refusal is settled by the owner instead: human-confirmation-guard writes a
-one-shot record to the deletion-approvals log only after the owner's own message
-names the lock, and the tool removes only the locks named in a fresh, unused
-record. WSL and network-filesystem refusals stay; age, local owners and the
-identity-checked rename (which fails while a remote client holds the file open)
-are checked as before.
 
 Exit codes (see rules/absence-of-signal.md):
   0  nothing stale, or every stale lock removed and verified
@@ -62,6 +56,9 @@ from pathlib import Path
 # 10 min: git holds a lock for one operation (seconds); 600 s leaves two orders of
 # magnitude of margin. Long holders (commit editor) are caught by the owner test.
 DEFAULT_MIN_AGE = 600
+# Under a disk share the remote side's processes are invisible, so the age is the only proof
+# of "no live operation" besides the rename test: 30 min, three times the local margin.
+SHARE_MIN_AGE = 1800
 # Filesystem mtime vs process create_time come from different clocks; allow skew.
 CLOCK_SKEW = 2.0
 # Name fragments of programs that may hold a git lock: the git CLI and git GUIs /
@@ -303,58 +300,13 @@ def remove_checked(lock: Path, snap: tuple[int, int, int]) -> str | None:
     return None
 
 
-APPROVAL_LOG = Path.home() / ".claude" / "logs" / "deletion-approvals.jsonl"
-CONSUMED = Path.home() / ".claude" / "state" / "git-lock-consumed-approvals.jsonl"
-APPROVAL_ACTION = "git-lock-owner"
-APPROVAL_MAX_AGE_S = 300
-
-
-def lock_key(path: Path | str) -> str:
-    """Same normalisation as human-confirmation-guard.git_lock_key."""
-    return str(path).replace("\\", "/").lower()
-
-
-def owner_approved_locks(log: Path = APPROVAL_LOG, consumed: Path = CONSUMED,
-                         now=None) -> tuple[set[str], str | None, str]:
-    """(lock keys, record line, why) of the newest fresh, unused guard record for a lock."""
-    import datetime
-    import json as _json
-    try:
-        lines = log.read_text(encoding="utf-8").splitlines()[-200:]
-    except OSError:
-        return set(), None, "no approval log"
-    try:
-        used = set(consumed.read_text(encoding="utf-8").splitlines())
-    except OSError:
-        used = set()
-    now = now or datetime.datetime.now()
-    for line in reversed(lines):
-        try:
-            rec = _json.loads(line)
-        except ValueError:
-            continue
-        if rec.get("action") != APPROVAL_ACTION:
-            continue
-        if line in used:
-            return set(), None, "this approval was already used"
-        try:
-            age = (now - datetime.datetime.fromisoformat(rec["ts"])).total_seconds()
-        except (KeyError, ValueError):
-            return set(), None, "approval record without a valid time"
-        if not 0 <= age <= APPROVAL_MAX_AGE_S:
-            return set(), None, f"approval is {age:.0f}s old (max {APPROVAL_MAX_AGE_S}s)"
-        return {lock_key(x) for x in rec.get("locks") or []}, line, ""
-    return set(), None, "the guard has not recorded an owner approval for a git lock"
-
-
 def _real_hidden(dirs: list[Path]) -> list[str]:
     trust = load_trust()
     return [h for d in dirs for h in invisible_owner_hosts(d, trust_admin_shares=trust)]
 
 
 def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
-        hidden_fn=_real_hidden, owner_approved: bool = False,
-        approval_fn=owner_approved_locks, consumed: Path = CONSUMED) -> int:
+        hidden_fn=_real_hidden) -> int:
     dirs = git_dirs(repo)
     if not dirs:
         print(f"UNKNOWN: {repo} is not a git repository")
@@ -373,24 +325,17 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
     except Unverifiable as exc:
         print(f"UNKNOWN: cannot rule out an invisible owner: {exc}")
         return 2
-    approved: set[str] | None = None
+    # Owner 2026-10-15: «разрешай удалять лок, если не найден владелец». A disk share (D:\ shared
+    # to a VM) is not itself an owner: such a lock is judged like any other, with a wider age
+    # margin, and the identity-checked rename still fails while a remote client holds it open.
+    # WSL stays a refusal: its git runs on the same files with no handle visible here.
+    others = [h for h in hidden if not h.startswith("share ")]
+    if others:
+        print(f"REFUSE: a lock owner could be invisible from here: {others}")
+        return 1
     if hidden:
-        shares_only = all(h.startswith("share ") for h in hidden)
-        if not (owner_approved and remove and shares_only):
-            print(f"REFUSE: a lock owner could be invisible from here: {hidden}")
-            return 1
-        approved, line, why = approval_fn()
-        if line is None:
-            print(f"REFUSE: owner approval needed for a lock under {hidden}: {why}")
-            return 1
-        try:  # one-shot: the same approval cannot run twice
-            consumed.parent.mkdir(parents=True, exist_ok=True)
-            with consumed.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except OSError as exc:
-            print(f"UNKNOWN: cannot record the used approval: {exc}")
-            return 2
-        print(f"OWNER-APPROVED: {sorted(approved)} under {hidden}")
+        min_age = max(min_age, SHARE_MIN_AGE)
+        print(f"NOTE: {hidden} - a remote owner is not visible here; age margin {min_age:.0f}s")
     try:
         procs = procs_fn()
     except Exception as exc:  # cannot prove absence of an owner -> not green
@@ -416,10 +361,6 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
             verdict = 1
             continue
         stale_seen += 1
-        if approved is not None and lock_key(lock) not in approved:
-            print(f"REFUSE: {lock} is under a share and the owner did not name it")
-            verdict = 1
-            continue
         if not remove:
             print(f"STALE: {lock} {detail} (dry run; add --remove)")
             continue
@@ -506,53 +447,32 @@ def self_test() -> int:
         if run(Path(td), True, 600, no_procs) != 2:
             failures.append("non-repo was not UNKNOWN")
 
-        stale_lock()  # an invisible-owner host (share / WSL) -> refuse, keep the lock
-        if run(repo, True, 600, no_procs, lambda dirs: ["share C$ -> C:\\"]) != 1 or not lock.exists():
-            failures.append("lock under a share was not refused")
+        share = lambda dirs: ["share HostD -> D:\\"]  # noqa: E731
+        # under a share: 1 h old (stale_lock) passes the 30-min margin; 20 min does not
+        stale_lock()
+        mid = time.time() - 1200
+        os.utime(lock, (mid, mid))
+        if run(repo, True, 600, no_procs, share) != 1 or not lock.exists():
+            failures.append("a 20-minute lock under a share was removed (margin is 30 min)")
+        if run(repo, True, 600, no_procs, lambda dirs: ["share HostD -> D:\\",
+                                                         "WSL distributions running: ['x']"]) != 1 \
+                or not lock.exists():
+            failures.append("lock with WSL running was not refused")
+        stale_lock()
+        if run(repo, True, 600, no_procs, share) != 0 or lock.exists():
+            failures.append("stale lock under a share with no possible owner was not removed")
+        stale_lock()
+        if run(repo, True, 600, lambda: [(3, "git.exe", old - 10)], share) != 1 or not lock.exists():
+            failures.append("lock under a share with a live older owner was removed")
+        stale_lock()  # WSL alone -> refuse, keep the lock
+        if run(repo, True, 600, no_procs, lambda dirs: ["WSL distributions running: ['x']"]) != 1 \
+                or not lock.exists():
+            failures.append("lock with WSL running (no share) was not refused")
 
         def cannot_enumerate(dirs):
             raise Unverifiable("registry denied")
         if run(repo, True, 600, no_procs, cannot_enumerate) != 2 or not lock.exists():
             failures.append("share enumeration failure was not UNKNOWN")
-
-        # --owner-approved: only the share refusal is settled, only by a fresh unused guard
-        # record, only for the locks it names.
-        import datetime
-        import json as _json
-        share = lambda dirs: ["share HostD -> D:\\"]  # noqa: E731
-        log, used = Path(td) / "approvals.jsonl", Path(td) / "used.jsonl"
-
-        def record(locks, age_s=0):
-            ts = (datetime.datetime.now() - datetime.timedelta(seconds=age_s)).isoformat(timespec="seconds")
-            log.write_text(_json.dumps({"ts": ts, "action": APPROVAL_ACTION, "locks": locks}) + "\n",
-                           encoding="utf-8")
-
-        def owner_run(hidden=share):
-            return module_run(repo, True, 600, no_procs, hidden, owner_approved=True,
-                              approval_fn=lambda: owner_approved_locks(log, used), consumed=used)
-
-        stale_lock()
-        if owner_run() != 1 or not lock.exists():
-            failures.append("share lock without an owner record was removed")
-        record([str(repo / ".git" / "other.lock")])
-        if owner_run() != 1 or not lock.exists():
-            failures.append("share lock removed on a record naming another lock")
-        record([str(lock)], age_s=3600)
-        if owner_run() != 1 or not lock.exists():
-            failures.append("share lock removed on a stale owner record")
-        record([str(lock)])
-        if owner_run(lambda dirs: ["share HostD -> D:\\", "WSL distributions running: ['x']"]) != 1 \
-                or not lock.exists():
-            failures.append("owner record overrode a WSL refusal")
-        record([str(lock)])
-        if module_run(repo, True, 600, no_procs, share, owner_approved=False) != 1 or not lock.exists():
-            failures.append("share lock removed without --owner-approved")
-        if owner_run() != 0 or lock.exists():
-            failures.append("share lock named by a fresh owner record was not removed")
-        stale_lock()
-        if owner_run() != 1 or not lock.exists():
-            failures.append("a used owner record was accepted twice")
-        lock.unlink()
 
     if not _covers("D:\\", "D:/x/y") or _covers("C:\\HomeShare", "C:/HomeShareX/y"):
         failures.append("share prefix match wrong (drive root / sibling name)")
@@ -569,13 +489,10 @@ def main() -> int:
     ap.add_argument("--remove", action="store_true")
     ap.add_argument("--min-age", type=float, default=DEFAULT_MIN_AGE)
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("--owner-approved", action="store_true",
-                    help="a share exposes the repo: remove only locks the owner named "
-                         "(guard record in the deletion-approvals log)")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
-    return run(Path(a.repo).resolve(), a.remove, a.min_age, owner_approved=a.owner_approved)
+    return run(Path(a.repo).resolve(), a.remove, a.min_age)
 
 
 if __name__ == "__main__":

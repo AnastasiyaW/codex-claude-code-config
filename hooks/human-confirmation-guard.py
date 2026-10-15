@@ -1892,93 +1892,6 @@ def _named(text: str, needle: str) -> bool:
     return re.search(r"(?<![\w.\-/~:])" + re.escape(needle) + r"(?![\w.\-/])", text) is not None
 
 
-# Owner 2026-10-15 («да, удали D:\<repo>\.git\index.lock»): a stale git lock
-# on a disk shared to a VM is refused by git_stale_lock.py (an owner could be invisible), and rm
-# inside .git is a hard limit. Her own words settle the one share question: this exact tool call,
-# with --owner-approved, writes a one-shot record of the locks she named; the tool still proves
-# age, no local owner and an unopened file before it removes anything.
-GIT_LOCK_TOOL = Path(__file__).resolve().parent.parent / "scripts" / "git_stale_lock.py"
-GIT_LOCK_OWNER_CMD = re.compile(
-    r"^\s*(?:python3?|py)(?:\.exe)?\s+(?P<tool>\S+)\s+(?P<repo>\"[^\"]+\"|'[^']+'|\S+)"
-    r"\s+--remove\s+--owner-approved\s*$", re.IGNORECASE)
-
-
-def git_lock_key(path) -> str:
-    """Same normalisation as git_stale_lock.lock_key."""
-    return str(path).replace("\\", "/").lower()
-
-
-SHELL_META = re.compile(r"[$`;&|<>%\r\n]")
-
-
-def _lock_named(text: str, lock: Path) -> bool:
-    """The lock's full path appears as a whole token. The one typo tolerated is the separator
-    dropped right before .git («<repo>.git\\index.lock», owner 15.10) - review: a
-    general squash also matched a bare repo's lock (x.git/index.lock vs x/.git/index.lock)."""
-    full = git_lock_key(lock)
-    hay = text.replace("\\", "/").lower()
-    for variant in {full, full.replace("/.git/", ".git/")}:
-        if re.search(r"(?<![\w.\-/~:])" + re.escape(variant) + r"(?![\w.\-/])", hay):
-            return True
-    return False
-
-
-def git_lock_owner_approval(cmd: str, event: dict) -> tuple[bool | None, str]:
-    """None - not the owner-approved lock tool call. Otherwise (approved, why)."""
-    m = GIT_LOCK_OWNER_CMD.match(cmd.strip())
-    if not m:
-        return None, ""
-    if SHELL_META.search(m["tool"]) or SHELL_META.search(m["repo"]):
-        # review 15.10: an approval allows the whole line before decide(); a token carrying
-        # $(...), ; or & would run something else under the owner's yes
-        return False, "shell metacharacters in the tool or repository path"
-    tool = Path(os.path.expanduser(m["tool"].strip("\"'")))
-    try:
-        if tool.resolve() != GIT_LOCK_TOOL:
-            return False, f"not the canonical lock tool ({GIT_LOCK_TOOL})"
-    except OSError:
-        return False, "lock tool path does not resolve"
-    repo_raw = m["repo"].strip("\"'")
-    if not re.match(r"^[A-Za-z]:[\\/]", repo_raw):
-        return False, "the repository needs a full path with a drive letter"
-    gdir = Path(repo_raw).resolve() / ".git"
-    if not gdir.is_dir():
-        return False, f"{gdir} is not a git directory"
-    locks = [p for p in gdir.glob("*.lock") if p.is_file()]
-    if (gdir / "refs").is_dir():
-        locks += [p for p in (gdir / "refs").rglob("*.lock") if p.is_file()]
-    if not locks:
-        return False, "no lock files to approve"
-    req = owner_request(event.get("transcript_path") or "")
-    if not req:
-        return False, "no human prompt in the transcript"
-    prompt, answer = req
-    if NOT_A_GO.search(prompt):
-        return False, "the request negates, hesitates or asks a question"
-    if CONFIRM_ONLY.fullmatch(prompt):
-        named_in = answer
-        if not DELETE_MENTION.search(answer):
-            return False, "a bare 'yes' to an answer that proposed no deletion"
-    elif DELETE_INTENT.search(prompt):
-        named_in = prompt
-    else:
-        return False, "the latest request does not ask to delete"
-    named = [p for p in locks if _lock_named(named_in, p)]
-    if not named:
-        return False, "the owner's message names none of the lock files in " + str(gdir)
-    try:
-        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
-                                 "session": event.get("session_id"), "action": "git-lock-owner",
-                                 "locks": [git_lock_key(p) for p in named],
-                                 "request": prompt[:300], "command": cmd[:500]},
-                                ensure_ascii=False) + "\n")
-    except OSError:
-        return False, "cannot write the approval audit record"
-    return True, ", ".join(str(p) for p in named)
-
-
 def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     req = owner_request(event.get("transcript_path") or "")
     if not req:
@@ -2096,18 +2009,6 @@ def main() -> None:
     cmd = bash_command(event.get("tool_input", {}))
     if not cmd:
         allow()
-
-    # Before the routine shortcut: the tool call alone is harmless, but only this hook may
-    # write the one-shot record that lets it act on a lock under a share.
-    lock_ok, lock_why = git_lock_owner_approval(cmd, event)
-    if lock_ok is not None:
-        if lock_ok:
-            log("INFO", "require_human_confirmation", "owner-approved-git-lock", "", lock_why)
-            allow()
-        log("BLOCK", "require_human_confirmation", "owner-approved-git-lock", "", lock_why)
-        block(f"Снятие git-лока под сетевым доступом не одобрено: {lock_why}.\n\n"
-              "Нужно последнее сообщение владельца, которое просит удалить и называет файл лока "
-              "полным путём (или голое «да» на мой ответ, где путь назван).")
 
     # No destructive intent, or every destructive segment deletes only routine
     # build/cache/temp targets -> allow silently.
