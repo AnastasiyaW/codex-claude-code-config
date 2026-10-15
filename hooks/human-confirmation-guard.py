@@ -2002,6 +2002,33 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
     return True, ", ".join(t for t, _ in targets)
 
 
+# Owner 2026-10-15 («удалять зомби без моего разрешения и без родителя»): the whole command is one
+# `taskkill /PID n [/PID n ...] [/F]` and every pid is proven a parentless stuck CLI helper by
+# scripts/orphan_reaper.is_zombie (closed image list, age, no live child/pipe partner). No /T, no /IM,
+# nothing chained. simplification: taskkill re-resolves the pid after this check (reuse race of a few ms);
+# orphan_reaper.py --reap rechecks pid + create_time right before killing - prefer it.
+_ZOMBIE_TK = re.compile(r"\s*taskkill(?:\.exe)?((?:\s+(?:/{1,2}|-)(?:PID\s+\d+|F))+)\s*", re.IGNORECASE)
+
+
+def zombie_taskkill(cmd: str) -> dict[str, str] | None:
+    m = _ZOMBIE_TK.fullmatch(cmd)
+    if not m:
+        return None
+    pids = [int(p) for p in re.findall(r"PID\s+(\d+)", m.group(1), re.IGNORECASE)]
+    if not pids:
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "orphan_reaper", Path(__file__).resolve().parent.parent / "scripts" / "orphan_reaper.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        reasons = {str(p): mod.is_zombie(p) for p in pids}
+    except Exception:  # noqa: BLE001 - cannot prove zombie -> fall through to the owner path
+        return None
+    return reasons if all(reasons.values()) else None
+
+
 def main() -> None:
     event = read_event()
     if event.get("tool_name") not in {"Bash", "PowerShell"}:
@@ -2036,6 +2063,19 @@ def main() -> None:
         except OSError:
             pass   # the audit line is a record; the approval itself is the closed VM list
         log("INFO", "require_human_confirmation", "test-vm-restart", hit or "", vm)
+        allow()
+
+    zombies = zombie_taskkill(cmd)
+    if zombies:
+        try:
+            APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                     "session": event.get("session_id"), "action": "zombie-kill",
+                                     "pids": zombies, "command": cmd[:500]}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass   # the audit line is a record; the approval itself is the zombie proof
+        log("INFO", "require_human_confirmation", "zombie-kill", hit or "", json.dumps(zombies))
         allow()
 
     ok, why = approved_by_owner(cmd, event)
