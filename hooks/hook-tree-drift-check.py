@@ -30,6 +30,10 @@ What it reports (advisory, never blocks)
   * ORPHAN  - a script in a hook directory that no event registers. Not a fault
               by itself; listed so a "why did nothing fire" question has an
               answer.
+  * STALE   - a hook deployed from a git source tree differs from that source.
+              Private hooks run from `private-hooks`, copied by hand from
+              `claude-code-private/hooks`; on 2026-10-15 the live seams gate sat
+              at Crossweft 0.2.3 while git said 0.2.7, and nothing noticed.
 
 Silence is the normal state: it prints only when the picture CHANGES. The stamp
 holds a digest of the findings, so a fixed problem goes quiet and a new one
@@ -62,6 +66,8 @@ HOOK_TREES = ("hooks", "claude-code-config/hooks", "private-hooks")
 # the same contract.  Compare the canonical/legacy pair only; otherwise three
 # active parents create an N×(N-1) wall of duplicate, unactionable SHADOWs.
 SHARED_DEPENDENCY_TREES = ("hooks", "claude-code-config/hooks")
+# (git source, live deploy). The source is the truth; the fix is to redeploy it.
+DEPLOYED_FROM = (("claude-code-private/hooks", "private-hooks"),)
 SCRIPT_IN_COMMAND = re.compile(r"[A-Za-z0-9_./\\:$~-]+\.py")
 
 
@@ -212,6 +218,17 @@ def survey(home: Path, codex_hooks_path: Path | None = None) -> list[tuple[str, 
                 + (f", identical copy at {where}" if same
                    else f", but a DIFFERENT copy sits at {where}"),
             ))
+    for source_tree, live_tree in DEPLOYED_FROM:
+        source_dir = home / source_tree
+        if not source_dir.is_dir():
+            continue
+        for source in sorted(source_dir.glob("*.py")):
+            live = home / live_tree / source.name
+            try:
+                if live.exists() and _digest(live) != _digest(source):
+                    findings.append(("STALE", f"{live_tree}/{source.name} differs from git {source_tree}/{source.name}"))
+            except OSError:
+                continue
     hook_dirs = {(home / tree).resolve() for tree in HOOK_TREES}
     for name, copies in sorted(present.items()):
         if name in declared_by_name or name.startswith("_") or name == "safety_common.py":
@@ -230,6 +247,7 @@ def _report(findings: list[tuple[str, str]]) -> str:
     dead = [m for kind, m in findings if kind == "DEAD"]
     twins = [m for kind, m in findings if kind == "TWIN"]
     orphans = [m for kind, m in findings if kind == "ORPHAN"]
+    stale = [m for kind, m in findings if kind == "STALE"]
     lines = ["[hook-tree] the manifest and the files on disk disagree:"]
     if splits:
         lines.append(f"  {len(splits)} SPLIT active registration(s) - different copies both execute:")
@@ -242,6 +260,9 @@ def _report(findings: list[tuple[str, str]]) -> str:
     if dead:
         lines.append(f"  {len(dead)} DEAD registration(s):")
         lines.extend(f"    {m}" for m in dead[:4])
+    if stale:
+        lines.append(f"  {len(stale)} STALE deploy(s) - the running copy is not what git holds; redeploy from git:")
+        lines.extend(f"    {m}" for m in stale[:6])
     if twins:
         lines.append(f"  {len(twins)} identical twin(s) - harmless until someone edits one side")
     if orphans:
@@ -298,9 +319,16 @@ def _self_test() -> int:
         ]}]}}
         (home / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
+        source = home / "claude-code-private" / "hooks"
+        deployed = home / "private-hooks"
+        source.mkdir(parents=True)
+        deployed.mkdir()
+        (source / "_gate.py").write_text("PIN = '0.2.7'\n", encoding="utf-8")
+        (deployed / "_gate.py").write_text("PIN = '0.2.3'\n", encoding="utf-8")
+
         codex_hooks = home / ".codex" / "hooks.json"
         kinds = {kind for kind, _ in survey(home, codex_hooks)}
-        for expected in ("SHADOW", "TWIN", "DEAD", "ORPHAN"):
+        for expected in ("SHADOW", "TWIN", "DEAD", "ORPHAN", "STALE"):
             if expected not in kinds:
                 fails.append(f"{expected} not reported")
         shadow = [m for kind, m in survey(home, codex_hooks) if kind == "SHADOW"]
@@ -332,6 +360,7 @@ def _self_test() -> int:
         (old / "safety_common.py").unlink()
         (old / "nobody-calls-me.py").unlink()
         (live / "safety_common.py").unlink()
+        (deployed / "_gate.py").write_text("PIN = '0.2.7'\n", encoding="utf-8")
         (live / "vanished.py").write_text("print('now it exists')\n", encoding="utf-8")
         codex_hooks.unlink()
         clean = survey(home, codex_hooks)
