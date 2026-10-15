@@ -30,10 +30,12 @@ What it reports (advisory, never blocks)
   * ORPHAN  - a script in a hook directory that no event registers. Not a fault
               by itself; listed so a "why did nothing fire" question has an
               answer.
-  * STALE   - a hook deployed from a git source tree differs from that source.
-              Private hooks run from `private-hooks`, copied by hand from
-              `claude-code-private/hooks`; on 2026-10-15 the live seams gate sat
-              at Crossweft 0.2.3 while git said 0.2.7, and nothing noticed.
+  * STALE   - a file deployed from a git source tree differs from that source,
+              or exists on only one side. Private hooks run from
+              `private-hooks` and the loaded rules from `rules`, both copied by
+              hand from `claude-code-private`; on 2026-10-15 the live seams gate
+              sat at Crossweft 0.2.3 while git said 0.2.7, 35 of 44 git rules
+              differed from the loaded ones and 6 loaded rules were in no git.
 
 Silence is the normal state: it prints only when the picture CHANGES. The stamp
 holds a digest of the findings, so a fixed problem goes quiet and a new one
@@ -66,13 +68,24 @@ HOOK_TREES = ("hooks", "claude-code-config/hooks", "private-hooks")
 # the same contract.  Compare the canonical/legacy pair only; otherwise three
 # active parents create an N×(N-1) wall of duplicate, unactionable SHADOWs.
 SHARED_DEPENDENCY_TREES = ("hooks", "claude-code-config/hooks")
-# (git source, live deploy). The source is the truth; the fix is to redeploy it.
-DEPLOYED_FROM = (("claude-code-private/hooks", "private-hooks"),)
+# (git source, live deploy, pattern). The source is the truth; the fix is to redeploy it.
+DEPLOYED_FROM = (
+    ("claude-code-private/hooks", "private-hooks", "*.py"),
+    ("claude-code-private/rules", "rules", "*.md"),
+)
+# In git on purpose, never deployed: the 2026-07-31 merge of the three connection
+# rules, superseded when the split files came back (reconciled 2026-10-15).
+NOT_DEPLOYED = frozenset({"claude-code-private/rules/connections.md"})
 SCRIPT_IN_COMMAND = re.compile(r"[A-Za-z0-9_./\\:$~-]+\.py")
 
 
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _content_digest(path: Path) -> str:
+    # core.autocrlf=true checks git sources out with CRLF; line endings are not drift.
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def _registered(manifest: dict) -> set[str]:
@@ -218,17 +231,26 @@ def survey(home: Path, codex_hooks_path: Path | None = None) -> list[tuple[str, 
                 + (f", identical copy at {where}" if same
                    else f", but a DIFFERENT copy sits at {where}"),
             ))
-    for source_tree, live_tree in DEPLOYED_FROM:
+    for source_tree, live_tree, pattern in DEPLOYED_FROM:
         source_dir = home / source_tree
-        if not source_dir.is_dir():
+        live_dir = home / live_tree
+        if not source_dir.is_dir() or not live_dir.is_dir():
             continue
-        for source in sorted(source_dir.glob("*.py")):
-            live = home / live_tree / source.name
-            try:
-                if live.exists() and _digest(live) != _digest(source):
-                    findings.append(("STALE", f"{live_tree}/{source.name} differs from git {source_tree}/{source.name}"))
-            except OSError:
+        sources = {p.name for p in source_dir.glob(pattern)}
+        lives = {p.name for p in live_dir.glob(pattern)}
+        for name in sorted(sources | lives):
+            if f"{source_tree}/{name}" in NOT_DEPLOYED:
                 continue
+            if name not in lives:
+                findings.append(("STALE", f"git {source_tree}/{name} is not deployed to {live_tree}/"))
+            elif name not in sources:
+                findings.append(("STALE", f"{live_tree}/{name} runs but is in no git; commit it to {source_tree}/"))
+            else:
+                try:
+                    if _content_digest(live_dir / name) != _content_digest(source_dir / name):
+                        findings.append(("STALE", f"{live_tree}/{name} differs from git {source_tree}/{name}"))
+                except OSError:
+                    continue
     hook_dirs = {(home / tree).resolve() for tree in HOOK_TREES}
     for name, copies in sorted(present.items()):
         if name in declared_by_name or name.startswith("_") or name == "safety_common.py":
@@ -261,7 +283,7 @@ def _report(findings: list[tuple[str, str]]) -> str:
         lines.append(f"  {len(dead)} DEAD registration(s):")
         lines.extend(f"    {m}" for m in dead[:4])
     if stale:
-        lines.append(f"  {len(stale)} STALE deploy(s) - the running copy is not what git holds; redeploy from git:")
+        lines.append(f"  {len(stale)} STALE deploy(s) - the running copy is not what git holds; reconcile, commit, redeploy from git:")
         lines.extend(f"    {m}" for m in stale[:6])
     if twins:
         lines.append(f"  {len(twins)} identical twin(s) - harmless until someone edits one side")
@@ -326,6 +348,18 @@ def _self_test() -> int:
         (source / "_gate.py").write_text("PIN = '0.2.7'\n", encoding="utf-8")
         (deployed / "_gate.py").write_text("PIN = '0.2.3'\n", encoding="utf-8")
 
+        rules_src = home / "claude-code-private" / "rules"
+        rules_live = home / "rules"
+        rules_src.mkdir()
+        rules_live.mkdir()
+        (rules_src / "edited.md").write_text("old wording\n", encoding="utf-8")
+        (rules_live / "edited.md").write_text("owner directive 2026-10-15\n", encoding="utf-8")
+        (rules_src / "eol.md").write_bytes(b"same\r\ntext\r\n")
+        (rules_live / "eol.md").write_bytes(b"same\ntext\n")
+        (rules_live / "live-only.md").write_text("never committed\n", encoding="utf-8")
+        (rules_src / "git-only.md").write_text("never installed\n", encoding="utf-8")
+        (rules_src / "connections.md").write_text("kept in git, not deployed\n", encoding="utf-8")
+
         codex_hooks = home / ".codex" / "hooks.json"
         kinds = {kind for kind, _ in survey(home, codex_hooks)}
         for expected in ("SHADOW", "TWIN", "DEAD", "ORPHAN", "STALE"):
@@ -338,6 +372,13 @@ def _self_test() -> int:
             fails.append("an identical copy was reported as a SHADOW")
         if not any("safety_common.py" in m for m in shadow):
             fails.append("a shadowed shared dependency was not reported")
+        stale = [m for kind, m in survey(home, codex_hooks) if kind == "STALE"]
+        for name in ("edited.md", "live-only.md", "git-only.md"):
+            if not any(name in m for m in stale):
+                fails.append(f"rule drift {name} was not reported as STALE")
+        for name in ("eol.md", "connections.md"):
+            if any(name in m for m in stale):
+                fails.append(f"{name} was reported as STALE")
 
         # Codex has its own manifest. A different active same-named copy is not
         # a SHADOW: both copies execute, so it must be reported as a SPLIT.
@@ -361,6 +402,9 @@ def _self_test() -> int:
         (old / "nobody-calls-me.py").unlink()
         (live / "safety_common.py").unlink()
         (deployed / "_gate.py").write_text("PIN = '0.2.7'\n", encoding="utf-8")
+        (rules_src / "edited.md").write_text("owner directive 2026-10-15\n", encoding="utf-8")
+        (rules_src / "live-only.md").write_text("never committed\n", encoding="utf-8")
+        (rules_live / "git-only.md").write_text("never installed\n", encoding="utf-8")
         (live / "vanished.py").write_text("print('now it exists')\n", encoding="utf-8")
         codex_hooks.unlink()
         clean = survey(home, codex_hooks)
