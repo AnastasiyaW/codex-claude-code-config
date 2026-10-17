@@ -45,6 +45,7 @@ Opt-in extras (use --extras):
   - over-engineering-advisor     PostToolUse   advisory nudge on large/dependency-adding code changes
   - module-shape-advisor         PostToolUse   advisory nudge when one source file crosses shape thresholds
   - handoff-to-todo              PostToolUse   attaches a project handoff to its task in «Личное → Проекты»
+  - todo-inbox                   UserPromptSubmit/PreToolUse  the owner's new words on a claimed project reach the agent
   - precompact-handoff-guard     PreCompact    demands a fresh handoff before context compaction
   - handoff-closure-audit-guard  PreToolUse    blocks handoff writes without closure audit
   - continuity-contract-guard    PreToolUse    protects incremental edits across Claude/Codex
@@ -142,6 +143,8 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("over-engineering-advisor.py",   "PostToolUse", "Write|Edit|MultiEdit"),
     ("module-shape-advisor.py",        "PostToolUse", "Write|Edit|MultiEdit"),
     ("handoff-to-todo.py",             "PostToolUse", "Write|Edit|MultiEdit"),
+    ("todo-inbox.py",                  "UserPromptSubmit", None),
+    ("todo-inbox.py",                  "PreToolUse", "Bash|PowerShell|Write|Edit|MultiEdit"),
     ("precompact-handoff-guard.py",  "PreCompact", None),
     ("handoff-closure-audit-guard.py", "PreToolUse", "Write|Edit|MultiEdit"),
     ("test-gate-stop-hook.py",       "Stop", None),
