@@ -467,11 +467,12 @@ def agent_b_claude(diff: str) -> dict | None:
     # This is an inner machine review, not a direct user request.  Its prompt
     # contains imperative security-review instructions, so explicitly prevent
     # the user-task hook from turning it into a durable work order.
-    # The same reviewer under another login when this one is out of quota: the
-    # verdict is still required, only the account changes (see fallback_config_dirs).
-    # After the subscription logins come the monthly API-credit keys of the same accounts.
-    attempts = [(d, None, d or "main login") for d in [None] + fallback_config_dirs()]
-    attempts += [(API_KEY_CONFIG_DIR, key, f"API credits {org}") for org, key in fallback_api_keys()]
+    # The same reviewer under another account when this one is out of quota: the
+    # verdict is still required, only the account changes. API-credit keys go first
+    # (owner 2026-10-17: cloud tokens wherever possible); the subscription weekly limit
+    # blocked public pushes three times in Sept-Oct, so the logins are only the fallback.
+    attempts = [(API_KEY_CONFIG_DIR, key, f"API credits {org}") for org, key in fallback_api_keys()]
+    attempts += [(d, None, d or "main login") for d in [None] + fallback_config_dirs()]
     for config_dir, api_key, label in attempts:
         r = _agent_b_call(claude, prompt, config_dir, api_key)
         if r.returncode == 0 or not _QUOTA_RE.search((r.stdout or "") + (r.stderr or "")):
@@ -578,6 +579,8 @@ def _agent_b_call(claude: str, prompt: str, config_dir: str | None,
             [
                 claude,
                 "-p",
+                "--model",
+                "claude-opus-5-5",   # reviewers run on Opus 5.5 (cloud-agent-model-routing)
                 "--output-format",
                 "text",
                 "--system-prompt",
@@ -825,7 +828,9 @@ def self_test() -> int:
             os.environ["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop"
             check("api-key fallback reaches a key with credit",
                   agent_b_claude("fixture") or {}, {"verdict": "SAFE", "reason": "fixture"})
-            check("stops at the first key that answers", len(calls), 3)
+            check("API keys are tried before the subscription login",
+                  calls[0].get("ANTHROPIC_API_KEY"), "k-one")
+            check("stops at the first key that answers", len(calls), 2)
             check("desktop entrypoint is never inherited",
                   any("CLAUDE_CODE_ENTRYPOINT" in e for e in calls), False)
             fallback_api_keys = lambda: []
