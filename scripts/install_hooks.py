@@ -145,6 +145,7 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("handoff-to-todo.py",             "PostToolUse", "Write|Edit|MultiEdit"),
     ("todo-inbox.py",                  "UserPromptSubmit", None),
     ("todo-inbox.py",                  "PreToolUse", "Bash|PowerShell|Write|Edit|MultiEdit"),
+    ("widget-test-guard.py",           "PreToolUse", "Bash|PowerShell"),
     ("precompact-handoff-guard.py",  "PreCompact", None),
     ("handoff-closure-audit-guard.py", "PreToolUse", "Write|Edit|MultiEdit"),
     ("test-gate-stop-hook.py",       "Stop", None),
