@@ -62,7 +62,10 @@ def main() -> int:
     try:
         r = subprocess.run([sys.executable, str(cli), "handoff", str(path)], capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT_S,
-                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                                # todo.py помечает проект как взятый этой сессией (подсветка во вкладке)
+                                "CLAUDE_CODE_SESSION_ID": str(event.get("session_id")
+                                                              or os.environ.get("CLAUDE_CODE_SESSION_ID", ""))})
     except subprocess.TimeoutExpired:
         _say(f"[handoff-to-todo] НЕ ПРОВЕРЕНО: Vikunja не ответила за {TIMEOUT_S} с. "
              f'Повтори: python "{cli}" handoff "{path}"')
