@@ -4,8 +4,8 @@
 The owner writes in the feed under a project task of her to-do («Личное → Проекты»). An agent
 session that took the project (`todo.py resume` / `handoff` recorded its session id in
 project_sessions.json) gets those comments here as additional context:
-- on every UserPromptSubmit;
-- on PreToolUse at most once per THROTTLE_S per session, so a long autonomous run hears her too.
+- on UserPromptSubmit at most every 45 s, on PreToolUse at most every 3 min per session (THROTTLE_S),
+  so a long autonomous run hears her too and no prompt waits on the network each time.
 
 No network unless this session has claimed a project (local file check first). Advisory, never
 blocks. CLI path: env TODO_WIDGET_CLI; unset = the to-do is not installed here, nothing happens.
@@ -20,8 +20,9 @@ import sys
 import time
 from pathlib import Path
 
-TIMEOUT_S = 12
-THROTTLE_S = 180
+TIMEOUT_S = 8
+# Не чаще: на сообщениях — раз в 45 с (поток сообщений не ждёт сеть каждый раз), во время работы — раз в 3 мин.
+THROTTLE_S = {"UserPromptSubmit": 45, "PreToolUse": 180}
 
 
 def data_dir() -> Path:
@@ -36,17 +37,18 @@ def has_claim(folder: Path, session: str) -> bool:
     return any(isinstance(v, dict) and session in v for v in data.values())
 
 
-def throttled(folder: Path, session: str, now: float) -> bool:
+def throttled(folder: Path, session: str, event: str, now: float) -> bool:
     """True — проверяли недавно; иначе отмечает «проверяем сейчас»."""
     path = folder / "inbox_throttle.json"
+    key = f"{session}:{event}"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
-    if now - float(data.get(session, 0)) < THROTTLE_S:
+    if now - float(data.get(key, 0)) < THROTTLE_S.get(event, 180):
         return True
     data = {k: v for k, v in data.items() if now - float(v) < 86400}
-    data[session] = now
+    data[key] = now
     try:
         path.write_text(json.dumps(data), encoding="utf-8")
     except OSError:
@@ -68,14 +70,19 @@ def main() -> int:
     folder = data_dir()
     if not has_claim(folder, session):
         return 0
-    if name == "PreToolUse" and throttled(folder, session, time.time()):
+    if throttled(folder, session, name, time.time()):
         return 0
     try:
         r = subprocess.run([sys.executable, cli, "inbox"], capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=TIMEOUT_S,
                            env={**os.environ, "PYTHONIOENCODING": "utf-8", "CLAUDE_CODE_SESSION_ID": session})
     except subprocess.TimeoutExpired:
-        return 0  # следующая проверка будет на следующем сообщении/инструменте
+        print(f"[todo-inbox] слова владелицы не проверены: нет ответа за {TIMEOUT_S} с", file=sys.stderr)
+        return 0
+    if r.returncode != 0:
+        print(f"[todo-inbox] слова владелицы не проверены (код {r.returncode}): "
+              f"{(r.stderr or r.stdout).strip()[:200]}", file=sys.stderr)
+        return 0
     text = r.stdout.strip()
     if r.returncode == 0 and text:
         out = {"hookSpecificOutput": {"hookEventName": name or "UserPromptSubmit",
@@ -89,9 +96,12 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as d:
         folder = Path(d)
         (folder / "project_sessions.json").write_text(json.dumps({"7": {"s1": "x"}}), encoding="utf-8")
+        pre, prompt = "PreToolUse", "UserPromptSubmit"
         checks = [has_claim(folder, "s1") is True, has_claim(folder, "s2") is False,
-                  throttled(folder, "s1", 1000.0) is False, throttled(folder, "s1", 1100.0) is True,
-                  throttled(folder, "s1", 1000.0 + THROTTLE_S + 1) is False,
+                  throttled(folder, "s1", pre, 1000.0) is False, throttled(folder, "s1", pre, 1100.0) is True,
+                  throttled(folder, "s1", prompt, 1100.0) is False,  # у сообщений свой отсчёт
+                  throttled(folder, "s1", prompt, 1120.0) is True,
+                  throttled(folder, "s1", pre, 1000.0 + THROTTLE_S[pre] + 1) is False,
                   has_claim(Path(d) / "missing", "s1") is False]
     bad = [i for i, ok in enumerate(checks) if not ok]
     print("self-test:", "FAIL " + str(bad) if bad else "PASS")
