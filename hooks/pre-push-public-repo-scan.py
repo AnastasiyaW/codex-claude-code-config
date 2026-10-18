@@ -397,6 +397,9 @@ BLOCK criteria (any one = unsafe):
 - Any value that looks like a random alphanumeric string ≥32 chars (likely token)
 - Base64 blobs ≥100 chars (may encode secrets)
 
+A `<hex-digest-40>` or `<hex-digest-64>` placeholder replaced a git SHA or SHA-256 value
+that its line labels as a hash; it is not a credential.
+
 ALLOW criteria (all must hold):
 - Only generic code, docs, config templates with placeholder values
 - Environment variable NAMES (not values)
@@ -437,11 +440,58 @@ def find_claude_cli() -> str | None:
     return p  # last resort (may be a .cmd shim; only usable where the shell runs it)
 
 
+# A lowercase hex value of exactly 40 (git SHA-1) or 64 (SHA-256) characters that its own
+# line labels as a hash is a digest, not a credential. Agent B's ">=32-char random string"
+# rule refused news articles over their provenance comments (owner 2026-10-18: «40/64-
+# символьные hex-хэши рядом с sha256/commit/digest не считать токенами»). The label must sit
+# right before the value, so `api_key = <64 hex>` or a bare hex string is not masked and is
+# still judged by Agent B; Agent A's credential patterns run on the unmasked diff.
+# The key directly before the value decides; the gap holds only quotes, spaces, `=`, `:`
+# and `-`, so it cannot reach past another key or into a URL path. Independent review
+# 2026-10-18 (HOLD) showed a looser form masked VAULT_HASH_KEY=, token_sha256=,
+# `commit=x api_key=<hex>` and webhook URLs - hex secrets that Agent A does not see.
+_HASH_CORE = r"(?:sha(?:1|256|512)?|commit|digest|hash|blob|revision|live-update)"
+_HASH_KEY = re.compile(rf"(?:[a-z0-9]+[_-])*{_HASH_CORE}(?:[_-](?:sha(?:1|256|512)?|hash|digest|id))?")
+_SECRET_WORD = re.compile(r"key|token|secret|pass|pwd|pw|auth|cred|webhook|sign|hmac|api|salt|nonce|private|"
+                          r"session|cookie|bearer|jwt|otp|seed|master|pat|dsn|encrypt|access")
+_TOKEN_CHAR = r"A-Za-z0-9+/=_-"
+LABELLED_HASH = re.compile(
+    rf"(?<![A-Za-z0-9_-])(?P<pre>(?i:retained\s+|article\s+))?(?P<label>[A-Za-z0-9_-]{{1,48}})"
+    rf"(?P<gap>[ \t\"'`=:-]{{1,6}})(?P<hex>[0-9a-f]{{64}}|[0-9a-f]{{40}})(?![{_TOKEN_CHAR}])")
+_MASK_SCAN_LIMIT = 120_000
+
+
+def _is_hash_label(pre: str | None, label: str) -> bool:
+    key = label.lower()
+    if _SECRET_WORD.search(key):
+        return False
+    return bool(_HASH_KEY.fullmatch(key)) or (key == "base" and bool(pre) and pre.lower().startswith("retained"))
+
+
+def mask_labelled_hashes(diff: str) -> tuple[str, int]:
+    """Replace labelled 40/64-hex digests with a placeholder; return the text and the count."""
+    count = 0
+
+    def _mask(match: re.Match) -> str:
+        nonlocal count
+        if not _is_hash_label(match.group("pre"), match.group("label")):
+            return match.group(0)
+        count += 1
+        return match.group(0)[: match.start("hex") - match.start()] + f"<hex-digest-{len(match.group('hex'))}>"
+
+    head = LABELLED_HASH.sub(_mask, diff[:_MASK_SCAN_LIMIT])
+    return head + diff[_MASK_SCAN_LIMIT:], count
+
+
 def agent_b_claude(diff: str) -> dict | None:
     """Invoke Claude subprocess for semantic review. Returns None if unavailable."""
     claude = find_claude_cli()
     if not claude:
         return None
+    diff, masked = mask_labelled_hashes(diff)
+    if masked:
+        print(f"[pre-push] Agent B: {masked} labelled 40/64-hex digest(s) shown to the reviewer "
+              f"as <hex-digest-N>", file=sys.stderr)
     # Truncate very long diffs to avoid context blowup
     payload = diff if len(diff) < 120_000 else diff[:120_000] + "\n[... diff truncated for review ...]"
     # Agent B would otherwise reproduce Agent A's false positive on the deny list:
