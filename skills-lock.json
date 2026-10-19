@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-09-08T19:24:40+00:00",
-  "skill_count": 57,
-  "aggregate_hash": "sha256:b631411347d34a831b6565336f6d08a24d4077391b7183a74475ce69dea20a3d",
+  "generated_at": "2026-10-19T14:16:50+00:00",
+  "skill_count": 59,
+  "aggregate_hash": "sha256:83c4610d3cd23db7e96a3d0e15a42649d6f90b1810139d0a230185e3841a86e0",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -382,6 +382,14 @@
         "scripts/repo_map.py"
       ]
     },
+    "development/root-cause-delivery": {
+      "content_hash": "sha256:a3a6414936f846c6f745751c011da37414a947d041018b3448c25816398d4191",
+      "size_bytes": 9403,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
     "development/system-and-data-design": {
       "content_hash": "sha256:3af70c5c4ab97637af50d6b89c69d36c8c2ce6023d16e88c1da38cef3ffad893",
       "size_bytes": 201457,
@@ -538,8 +546,8 @@
       ]
     },
     "operational/cross-harness-continuation": {
-      "content_hash": "sha256:30a7ffdbf8bef562a0d30e80eb1c3413bee07a6353974f45c49cd4416dade4a3",
-      "size_bytes": 5721,
+      "content_hash": "sha256:037b292aaf8b25e322c6fbb1f1e0ac624ae91de19536b4600c738179e54295b5",
+      "size_bytes": 5862,
       "file_count": 2,
       "files": [
         "SKILL.md",
@@ -690,6 +698,14 @@
     "writing/humanize-russian": {
       "content_hash": "sha256:fde175c5934a8e7f9f6694073c4104dfe847a960fed29e79d638718696bc2ae9",
       "size_bytes": 11388,
+      "file_count": 1,
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    "writing/owner-voice": {
+      "content_hash": "sha256:1bbbb6d05967471aaa384aa4d1f5f717befd8f86e43946ab690c856007e12c61",
+      "size_bytes": 6019,
       "file_count": 1,
       "files": [
         "SKILL.md"

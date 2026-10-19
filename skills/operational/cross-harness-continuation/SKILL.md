@@ -20,7 +20,9 @@ The canonical shape is in `references/CONTINUITY.example.json`. It must contain:
 
 - `mode`: `continuation` for incremental work, `new` for greenfield work;
 - `baseline`: branch, commit, and paths that were already dirty at handoff;
-- `scope.files`: the files explicitly claimed for the current slice;
+- `scope.files`: the files explicitly claimed for the current slice. Harness
+  records never need listing: the contract, `.agent/delivery-cases/`,
+  `.agent/user-tasks/` and `.claude|.agent|.codex/transfers/`;
 - `preserve`: accepted design decisions and invariants;
 - `do_not_redo`: approaches already tested or deliberately rejected;
 - `verification`: commands and evidence status;
