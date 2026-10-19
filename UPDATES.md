@@ -4,6 +4,25 @@ Changelog for claude-code-skills. Newest first.
 
 ---
 
+## 2026-10-19 (development skill cross-routing)
+
+- New note [Skills that hand the task to each other](docs/development-skill-routing.md):
+  the development skills route to each other through their own descriptions, the
+  curated keyword router, and the subagent skill contract.
+- Published `skills/development/root-cause-delivery` (its guard hook already shipped
+  without it); refreshed `cross-harness-continuation` and `gemini-delegate` from the
+  active copies.
+- Router: `system-and-data-design` now reaches "will this hold", "do we need a queue",
+  "how many machines"; `lean-code` reaches "be lazy", "yagni", "simplest solution",
+  "don't over-engineer"; a named source file with its line count reaches
+  `refactoring-safely`. Twelve new test cases, three of them negative controls; the suite
+  is 72 real hook invocations.
+- README: 18 hooks that were missing from the hook tables, and install commands
+  pointing at the current repository name.
+- Carried over rules and hook updates that had been synced but never committed.
+
+---
+
 ## 2026-09-05 (research-built skill lifecycle gate)
 
 - Replaced the shallow `CREATE_LOCAL` skill-gap escape hatch with
