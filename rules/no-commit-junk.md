@@ -1,3 +1,9 @@
+---
+paths:
+  - "**/.gitignore"
+  - "**/COMMIT-HYGIENE.md"
+---
+
 # No junk in git — one rule for Claude AND Codex (mechanical)
 
 ## Принцип (2026-07-15, user directive)

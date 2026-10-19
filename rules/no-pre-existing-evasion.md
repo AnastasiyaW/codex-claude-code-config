@@ -105,8 +105,12 @@ This rule is enforced at the Stop event by hooks:
   back-up)
 
 Hooks beat rules. Rules in CLAUDE.md compete with task-completion
-priority and lose under context pressure (Compliance Decay,
-Jaroslawicz et al. 2025). Hook-level enforcement runs regardless of
+priority and lose under instruction density: measured at 500 concurrent
+instructions, the best frontier models hold about 68% accuracy, and the ones
+stated earliest survive best (Jaroslawicz et al., "How Many Instructions Can
+LLMs Follow at Once?", arXiv 2507.11538). The popular label "compliance decay"
+is blog commentary, not the paper's term - do not cite it as such.
+Hook-level enforcement runs regardless of
 agent reasoning.
 
 ## Independent verifier (Layer 3, optional)

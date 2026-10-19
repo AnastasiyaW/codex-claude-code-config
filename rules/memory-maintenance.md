@@ -1,9 +1,9 @@
 ---
 paths:
+  - "**/memory/**"
   - "**/MEMORY.md"
-  - "**/memory/*.md"
-  - "**/CLAUDE.md"
-  - "**/.claude/rules/*.md"
+  - "**/rules/*.md"
+  - "**/principles/*.md"
 ---
 
 # Memory & Rules Maintenance — cross-links, provenance, delta-merge

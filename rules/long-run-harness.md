@@ -7,7 +7,7 @@ paths:
   - "**/BACKLOG.md"
 ---
 
-﻿# Long-Run Project Harness — feature_list.json + init.sh convention
+# Long-Run Project Harness — feature_list.json + init.sh convention
 
 ## Принцип (2026-05-12)
 

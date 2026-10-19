@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop hook: BLOCK session close while the knowledge base is out of sync with code.
+"""Stop hook: BLOCK session close only while an adopted knowledge base is out of sync.
 
 The forcing tier of the agent-docs-freshness system. Your kb-skeleton already
 ships scripts/validate_kb.py (fails when a source area has no docs/kb/modules/
@@ -15,11 +15,9 @@ Reuses the project's configured validator (its SOURCE_ROOTS etc.), does NOT
 reinvent validation.
 
 ## Behaviour (stdin = Stop event JSON)
-- Tier 2b (force docs to EXIST): a [LONG-RUN] project (feature_list.json present)
-  with NO agent docs at all (docs/kb/ and docs/layers/ both absent) and no
-  validator -> BLOCK; a long-run project must maintain a KB. Scoped to opted-in
-  projects so scratch/throwaway repos are never nagged.
-- Tier 2 (force docs to stay CURRENT): scripts/validate_kb.py exits 1 -> BLOCK
+- A [LONG-RUN] project with no agent docs or validator -> silent pass. A missing
+  KB is an adoption reminder for project work, not a reason to trap a Stop turn.
+- Tier 2 (force an adopted KB to stay CURRENT): scripts/validate_kb.py exits 1 -> BLOCK
   with its output as the reason (missing module doc, dead path, dead pointer).
 - No scripts/validate_kb.py + not [LONG-RUN] -> silent pass (opt-in).
 - validate_kb.py exits 0 (clean) -> silent pass.
@@ -101,26 +99,16 @@ def _has_agent_docs(cwd: Path) -> bool:
 def evaluate(cwd: Path) -> str | None:
     """Pure decision: return a full block-reason string, or None to allow.
 
-    Two blocking conditions, both escape-hatched by the caller:
-      2b. adoption -- a [LONG-RUN] project (feature_list.json) with NO agent docs
-          at all and no validator: force the KB to be CREATED.
+    One blocking condition, escape-hatched by the caller:
       2.  currency -- an adopted repo whose scripts/validate_kb.py exits 1: force
           the KB to stay in sync (missing module doc, dead path, dead pointer).
-    None otherwise: not opted in, KB clean (rc 0), or infra failure (rc 2 / crash
-    / timeout = fail-open, must never wedge a session shut).
+    None otherwise: missing KB/validator, KB clean (rc 0), or infra failure
+    (rc 2 / crash / timeout = fail-open, must never wedge a session shut).
     """
     validator = _validator_path(cwd)
 
-    # Tier 2b -- force docs to EXIST for a project that declared itself long-run.
-    if _is_longrun(cwd) and not _has_agent_docs(cwd) and not validator.exists():
-        return (
-            "This project is [LONG-RUN] (feature_list.json) but carries NO agent "
-            "docs: docs/kb/ and docs/layers/ are both absent. A long-run project "
-            "must maintain a knowledge base. Scaffold the kb-skeleton (docs/kb/ + "
-            "scripts/validate_kb.py) or start a docs/layers/ tree before ending."
-        )
-
-    # Tier 2 -- force the adopted KB to stay current.
+    # A missing KB is not a Stop blocker. Once a repository owns the validator,
+    # its reported content drift remains actionable and blocking below.
     if not validator.exists():
         return None  # opt-in: repo has no scripts/validate_kb.py
     rc, output = _run_validator(cwd)
@@ -224,13 +212,12 @@ def _self_test() -> int:
             print("SELF-TEST FAIL: exit-2 infra error should fail-open")
             ok = False
 
-        # tier 2b: [LONG-RUN] (feature_list.json) + no docs + no validator -> block
+        # A [LONG-RUN] project without docs or a validator must not trap Stop.
         lr = Path(td) / "longrun_nodocs"
         lr.mkdir()
         (lr / "feature_list.json").write_text('{"features": []}', encoding="utf-8")
-        r2b = evaluate(lr)
-        if not r2b or "LONG-RUN" not in r2b:
-            print("SELF-TEST FAIL: long-run project without docs not blocked")
+        if evaluate(lr) is not None:
+            print("SELF-TEST FAIL: long-run project without docs should pass")
             ok = False
 
         # tier 2b negative: [LONG-RUN] WITH docs/kb -> allowed (no validator)

@@ -1,3 +1,8 @@
+---
+paths:
+  - "**/*.{py,pyi,js,jsx,ts,tsx,go,rs,cpp,c,h,hpp,cs,java,kt,swift,rb,php,vue,svelte}"
+---
+
 # Edit Formats & Architect/Editor Tiering — токен-экономные правки + распределение по моделям
 
 ## Принцип (2026-06-09, из разбора Aider)
