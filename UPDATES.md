@@ -10,8 +10,7 @@ Changelog for claude-code-skills. Newest first.
   the development skills route to each other through their own descriptions, the
   curated keyword router, and the subagent skill contract.
 - Published `skills/development/root-cause-delivery` (its guard hook already shipped
-  without it); refreshed `cross-harness-continuation` and `gemini-delegate` from the
-  active copies.
+  without it); refreshed `cross-harness-continuation` from the active copy.
 - Router: `system-and-data-design` now reaches "will this hold", "do we need a queue",
   "how many machines"; `lean-code` reaches "be lazy", "yagni", "simplest solution",
   "don't over-engineer"; a named source file with its line count reaches
