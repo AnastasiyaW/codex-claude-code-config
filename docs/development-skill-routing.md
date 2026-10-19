@@ -27,7 +27,8 @@ is in, not from whichever skill the wording of your prompt happens to favour.
 | Prove the claim, before and after | [`verify-this`](../skills/development/verify-this/SKILL.md) | "prove the fix works, before and after" |
 
 Every phrase in the right-hand column was run through the real hook on 2026-10-19 and
-reached exactly the skill in its row. \* The bug report is the one exception, and on
+reached the skill in its row and no other development skill (a general code-quality
+advisory may print alongside). \* The bug report is the one exception, and on
 purpose: [`root-cause-delivery-guard`](../hooks/root-cause-delivery-guard.py) records
 the incident itself at `UserPromptSubmit` and keeps source edits behind a frozen plan, so
 it needs no advisory route.
@@ -83,9 +84,9 @@ flowchart LR
   forces a re-triage after two failed attempts. `testing-strategy` picks the smallest
   evidence set that proves the behaviour. `verify-this` and `proof-verify` close with a
   verdict that has evidence behind it.
-- **Depth stays behind the entry point.** Each skill keeps the books it was distilled
-  from (Martin, Evans, Ousterhout, Fowler, Kleppmann, Hunt & Thomas) as `references/`,
-  loaded only when the step asks for them.
+- **Depth stays behind the entry point.** The four moment skills keep the books they
+  were distilled from (Martin, Evans, Ousterhout, Fowler, Kleppmann, Hunt & Thomas) as
+  `references/`, loaded only when the step asks for them.
 
 ## The three wires
 
@@ -135,11 +136,16 @@ router did not deliver:
 | "be lazy", "yagni", "simplest solution", "don't over-engineer" | `lean-code` | no route |
 | "split server.py, it is 4000 lines" | `refactoring-safely` | no route, so a delegated child got no skill |
 
-All three are fixed, each with the failing case added first and negative controls that must
-stay unrouted ("we need to split the database module" stays with `refactoring-safely`;
-"app.py printed 500 lines of errors" routes nowhere). Every case in the router suite is
-a real hook invocation; its phrasing table now has 72 cases, 32 of them development
-phrasings and 10 that must route nowhere, plus separate per-client profile cases.
+All three are fixed, each with the failing case added first. An independent review then
+tried to break the new patterns and found ten false positives ("will that hold up in
+court", "I need a database password reset", "simplest fix for this typo", "main.py: 1,000
+lines changed in this PR"...) and four missed variants ("the 4000-line server.py",
+"main.py has grown to 3,000 lines"...). Those fourteen are now test cases too, the
+false positives as must-not-reach controls.
+
+Every case in the router suite is a real hook invocation: 87 in all, up from 60. That is
+64 phrasings (37 development, 10 that must route nowhere), 10 phrasings that must not
+reach one named skill, and 13 per-client profile cases.
 
 ## Known limits
 
@@ -148,9 +154,13 @@ phrasings and 10 that must route nowhere, plus separate per-client profile cases
 - "refactor" on its own still routes to `lean-code`. It is the one word that does not say
   which moment you are in; "split", "extract", or a file with its line count reaches
   `refactoring-safely`.
+- The patterns are phrase lists, and a list covers only the shapes someone thought of.
+  A file-size mention reaches `refactoring-safely` only at four digits or more and only
+  when the number describes the file, so "utils.py has 900 lines" routes nowhere by
+  design and some natural phrasing will still be missed. The semantic loader is the
+  fallback for everything the list does not catch.
 - Routing proves the skill was offered, not that it was followed. That part is the
-  evidence receipt's job, and on Claude Code the subagent receipt is covered only where
-  the client exposes the event.
+  evidence receipt's job, and the receipt hook is written for Codex `SubagentStop`.
 
 ## Try it
 

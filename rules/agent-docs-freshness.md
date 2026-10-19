@@ -30,7 +30,7 @@ token-costed opt-in (see below), not a hook.
 | Tier | Mechanism | When | Blocking? | Fires only if | Checks |
 |---|---|---|---|---|---|
 | 1. Freshness advisory | `docs-staleness-guard.py` | SessionStart | No (nudge) | `openwiki/` or `docs/layers/` present | git-staleness + AGENTS.md pointer |
-| 2b. Adoption gate (docs EXIST) | `kb-validate-gate.py` | Stop | **Yes (blocks close)** | `feature_list.json` present (= [LONG-RUN]) | a long-run project must carry a KB |
+| 2b. Adoption (docs EXIST) | `long-run-detector.py` | SessionStart | No (proposal) | long-run signals, no agent-docs tree | proposes adopting the KB; no longer a Stop block |
 | 2. Correctness gate (docs CURRENT) | `kb-validate-gate.py` | Stop | **Yes (blocks close)** | `scripts/validate_kb.py` present | runs the repo's own `validate_kb.py` |
 | 3. CI gate | `.github/workflows/kb.yml` | push / PR | Yes | committed in repo | same `validate_kb.py` |
 
@@ -49,15 +49,13 @@ docs exist but agents are not told to read them. Advisory only, fail-open, anti-
 stamp (`.claude/.docs-staleness-nudged`, 7-day cooldown). Opt-out:
 `touch .claude/.skip-docs-staleness`.
 
-### Tier 2b — adoption (force docs to EXIST, scoped)
-`kb-validate-gate.py` also **blocks Stop** when a project has declared itself
-`[LONG-RUN]` (has `feature_list.json`) yet carries NO agent docs at all
-(`docs/kb/` and `docs/layers/` both absent, no validator). This forces a long-run
-project to actually *start* a KB — the "документация делается" half. Scoped to
-opted-in projects **on purpose**: hard-blocking every folder without docs would
-wedge sessions across all projects (the non-monotonic-harm pattern) and contradict
-`long-run-harness.md` (the [LONG-RUN] mark is a human decision by design). Same
-escape hatch as tier 2.
+### Tier 2b — adoption (docs EXIST): a proposal, not a Stop block
+`kb-validate-gate.py` used to **block Stop** for a `[LONG-RUN]` project
+(`feature_list.json`) with no agent docs at all. It no longer does: a missing KB is
+an adoption task for the project work, not a reason to trap a Stop turn, so such a
+project now passes Stop silently (the gate's self-test asserts this). Adoption is
+pushed by `long-run-detector.py` at SessionStart instead (see Adoption below).
+Once a repository owns `scripts/validate_kb.py`, tier 2 blocks on its drift.
 
 ### Tier 2 — correctness (the «принудительно» / forcing tier)
 `kb-validate-gate.py` (Stop) runs the repo's configured `scripts/validate_kb.py`
@@ -86,8 +84,8 @@ Adoption stays a human decision, but the PROPOSAL is automatic (user directive
 harness — surface it to the user as a concrete offer, not silence. Other
 triggers: `/harness-audit`, scaffolding `templates/kb-skeleton/`. Once
 `scripts/validate_kb.py` + docs exist, tiers 2+3 enforce automatically. A repo
-with no KB pays nothing (one `Path.exists()`); already-adopted `[LONG-RUN]`
-repos without docs are caught by tier 2b instead.
+with no KB pays nothing (one `Path.exists()`); a `[LONG-RUN]` repo without
+docs gets the proposal, not a block.
 
 ## Anti-patterns
 - ❌ Relying on CI alone → drift caught only after push, or never if CI unwired.

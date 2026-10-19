@@ -15,8 +15,14 @@ Changelog for claude-code-skills. Newest first.
 - Router: `system-and-data-design` now reaches "will this hold", "do we need a queue",
   "how many machines"; `lean-code` reaches "be lazy", "yagni", "simplest solution",
   "don't over-engineer"; a named source file with its line count reaches
-  `refactoring-safely`. Twelve new test cases, three of them negative controls; the
-  phrasing table goes from 60 to 72 real hook invocations.
+  `refactoring-safely` (four-digit sizes only, never a diff count). An independent
+  review's ten false positives became must-not-reach controls in a new `NOT_CASES`
+  list; the suite goes from 60 to 87 real hook invocations.
+- `scripts/test_safety_common_block.py`: covers `block()` letting a re-entered Stop
+  through (`stop_hook_active`), with a mutation check that it goes red without it.
+- `rules/agent-docs-freshness.md` no longer claims the long-run adoption tier blocks
+  Stop (the gate stopped doing that); `rules/README.md` explains the on-demand
+  `paths:` sentinel so copied rules are not silently dead.
 - README: 18 hooks that were missing from the hook tables, and install commands
   pointing at the current repository name.
 - Carried over rules and hook updates that had been synced but never committed.

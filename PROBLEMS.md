@@ -191,7 +191,7 @@ that word lists never close the free-text classes: the disable path was moved to
 fixed first-person proposal template, after which every probe is refused. The older stop/kill path still uses
 heuristics, and a bare "да" approves `kill 4242` after my explanation ("Команда `kill 4242` остановит воркер"),
 after instructions for the owner ("выполни у себя: `kill 4242`"), and on "Убить процесс 4242 рано."
-(probes: D:/tmp/claude/hcg-review6/probe6.py, rows STOP expl / STOP for owner / STOP inf).
-Choice for the owner: (a) the same strict grammar for stop/kill (safe, but natural phrasings like
-"убей 4242, он висит" stop passing) or (b) keep heuristics and accept these classes.
-Recheck: decision recorded, then probe6 rows STOP expl / STOP for owner / STOP inf match it.
+(review probe rows STOP expl / STOP for owner / STOP inf).
+Options that were weighed: (a) the same strict grammar for stop/kill (safe, but natural phrasings like
+"убей 4242, он висит" stop passing) or (b) keep heuristics and accept these classes. The resolution
+above is the middle path between them; the three probe rows are now refused.
