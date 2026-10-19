@@ -367,6 +367,7 @@ ROUTES = [
     {
         "patterns": [
             r"\b(упрости|simplify|clean up|почисти код|refactor)\b",
+            r"\b(be lazy|yagni|simplest (solution|way|approach|fix)|over-?engineer\w*|переусложн\w*)\b",
         ],
         "skill": "lean-code",
         "description": "Strip over-engineering while preserving correctness and verification",
@@ -406,7 +407,9 @@ ROUTES = [
     # into the layout route made both answers vaguer.
     {
         "patterns": [
-            r"\b(выдержит|нагрузк\w*|масштаб\w*|will it (hold|scale)|scal(e|ing)|throughput|capacity)\b",
+            r"\b(выдержит|нагрузк\w*|масштаб\w*|will (it|this|that) (hold|scale)|scal(e|ing)|throughput|capacity)\b",
+            r"\b(need|нуж(ен|на|но|ны))\s+(an?\s+|ли\s+(тут\s+|здесь\s+|нам\s+)?)?(кеш\w*|очеред\w*|баз\w* данных|cache|queue|database|read replica)\b",
+            r"\b(how many (machines|servers|nodes)|сколько (машин|серверов|нод))\b",
             r"\b(как(ую|ой)|выбрать|choose|which)\b.{0,24}\b(баз\w* данных|бд|database|db|кеш|cache|очеред\w*|queue)\b",
             r"\b(шард\w*|sharding|партиционир\w*|partition\w*|реплик\w*|replica\w*|consistency|консистентн\w*)\b",
             r"\b(медленн\w*|slow)\b.{0,30}\b(запрос\w*|quer(y|ies)|под нагрузкой|at scale|in production)\b",

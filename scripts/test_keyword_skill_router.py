@@ -30,6 +30,11 @@ CASES = [
     ("which database should we choose", "system-and-data-design"),
     ("нужно ли шардирование", "system-and-data-design"),
     ("запрос медленный под нагрузкой", "system-and-data-design"),
+    # The skill's own description promises these two phrasings.
+    ("will this hold at 10k requests per second", "system-and-data-design"),
+    ("do we need a queue here", "system-and-data-design"),
+    ("нужен ли тут кеш", "system-and-data-design"),
+    ("how many machines do we need", "system-and-data-design"),
     # unit quality
     ("отревьюй этот код", "code-complexity"),
     ("этот модуль тяжело читать", "code-complexity"),
@@ -40,6 +45,10 @@ CASES = [
     ("вынеси это в отдельный модуль", "refactoring-safely"),
     # unchanged neighbours
     ("упрости этот код", "lean-code"),
+    ("be lazy, simplest solution please", "lean-code"),
+    ("yagni, don't over-engineer this", "lean-code"),
+    ("не переусложняй", "lean-code"),
+    ("I need a quick answer", None),
     ("почему падает тест, что не так, разберись", "investigate"),
     # testing strategy
     ("составь план тестирования для этой фичи", "testing-strategy"),
