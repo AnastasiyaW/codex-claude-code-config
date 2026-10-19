@@ -137,8 +137,9 @@ router did not deliver:
 
 All three are fixed, each with the failing case added first and negative controls that must
 stay unrouted ("we need to split the database module" stays with `refactoring-safely`;
-"app.py printed 500 lines of errors" routes nowhere). The router suite is 72 real hook
-invocations: 32 development phrasings, 10 that must route nowhere.
+"app.py printed 500 lines of errors" routes nowhere). Every case in the router suite is
+a real hook invocation; its phrasing table now has 72 cases, 32 of them development
+phrasings and 10 that must route nowhere, plus separate per-client profile cases.
 
 ## Known limits
 

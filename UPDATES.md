@@ -15,8 +15,8 @@ Changelog for claude-code-skills. Newest first.
 - Router: `system-and-data-design` now reaches "will this hold", "do we need a queue",
   "how many machines"; `lean-code` reaches "be lazy", "yagni", "simplest solution",
   "don't over-engineer"; a named source file with its line count reaches
-  `refactoring-safely`. Twelve new test cases, three of them negative controls; the suite
-  is 72 real hook invocations.
+  `refactoring-safely`. Twelve new test cases, three of them negative controls; the
+  phrasing table goes from 60 to 72 real hook invocations.
 - README: 18 hooks that were missing from the hook tables, and install commands
   pointing at the current repository name.
 - Carried over rules and hook updates that had been synced but never committed.
