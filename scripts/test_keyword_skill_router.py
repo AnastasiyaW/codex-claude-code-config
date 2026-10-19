@@ -45,6 +45,11 @@ CASES = [
     ("вынеси это в отдельный модуль", "refactoring-safely"),
     ("split server.py, it is 4000 lines", "refactoring-safely"),
     ("app.ts уже 3000 строк", "refactoring-safely"),
+    ("server.py is now 4000 lines", "refactoring-safely"),
+    ("server.py (4000 lines) needs work", "refactoring-safely"),
+    ("main.py has grown to 3,000 lines", "refactoring-safely"),
+    ("the 4000-line server.py", "refactoring-safely"),
+    ("we need to split the database module", "refactoring-safely"),
     ("the log in app.py printed 500 lines of errors", None),
     ("read config.py lines 1 to 200", None),
     # unchanged neighbours
@@ -85,6 +90,20 @@ CASES = [
     ("write a regex for this", None),
 ]
 
+# Phrasings that may route elsewhere but must NOT reach the named skill.
+NOT_CASES = [
+    ("will that hold up in court", "system-and-data-design"),
+    ("how many machines are in the inventory list", "system-and-data-design"),
+    ("I need a database password reset", "system-and-data-design"),
+    ("we need a cache invalidation bug fixed", "system-and-data-design"),
+    ("we need to split the database module", "system-and-data-design"),
+    ("what's the simplest way to install node on windows", "lean-code"),
+    ("simplest fix for this typo", "lean-code"),
+    ("utils.py has 120 lines", "refactoring-safely"),
+    ("print main.py 200 lines", "refactoring-safely"),
+    ("main.py: 1,000 lines changed in this PR", "refactoring-safely"),
+]
+
 PROFILE_CASES = [
     ("shared", "Optimize retouch plugin native C++ tensor memory", "REQUIRED: Use skill native-cpp-memory", "SKILL_GAP"),
     ("codex", "why error investigate this", "SKILL_GAP: investigate", "BLOCKED_SKILL_UNAVAILABLE"),
@@ -120,6 +139,17 @@ for prompt, expect in CASES:
     print(f"  [{'ok ' if good else 'FAIL'}] {prompt!r:<44} -> {expect or '(no route)'}")
     if not good:
         print("        got:", out.strip().replace("\n", " ")[:170])
+
+for prompt, forbidden in NOT_CASES:
+    ev = json.dumps({"prompt": prompt, "hook_event_name": "UserPromptSubmit"},
+                    ensure_ascii=False)
+    r = subprocess.run([sys.executable, str(HOOK)], input=ev, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace")
+    out = (r.stdout or "") + (r.stderr or "")
+    good = f"/{forbidden} " not in out and f"skill {forbidden}" not in out
+    if not good:
+        ok = False
+    print(f"  [{'ok ' if good else 'FAIL'}] {prompt!r:<44} -> not {forbidden}")
 
 for profile, prompt, want, forbidden in PROFILE_CASES:
     ev = json.dumps({"prompt": prompt}, ensure_ascii=False)
