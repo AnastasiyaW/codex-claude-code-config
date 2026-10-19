@@ -435,6 +435,9 @@ ROUTES = [
             r"\b(разбей|раздели|вынеси|split|extract|break up|decompose)\b.{0,30}"
             r"\b(модул\w*|файл\w*|класс\w*|module|file|class|monolith|монолит)\b",
             r"\b(слишком (большой|длинный)|too (big|long|large)|god (object|class|module)|ball of mud)\b",
+            # A named source file plus a line count is the most common way this is said.
+            r"\b\w+\.(py|ts|tsx|js|jsx|go|rs|java|kt|cs|cpp|cc|h|hpp|rb|php|swift)\b[\s,:—-]*"
+            r"(it'?s |it is |is |has |уже |—\s*)?(over |about |almost |около |почти |больше )?\d[\d,]{2,}\s*(lines|loc|строк\w*)\b",
             r"\b(связност\w*|связи|coupling|cohesion|circular (import|dependency))\b",
         ],
         "skill": "refactoring-safely",

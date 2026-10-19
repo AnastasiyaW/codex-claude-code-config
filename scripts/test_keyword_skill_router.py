@@ -43,6 +43,10 @@ CASES = [
     ("разбей main.py, он слишком большой", "refactoring-safely"),
     ("this module is too big, split it", "refactoring-safely"),
     ("вынеси это в отдельный модуль", "refactoring-safely"),
+    ("split server.py, it is 4000 lines", "refactoring-safely"),
+    ("app.ts уже 3000 строк", "refactoring-safely"),
+    ("the log in app.py printed 500 lines of errors", None),
+    ("read config.py lines 1 to 200", None),
     # unchanged neighbours
     ("упрости этот код", "lean-code"),
     ("be lazy, simplest solution please", "lean-code"),
