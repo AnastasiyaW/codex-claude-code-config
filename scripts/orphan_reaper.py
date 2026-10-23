@@ -169,7 +169,9 @@ def reap(zombies, psutil) -> int:
             print(f"gone {pid}: exited by itself")
             continue
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+            # runs from a pythonw scheduled task: without CREATE_NO_WINDOW taskkill opens a console window
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
         else:
             try:
                 os.kill(pid, 9)
