@@ -155,6 +155,11 @@ class PrCreateTest(Gates):
         self.assertEqual(self.bash(f'gh pr create --title t --body-file "{self.body_file(GOOD_BODY)}"'),
                          "allow")
 
+    def test_an_unquoted_windows_body_file_path_is_read(self) -> None:
+        self.commit_lines(5)
+        path = str(self.body_file(GOOD_BODY)).replace("/", "\\")
+        self.assertEqual(self.bash(f"gh pr create --title t --body-file {path}"), "allow")
+
     def test_a_pr_over_the_cap_is_refused(self) -> None:
         self.commit_lines(30)
         verdict = self.bash(f'gh pr create --title t --body-file "{self.body_file(GOOD_BODY)}"')
