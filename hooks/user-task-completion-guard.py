@@ -1201,6 +1201,11 @@ def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
 
 
 def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
+    # Claude marks the immediate Stop re-entry after any Stop hook blocked the
+    # turn. The first event already supplied the owned continuation; blocking
+    # again here can only self-feed the same unfinished task.
+    if event.get("stop_hook_active") is True:
+        return 0
     # This marker is written on every Stop, not only when this particular guard
     # blocks. Matching Stop hooks run concurrently, and any one of them may be
     # the source of the next synthetic prompt.
