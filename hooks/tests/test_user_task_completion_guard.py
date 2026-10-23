@@ -652,6 +652,17 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.assertIn("NEXT OWNED ACTION", message)
         self.assertIn("реализуй исправление после ревью", message)
 
+    def test_stop_refusals_are_capped_per_owner_turn(self) -> None:
+        self.invoke_prompt()
+        cap = guard.STOP_BUDGET_DEFAULT if hasattr(guard, "STOP_BUDGET_DEFAULT") else 3
+        for _ in range(cap):
+            blocked = self.invoke_stop()
+            self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIsNone(self.invoke_stop())
+        self.invoke_prompt({"prompt": "ну что там, продолжай", "session_id": "session-a"})
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
