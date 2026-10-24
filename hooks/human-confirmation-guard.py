@@ -844,7 +844,9 @@ TEST_VM_WINDOWS_RESTART = re.compile(
 # rebuildable from git, so asking to clean images approves removing images named by tag or digest.
 # No flags: without -f docker refuses an image a container still uses, so a live service is safe.
 IMAGE_INTENT = re.compile(
-    r"\b(?:почисти(?:те)?|почистить|очисти(?:те)?|удали(?:те)?|удалить|убери(?:те)?|снеси(?:те)?)\b"
+    # imperfective imperatives too: owner 2026-10-24 «удаляй старые образы на контабо» was refused
+    r"\b(?:почисти(?:те)?|почистить|очисти(?:те)?|чисти(?:те)?|удали(?:те)?|удалить|удаляй(?:те)?|"
+    r"убери(?:те)?|убирай(?:те)?|снеси(?:те)?|сноси(?:те)?)\b"
     r"|\bclean\b|\bremove\b|\bdelete\b|\bprune\b", re.IGNORECASE)
 IMAGE_MENTION = re.compile(r"образ|\bimages?\b", re.IGNORECASE)
 IMAGE_REF = r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})"
