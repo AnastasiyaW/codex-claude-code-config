@@ -7,7 +7,8 @@ description: >
   characterization tests first, one transformation at a time, green between every step.
   Use when a file or function is already too large; when asked to "split this module",
   "extract this", "break up main.py", "clean up this legacy code", "reduce coupling
-  here"; when a shape advisory fires on a grown file; or before any restructuring of
+  here"; when asked to remove dead code, stale feature flags or finished experiments;
+  when a shape advisory fires on a grown file; or before any restructuring of
   code that has users. Do NOT use to decide the target layout of a NEW project (use
   architecture-first), for unit-level naming and function quality in code you are
   writing fresh (use code-complexity), for capacity or storage decisions (use
@@ -100,6 +101,7 @@ moving anything guarded:
 - `references/refactoring-patterns/moving-features.md` — move method/field, hide delegate
 - `references/refactoring-patterns/organizing-data.md` — replace primitive, encapsulate
 - `references/refactoring-patterns/simplifying-conditionals.md` — guard clauses, polymorphism
+- `references/dead-code-sweep.md` — agent-driven removal of dead code and stale flags: read-only audit, production evidence, one draft PR per removal
 - `*-original.md` — the source skill's own framework prose, kept verbatim
 
 ## Gotchas

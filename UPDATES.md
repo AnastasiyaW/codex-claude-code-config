@@ -4,6 +4,28 @@ Changelog for claude-code-skills. Newest first.
 
 ---
 
+## 2026-10-24 (output legibility, dead-code sweep)
+
+- Added `scripts/term_drift_check.py` with focused tests: a glossary-driven check
+  for terminology drift (`stem*` matches inflections, so it works in Russian) and
+  overlong sentences. Fenced code, inline code, URLs and HTML comments are
+  skipped. Exit 0 clean, 1 findings, 2 not checked (bad or no-op glossary,
+  non-UTF-8 or empty input, unclosed fence, nothing left to check). The
+  self-test's must-fail controls catch six mutations of the detection logic.
+- Added [the output-legibility guide](docs/output-legibility.md): Karpathy's
+  readability ladder and the two ASD-STE100 rules that need no licensed dictionary.
+- Added `references/dead-code-sweep.md` to the `refactoring-safely` skill: OpenAI's
+  agent-driven cleanup process as rules (read-only audit, production evidence,
+  one draft PR per removal, killswitches untouched).
+- CLAUDE.md: a Harness² section explaining why the bounded pilot, not the
+  auto-patcher, is the adoption path, and an Output Legibility section.
+- `rules/quality-code.md`, comments section: edit the code, edit or delete the
+  comment next to it in the same commit, and the research behind the rule.
+  Stale or wrong comments hurt models more than missing ones, and models tend to
+  trust a comment over the code it contradicts.
+
+---
+
 ## 2026-10-24 (bounded harness-improvement pilot)
 
 - Added `scripts/harness_improvement_pilot.py`: a read-only comparator for one
