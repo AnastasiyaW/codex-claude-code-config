@@ -102,6 +102,20 @@ class TermDriftTests(unittest.TestCase):
         self.assertIn("<stdin>:4:", result.stdout)
         self.assertNotIn("<stdin>:2:", result.stdout)
 
+    def test_frontmatter_is_skipped_but_body_lines_keep_numbers(self) -> None:
+        text = "---\ntitle: Перезапусти обработчика\n---\nПерезапусти обработчика.\n"
+        result = run("--glossary", str(self.glossary), stdin=text)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("<stdin>:4:", result.stdout)
+        self.assertNotIn("<stdin>:2:", result.stdout)
+
+    def test_unclosed_frontmatter_is_checked_as_text(self) -> None:
+        result = run("--glossary", str(self.glossary), stdin="---\nПерезапусти обработчика.\n")
+        self.assertEqual(result.returncode, 1)
+
+    def test_frontmatter_only_is_not_green(self) -> None:
+        self.assertEqual(run("--glossary", str(self.glossary), stdin="---\ntitle: x\n---\n").returncode, 2)
+
     def test_long_sentence_line_points_at_its_start(self) -> None:
         rules, _ = DRIFT.parse_glossary({"terms": {"a": ["b"]}})
         text = "Short.\n\nOne two three four five\nsix seven eight nine ten eleven."
