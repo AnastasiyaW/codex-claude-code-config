@@ -5,7 +5,7 @@ Tk widget suites (tools/*-widget, widget-common) open real windows. Run directly
 owner's screen for minutes, and without the test sandbox they ask her running tray program to quit
 — she saw "a double of the program flickering endlessly" while several agents tested at once
 (2026-10-17). `python scripts/ci_local.py --job widgets --no-post` runs the same suites on a
-desktop of its own (hidden_desktop.py) with a LOCALAPPDATA sandbox and HAPPYIN_TEST_SANDBOX=1.
+desktop of its own (hidden_desktop.py) with a LOCALAPPDATA sandbox and its test-sandbox flag.
 
 Blocks a command that starts unittest/pytest/unittest_tk.py for a widget folder (by command text
 or working directory) unless it goes through ci_local.py.
@@ -24,7 +24,7 @@ MESSAGE = (
     "Тесты виджетов — только на невидимом рабочем столе: python scripts/ci_local.py --job widgets --no-post\n"
     "Прямой unittest/pytest в tools/*-widget поднимает настоящие окна на экране владелицы (программа «мигает»),\n"
     "а без песочницы ещё и просит её живую программу закрыться. ci_local гоняет те же наборы скрыто,\n"
-    "с отдельным LOCALAPPDATA и HAPPYIN_TEST_SANDBOX=1."
+    "с отдельным LOCALAPPDATA и флагом тестовой песочницы."
 )
 
 

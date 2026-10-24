@@ -34,10 +34,11 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = REPO_ROOT / "sync-manifest.json"
+SCANNER_RELATIVE_PATH = "scripts/sync_public_config.py"
 
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 SKIP_DIRS = {"__pycache__", ".git"}
@@ -147,7 +148,34 @@ def marker_hits(text: str, markers: list[str]) -> list[str]:
     return hits
 
 
-def main() -> int:
+def privacy_scan_exempt_paths(raw: object) -> set[str]:
+    """Validate the exact indexed paths allowed to contain public third-party data.
+
+    The exemption is deliberately narrower than a marker allow-list: it cannot
+    hide a hit in an agent-authored source file or reach outside the repository.
+    """
+    if raw is None:
+        return set()
+    if not isinstance(raw, list):
+        raise ValueError("privacy_scan_exempt_paths must be a list of exact relative paths")
+    result: set[str] = set()
+    reserved = {MANIFEST.name, SCANNER_RELATIVE_PATH}
+    for item in raw:
+        if not isinstance(item, str) or not item or "\\" in item or any(char in item for char in "*?["):
+            raise ValueError("privacy_scan_exempt_paths entries must be exact POSIX paths")
+        path = PurePosixPath(item)
+        normalized = path.as_posix()
+        if path.is_absolute() or normalized != item or "." in path.parts or ".." in path.parts:
+            raise ValueError(f"unsafe privacy scan exemption: {item}")
+        if normalized in reserved:
+            raise ValueError(f"reserved file cannot be privacy-scan-exempt: {item}")
+        if normalized in result:
+            raise ValueError(f"duplicate privacy scan exemption: {item}")
+        result.add(normalized)
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry-run)")
     ap.add_argument("--strict", action="store_true", help="exit 1 on any privacy-marker hit")
@@ -155,7 +183,7 @@ def main() -> int:
                     help="copy even when the repo version is newer or a large deletion is "
                          "proposed. Read the diff of every refused file first.")
     ap.add_argument("--scan-repo", action="store_true", help="only scan repo tree for markers")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if not MANIFEST.exists():
         print(f"ERROR: manifest not found: {MANIFEST}", file=sys.stderr)
@@ -163,23 +191,37 @@ def main() -> int:
     cfg = json.loads(MANIFEST.read_text(encoding="utf-8"))
     markers: list[str] = cfg.get("privacy_markers", [])
     active_root = Path(cfg["active_root"]).expanduser()
+    try:
+        exempt_paths = privacy_scan_exempt_paths(cfg.get("privacy_scan_exempt_paths"))
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stdout)
+        return 2
 
     any_marker_hit = False
 
     if args.scan_repo:
         print(f"== privacy scan of Git index: {REPO_ROOT}")
         try:
+            missing_exemptions = sorted(path for path in exempt_paths if not (REPO_ROOT / path).is_file())
+            if missing_exemptions:
+                print(f"ERROR: privacy scan exemption target is missing: {', '.join(missing_exemptions)}",
+                      file=sys.stdout)
+                return 2
             files = iter_indexed_files(REPO_ROOT)
             for f in files:
                 if f == MANIFEST or f.resolve() == Path(__file__).resolve():
                     continue  # manifest/scanner legitimately contain the marker strings
+                relative = f.relative_to(REPO_ROOT).as_posix()
+                if relative in exempt_paths:
+                    print(f"  EXEMPT {relative} :: declared immutable third-party metadata")
+                    continue
                 text = norm_text(f)
                 if text is None:
                     continue
                 hits = marker_hits(text, markers)
                 if hits:
                     any_marker_hit = True
-                    print(f"  MARKER {f.relative_to(REPO_ROOT)} :: {', '.join(hits)}")
+                    print(f"  MARKER {relative} :: {', '.join(hits)}")
         except RuntimeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2

@@ -1,0 +1,76 @@
+{
+  "attempts": [],
+  "builder": "unscoped",
+  "created_at": 1792832458.7132366,
+  "id": "harness2-bounded-pilot-20261024",
+  "intent_id": null,
+  "kind": "change",
+  "layer": {
+    "direct_dependents": [
+      "README.md",
+      "UPDATES.md"
+    ],
+    "entrypoints": [
+      "scripts/harness_improvement_pilot.py"
+    ],
+    "owner_paths": [
+      "scripts/harness_improvement_pilot.py",
+      "scripts/test_harness_improvement_pilot.py",
+      "docs/harness-improvement-pilot.md",
+      "README.md",
+      "UPDATES.md"
+    ],
+    "release_boundary": "public GitHub documentation and a local read-only evaluator; no automatic live installation",
+    "state_or_contract": [
+      "harness-pilot-receipt/v1 JSON input contract",
+      "candidate is accepted only when it improves the chosen metric, preserves every safety assertion, and passes every held-out case"
+    ],
+    "tests_or_probes": [
+      "scripts/test_harness_improvement_pilot.py",
+      "python scripts/validate_config.py --strict",
+      "python scripts/cross_reference_check.py --strict"
+    ]
+  },
+  "observed": {
+    "actual": "The public configuration explains autoresearch, but supplies no deterministic command that compares a frozen baseline and one candidate on the same task receipts while rejecting held-out or safety regressions.",
+    "expected": "Users can run one explicit, non-live pilot comparison before adopting a change to an agent skill, prompt, or configuration."
+  },
+  "plan": {
+    "causal_hypothesis": "A pure, schema-validating comparison command plus a public guide will make harness improvement reproducible and fail closed, without granting a framework permission to mutate live configuration.",
+    "fix_steps": [
+      "Add the read-only receipt comparator and focused tests.",
+      "Document the bounded workflow, schema, acceptance rule, and non-goals for public users.",
+      "Link the guide from README and append a public changelog entry."
+    ],
+    "focused_argv": [
+      "python",
+      "scripts/test_harness_improvement_pilot.py"
+    ]
+  },
+  "release": {
+    "required": false
+  },
+  "schema_version": 1,
+  "session_id": "unscoped",
+  "status": "VERIFIED",
+  "summary": "Add a deterministic, non-live harness-improvement pilot evaluator and public adoption guide.",
+  "updated_at": 1792833921.9444435,
+  "verification": {
+    "after": {
+      "argv": [
+        "python",
+        "scripts/test_harness_improvement_pilot.py"
+      ],
+      "evidence_path": ".agent/delivery-cases/harness2-bounded-pilot-20261024/evidence/after-00.txt",
+      "returncode": 0,
+      "sha256": "d2f0cb57e9633cdb9e9703b323dc81386308288e4cb705145c46f81fcabf8acc"
+    },
+    "independent_review": {
+      "evidence_path": ".agent/delivery-cases/harness2-bounded-pilot-20261024/independent-review.md",
+      "fresh_context": true,
+      "reviewer": "harness_public_release_reviewer",
+      "sha256": "6fdaa14a9b6e861612824da9423846d8f6828290a689aa651578eb9ade3d5c6b",
+      "verdict": "PASS"
+    }
+  }
+}

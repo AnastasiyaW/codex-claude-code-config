@@ -13,6 +13,7 @@ what is inference, and what the fix does not cover.
 
 | | |
 |---|---|
+| **New - [Bounded harness-improvement pilot](docs/harness-improvement-pilot.md)** | A read-only evaluator for one frozen baseline and one candidate harness change. It accepts only a strict metric improvement with unchanged-or-better task outcomes, full candidate safety checks, and held-out coverage; it never edits active skills, hooks, or permissions. |
 | **New - [Skills that hand the task to each other](docs/development-skill-routing.md)** | The development skills now route to each other: four "moment" skills (start, will it hold, while writing, already too big) each name the other three, a delivery chain carries a bug or change from frozen plan to verified candidate, and the route follows the task into every subagent. The audit behind it found three phrasings the skills promised and the router never delivered; all three are fixed with failing cases first. Ships as [`keyword-skill-router.py`](hooks/keyword-skill-router.py) + [`agent-skill-contract.py`](hooks/agent-skill-contract.py) + [`root-cause-delivery`](skills/development/root-cause-delivery/SKILL.md). |
 | **[Starting from what you remember](docs/starting-from-what-you-remember.md)** | Why a brand-new project arrives years out of date, why an invented package name is now a security problem rather than a 404, and where manifest and install-time checks have to sit to catch either. Ships as [`dependency-currency-guard.py`](hooks/dependency-currency-guard.py) + [`dependency-provenance-guard.py`](hooks/dependency-provenance-guard.py). |
 | **[Why an agent circles instead of acting](docs/why-agents-circle-instead-of-acting.md)** | Two agents, identical rules, different gate shapes. Describing a fix instead of applying it turned out to be the only move with no gate on it. |
@@ -106,6 +107,7 @@ offered? Nothing raises an error when that happens — see
 - **Agent claims "done" but it's broken?** Require durable proof artifacts ([Proof Loop](principles/02-proof-loop.md))
 - **Tests feel repetitive or a specialized gate blocks smoke?** Use the universal candidate-state sequence: focused slice, risk-based review, one full matrix, then only the relevant immutable-candidate compatibility proof ([testing strategy](docs/research/2026-08-testing-and-agent-evals.md))
 - **Need to improve a prompt/skill/config?** Automated Read-Change-Test loop ([Autoresearch](principles/03-autoresearch.md))
+- **Need proof before adopting one harness change?** Compare a frozen baseline and candidate without live mutation ([bounded pilot](docs/harness-improvement-pilot.md))
 - **LLM skips steps in complex workflows?** Shell scripts for mechanical tasks, one step at a time ([Deterministic Orchestration](principles/04-deterministic-orchestration.md))
 - **Wrong debugging conclusions?** Structured Premises-Trace-Conclusions format ([Structured Reasoning](principles/05-structured-reasoning.md))
 - **Task too big for one agent?** Coordinator + specialized sub-agents ([Multi-Agent Decomposition](principles/06-multi-agent-decomposition.md))

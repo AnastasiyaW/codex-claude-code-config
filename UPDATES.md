@@ -4,6 +4,20 @@ Changelog for claude-code-skills. Newest first.
 
 ---
 
+## 2026-10-24 (bounded harness-improvement pilot)
+
+- Added `scripts/harness_improvement_pilot.py`: a read-only comparator for one
+  frozen baseline and candidate receipt. It fails closed on mismatched input,
+  accepts only strict objective improvement, and rejects safety, outcome, or
+  held-out regressions.
+- Added [the public adoption guide](docs/harness-improvement-pilot.md). It
+  documents the receipt contract, supported metrics, and the explicit boundary:
+  the runner neither executes agents nor changes live hooks, skills, or
+  permissions.
+- This is a selective adoption of Harness²-style evaluation, not a dependency
+  on or wholesale import of Harness². Active configuration changes still need
+  the existing proof, independent-review, and install/parity gates.
+
 ## 2026-10-19 (development skill cross-routing)
 
 - New note [Skills that hand the task to each other](docs/development-skill-routing.md):

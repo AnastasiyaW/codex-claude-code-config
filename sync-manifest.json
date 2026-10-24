@@ -156,5 +156,10 @@
     "retouch-app",
     "ois-gold"
   ],
+  "privacy_scan_exempt_paths": [
+    "skills/frontend/ui-ux-pro-max/data/google-font-licenses.json",
+    "skills/frontend/ui-ux-pro-max/data/google-fonts.csv"
+  ],
+  "_privacy_scan_exempt_comment": "Exact checked-in Google Fonts metadata contains public designer credits that can match short personal-name markers. The exemption applies only to the full indexed paths above; it cannot suppress a marker in agent-authored source.",
   "_privacy_comment": "privacy_markers cover BOTH infrastructure (hosts, subnets, paths, product domains) AND identity (personal names, work handles, mail). The identity half was missing until 2026-07-31, when a sync proposed replacing a generalised credit line with a real surname and the scan passed it: the list knew hosts and did not know people. A name reaching a public repository is not recoverable by deleting the line afterwards."
 }

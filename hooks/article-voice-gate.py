@@ -65,7 +65,6 @@ GIT_C = re.compile(r"-C\s+(\"[^\"]+\"|'[^']+'|\S+)")
 # repository and a literal user path is exactly what its scan refuses.
 _WORK = Path.home() / "Desktop" / "Codex+Code"
 DEFAULT_LEDGERS = [
-    _WORK / "worktrees" / "happyin-news-v1-4" / "diffusion-love" / "var" / "kb-articles",
     _WORK / "diffusion-love" / "var" / "kb-articles",
     Path.cwd() / "var" / "kb-articles",
 ]
