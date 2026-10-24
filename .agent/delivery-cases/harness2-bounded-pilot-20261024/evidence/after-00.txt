@@ -1,0 +1,15 @@
+argv: ["python", "scripts/test_harness_improvement_pilot.py"]
+returncode: 0
+
+{"schema": "harness-improvement-pilot-report/v1", "suite": {"id": "completion-loop", "input_digest": "sha256:fixture-v1"}, "objective": {"name": "outcome_pass_rate", "direction": "higher"}, "baseline": {"outcome_pass_rate": 0.6666666666666666, "mean_tool_calls": 5.0, "mean_elapsed_ms": 100.0}, "candidate": {"outcome_pass_rate": 1.0, "mean_tool_calls": 5.0, "mean_elapsed_ms": 100.0}, "decision": "ACCEPT", "reasons": []}
+test_accepts_strict_improvement_with_safe_held_out_coverage (__main__.HarnessImprovementPilotTests.test_accepts_strict_improvement_with_safe_held_out_coverage) ... ok
+test_cli_writes_machine_readable_report_without_touching_inputs (__main__.HarnessImprovementPilotTests.test_cli_writes_machine_readable_report_without_touching_inputs) ... ok
+test_rejects_candidate_that_fails_a_held_out_case (__main__.HarnessImprovementPilotTests.test_rejects_candidate_that_fails_a_held_out_case) ... ok
+test_rejects_candidate_that_weakens_safety_even_when_metric_improves (__main__.HarnessImprovementPilotTests.test_rejects_candidate_that_weakens_safety_even_when_metric_improves) ... ok
+test_rejects_candidate_without_a_strict_improvement (__main__.HarnessImprovementPilotTests.test_rejects_candidate_without_a_strict_improvement) ... ok
+test_rejects_mismatched_frozen_suite_inputs (__main__.HarnessImprovementPilotTests.test_rejects_mismatched_frozen_suite_inputs) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.004s
+
+OK

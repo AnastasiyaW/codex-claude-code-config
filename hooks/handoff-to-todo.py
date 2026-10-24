@@ -81,9 +81,9 @@ def main() -> int:
 def self_test() -> int:
     ok = lambda p: handoff_path({"tool_input": {"file_path": p}})
     cases = [
-        (ok("C:/x/.claude/handoffs/retouch-app/2026-10-17_14-50_df270518.md"), Path("C:/x/.claude/handoffs/retouch-app/2026-10-17_14-50_df270518.md")),
+        (ok("C:/x/.claude/handoffs/project-alpha/2026-10-17_14-50_df270518.md"), Path("C:/x/.claude/handoffs/project-alpha/2026-10-17_14-50_df270518.md")),
         (ok("C:/x/.claude/handoffs/INDEX.md"), None),
-        (ok("C:/x/.claude/handoffs/retouch-app/INDEX.md"), None),
+        (ok("C:/x/.claude/handoffs/project-alpha/INDEX.md"), None),
         (ok("C:/x/.claude/handoffs/archive/a.md"), None),
         (ok("C:/x/.claude/HANDOFF.md"), None),
         (ok("C:/x/docs/handoffs/a/b.md"), None),

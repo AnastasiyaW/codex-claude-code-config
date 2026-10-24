@@ -1,3 +1,8 @@
+---
+paths:
+  - "**/__rule_on_demand__/**"
+---
+
 # RLM — контекст как программируемый объект (огромный артефакт → REPL + partition/map + рекурсия)
 
 ## Принцип (2026-06-15, из Recursive Language Models)
@@ -41,7 +46,7 @@ https://alexzhang13.github.io/blog/2025/rlm/ + arXiv [2512.24601]. Полный 
 
 ## Билинг-граница (обязательно)
 
-Рекурсия/fan-out = **кратный расход токенов** (`safety.md §4`: N чанков → N+ агентов).
+Рекурсия/fan-out = **кратный расход токенов** (`safety-billing.md §4`: N чанков → N+ агентов).
 Поэтому:
 - Запускать только при явной нужде (артефакт реально большой) — opt-in, не «инициативно».
 - Гард на число чанков: `budget`-проверка в loop, разумный `maxChunks`, и **логировать, что
@@ -58,6 +63,6 @@ https://alexzhang13.github.io/blog/2025/rlm/ + arXiv [2512.24601]. Полный 
 ## Related
 - [[reference_recursive_language_models]] — полный разбор, цифры, первоисточники
 - skill `agent-harness-design` (references/agent-tool-design.md §9) — Connector Code-Execution Pattern (тот же приём)
-- `safety.md` §4 — fan-out = кратный расход, гард обязателен
+- `safety-billing.md` §4 — fan-out = кратный расход, гард обязателен
 - `edit-formats-and-tiering.md` — модель-тиринг peek/synthesize vs map
 - `quality-over-tokens-independent-verify.md` — синтез по чанкам можно перепроверить свежим агентом

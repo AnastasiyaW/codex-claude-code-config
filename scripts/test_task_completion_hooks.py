@@ -763,6 +763,18 @@ class TaskCompletionHookTests(unittest.TestCase):
                 True,
             ),
             (
+                "environment block after a neutral lead-in is a hand-off",
+                "Настрой Telegram auth и запусти его сама.",
+                "Команда для входа:\n```\n$env:TG_ID = '1'; python -m tg auth\n```",
+                True,
+            ),
+            (
+                "subject-drop report of a finished command is not a hand-off",
+                "Deploy the webhook.",
+                "Ran curl -X POST https://example.invalid/hook: HTTP 200.",
+                False,
+            ),
+            (
                 "agent modal intent is not delegation to the user",
                 "Deploy the webhook.",
                 "I need to run curl -X POST https://example.invalid/hook in the deployment page.",

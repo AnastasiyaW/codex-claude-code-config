@@ -1,0 +1,85 @@
+{
+  "attempts": [],
+  "builder": "unscoped",
+  "created_at": 1792833253.272038,
+  "id": "public-privacy-scan-existing-markers-20261024",
+  "intent_id": null,
+  "kind": "change",
+  "layer": {
+    "direct_dependents": [
+      "scripts/sync_public_config.py --scan-repo --strict",
+      "public Git pre-push gate"
+    ],
+    "entrypoints": [
+      "scripts/sync_public_config.py",
+      "hooks/article-voice-gate.py",
+      "hooks/handoff-to-todo.py",
+      "hooks/human-confirmation-guard.py",
+      "hooks/widget-test-guard.py"
+    ],
+    "owner_paths": [
+      "scripts/sync_public_config.py",
+      "scripts/test_sync_public_config.py",
+      "sync-manifest.json",
+      "hooks/article-voice-gate.py",
+      "hooks/handoff-to-todo.py",
+      "hooks/human-confirmation-guard.py",
+      "hooks/widget-test-guard.py"
+    ],
+    "release_boundary": "public GitHub repository; no active-machine sync or deletion",
+    "state_or_contract": [
+      "public privacy scan rejects private identifiers in every non-exempt indexed file",
+      "only listed immutable third-party metadata assets may bypass marker matching"
+    ],
+    "tests_or_probes": [
+      "scripts/test_sync_public_config.py",
+      "hooks/article-voice-gate.py --self-test",
+      "hooks/handoff-to-todo.py --self-test",
+      "hooks/human-confirmation-guard.py --self-test",
+      "hooks/widget-test-guard.py --self-test",
+      "scripts/sync_public_config.py --scan-repo --strict"
+    ]
+  },
+  "observed": {
+    "actual": "The scan reports four private historical identifiers in hook source and two false positives in third-party Google Fonts metadata, so it fails before a public push.",
+    "expected": "A strict scan of the publishable Git index passes while still rejecting private identifiers in source files."
+  },
+  "plan": {
+    "causal_hypothesis": "Removing the private literals from hook defaults and fixtures, while allowing only the two immutable Google Fonts metadata files declared in the manifest, keeps the marker scan strict for all agent-authored source and stops false positives from third-party credits.",
+    "fix_steps": [
+      "Replace the four private hook literals with behavior-preserving generic values.",
+      "Add a manifest-owned exact-path exemption for the two checked-in Google Fonts metadata assets and teach the scanner to reject malformed exemption entries.",
+      "Add focused scanner coverage and rerun the existing hook self-tests and strict repository scan."
+    ],
+    "focused_argv": [
+      "python",
+      "scripts/test_sync_public_config.py"
+    ]
+  },
+  "release": {
+    "required": false
+  },
+  "schema_version": 1,
+  "session_id": "unscoped",
+  "status": "VERIFIED",
+  "summary": "Remove verified private identifiers from public hook sources and narrowly exempt verified third-party font metadata from the repository privacy scan.",
+  "updated_at": 1792833922.7607887,
+  "verification": {
+    "after": {
+      "argv": [
+        "python",
+        "scripts/test_sync_public_config.py"
+      ],
+      "evidence_path": ".agent/delivery-cases/public-privacy-scan-existing-markers-20261024/evidence/after-00.txt",
+      "returncode": 0,
+      "sha256": "806020311251cdfe37cd6abcaca8b0a3884cf8cc2cea9dfb2207e5c64cf0ecd5"
+    },
+    "independent_review": {
+      "evidence_path": ".agent/delivery-cases/public-privacy-scan-existing-markers-20261024/independent-review.md",
+      "fresh_context": true,
+      "reviewer": "harness_public_release_reviewer",
+      "sha256": "62c040e1eb1abe7fc17b4b674ea3759b5f2e45e2fb5c754d24d14bec8f040594",
+      "verdict": "PASS"
+    }
+  }
+}

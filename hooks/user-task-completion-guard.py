@@ -33,6 +33,18 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from safety_common import stop_budget_consume, stop_budget_exhausted  # noqa: E402
+except ImportError:
+    stop_budget_consume = stop_budget_exhausted = None  # type: ignore[assignment]
+
+# Owner 2026-10-23 («почини ошибку хука»): while the work is delegated to live
+# background agents this gate refused every Stop with no cap, and the session spent
+# dozens of turns repeating "still waiting". Same shared budget as root-cause-delivery:
+# at most STOP_BUDGET_DEFAULT refusals per human turn; a human prompt resets it.
+BUDGET_NAME = "user-task-completion"
+
 
 REQUEST_SCHEMA = "agent-user-task-request/v1"
 STATE_SCHEMA = "agent-user-task-state/v1"
@@ -1133,6 +1145,13 @@ def record_terminal_receipt(
     write_json_atomic(receipt_file, {**binding, "recorded_at": now_utc()})
 
 
+def reset_stop_budget(root: Path) -> None:
+    try:
+        (root / ".claude" / f".stop-budget-{BUDGET_NAME}").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
     if not task_capture_enabled():
         return 0
@@ -1145,6 +1164,7 @@ def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
     root = repo_root(cwd or Path.cwd())
     if root is None:
         return 0
+    reset_stop_budget(root)
     _, actionable = classify_prompt(prompt)
     recorded = None
     if actionable:
@@ -1181,6 +1201,11 @@ def user_prompt(event: dict[str, Any], cwd: Path | None = None) -> int:
 
 
 def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
+    # Claude marks the immediate Stop re-entry after any Stop hook blocked the
+    # turn. The first event already supplied the owned continuation; blocking
+    # again here can only self-feed the same unfinished task.
+    if event.get("stop_hook_active") is True:
+        return 0
     # This marker is written on every Stop, not only when this particular guard
     # blocks. Matching Stop hooks run concurrently, and any one of them may be
     # the source of the next synthetic prompt.
@@ -1209,6 +1234,14 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
         )
     if not unresolved:
         return 0
+    if stop_budget_exhausted is not None and stop_budget_exhausted(BUDGET_NAME, root):
+        sys.stderr.write(
+            "[user-task] still unresolved, refusal budget for this turn spent; the next owner "
+            "prompt re-arms it:\n- " + "\n- ".join(unresolved) + "\n"
+        )
+        return 0
+    if stop_budget_consume is not None:
+        stop_budget_consume(BUDGET_NAME, root)
     print(json.dumps({
         "decision": "block",
         "reason": (

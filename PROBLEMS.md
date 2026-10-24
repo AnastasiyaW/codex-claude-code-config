@@ -184,27 +184,14 @@ a commit hidden in `bash -c "git commit"`, `sh -c`, `powershell -c`, or a git al
 (`git ci`) is still not seen, so the commit check does not run for it. One shared parser
 closes both guards; recheck adds those commands to `test_agent_policy_commit_gate.py`.
 
-## 2026-10-02 18:51 - PUBLIC PUSH BLOCKED: CONTAINER-CLEANUP COMMITS NAME A PRIVATE HOST
-
-**Status**: arch-decision
-
-Agent A of the pre-push scan refuses two local commits on `main`: `251e619` "fix: permit
-disposable stopped benchmark containers" and `da002c1` "fix: bind container cleanup to approved
-target". They were `7aa79d8` and `e97d3cc`; on 2026-10-02 local main was replayed onto origin
-after `1acd83d` with a byte-identical tree, so only the hashes changed (old ones stay in the
-reflog).
-
-    [pre-push] Agent A (regex) BLOCKED - 4 finding(s):
-      [pii] pii:private_names in hooks/human-confirmation-guard.py:267, 496, 537, 538
-
-Line 267 is the SSH target constant that the container-cleanup approval matches; 496, 537 and
-538 are self-test commands built on it. A neutral rename would break the approval, so this is
-not a redaction: the binding has to leave the public file - for example into the private
-routing config the scanner already reads, loaded at run time and failing closed when absent.
-Not overridden.
-
-**What is waiting**: `251e619`, `da002c1`. The guard runs from this working tree, so the
-change is live locally; only publication waits.
-
-**Recheck**: after the target moves out of the public file, `git push origin main`; PASS when
-both agents pass and `origin/main` carries the container-cleanup change.
+## 2026-10-15 23:59 - stop/kill approvals read free text heuristically
+**Status**: RESOLVED 2026-10-16 - owner left the choice to me; middle option: her own stop requests keep free text, a bare "да" approves only a command I offered with a first-person verb or «Остановить?» right before it (OFFER_LEAD allow-list). Probes hcg-review1..7: 0 unexpected approvals; self-test approve=41 refuse=231.
+Six independent reviews of the autostart change (commit "owner can ask to remove a unit from autostart") showed
+that word lists never close the free-text classes: the disable path was moved to a whole-message grammar and a
+fixed first-person proposal template, after which every probe is refused. The older stop/kill path still uses
+heuristics, and a bare "да" approves `kill 4242` after my explanation ("Команда `kill 4242` остановит воркер"),
+after instructions for the owner ("выполни у себя: `kill 4242`"), and on "Убить процесс 4242 рано."
+(review probe rows STOP expl / STOP for owner / STOP inf).
+Options that were weighed: (a) the same strict grammar for stop/kill (safe, but natural phrasings like
+"убей 4242, он висит" stop passing) or (b) keep heuristics and accept these classes. The resolution
+above is the middle path between them; the three probe rows are now refused.

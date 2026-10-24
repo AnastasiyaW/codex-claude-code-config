@@ -1,0 +1,10 @@
+argv: ["python", "scripts/test_sync_public_config.py"]
+returncode: 0
+
+test_repo_scan_exempts_only_manifest_listed_third_party_asset (__main__.SyncPublicConfigTests.test_repo_scan_exempts_only_manifest_listed_third_party_asset) ... ok
+test_repo_scan_rejects_malformed_exemption_path (__main__.SyncPublicConfigTests.test_repo_scan_rejects_malformed_exemption_path) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.005s
+
+OK

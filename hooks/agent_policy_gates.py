@@ -296,8 +296,12 @@ def pr_gate(command: str, root: Path, policy: dict) -> None:
     found = re.search(r"\bgh\s+pr\s+create\b(.*)", command, re.S)
     if not found:
         return
+    # POSIX shlex drops an unquoted backslash, so an unquoted Windows path such as
+    # --body-file D:\tmp\pr.md became "D:tmppr.md", was not found, and a filled
+    # description was refused as missing (2026-10-23). Read such backslashes as path separators.
+    tail = re.sub(r'\\(?!["\\$`])', "/", found.group(1).split("&&")[0])
     try:
-        args = shlex.split(found.group(1).split("&&")[0], posix=True)
+        args = shlex.split(tail, posix=True)
     except ValueError:
         args = found.group(1).split()
     problems = []

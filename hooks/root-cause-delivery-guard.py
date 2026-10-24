@@ -295,6 +295,12 @@ def state_dir() -> Path:
 
 
 def session_id_from_event(event: dict[str, Any] | None = None) -> str:
+    # The Codex desktop editor can replay a stale event session id after a
+    # reload. Its process environment carries the live task identity, so use
+    # that authoritative value before accepting replayed event metadata.
+    codex_session = os.environ.get("CODEX_SESSION_ID", "").strip()
+    if codex_session:
+        return codex_session
     for key in ("session_id", "sessionId", "conversation_id", "conversationId", "thread_id", "threadId"):
         value = (event or {}).get(key)
         if value:

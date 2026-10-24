@@ -339,6 +339,17 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         requests = list((self.root / ".agent" / "user-tasks").glob("*/request.json"))
         self.assertEqual(len(requests), 1)
 
+    def test_stop_reentry_does_not_self_feed_an_open_task_block(self) -> None:
+        self.invoke_prompt()
+        first = self.invoke_stop_event({"session_id": "session-a"})
+        self.assertEqual(first and first.get("decision"), "block")
+
+        repeated = self.invoke_stop_event({
+            "session_id": "session-a",
+            "stop_hook_active": True,
+        })
+        self.assertIsNone(repeated)
+
     def test_same_text_on_a_new_turn_remains_real_user_input(self) -> None:
         self.invoke_stop(turn="turn-1")
         payload = self.invoke_prompt({
@@ -651,6 +662,17 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         message = output.getvalue()
         self.assertIn("NEXT OWNED ACTION", message)
         self.assertIn("реализуй исправление после ревью", message)
+
+    def test_stop_refusals_are_capped_per_owner_turn(self) -> None:
+        self.invoke_prompt()
+        cap = guard.STOP_BUDGET_DEFAULT if hasattr(guard, "STOP_BUDGET_DEFAULT") else 3
+        for _ in range(cap):
+            blocked = self.invoke_stop()
+            self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIsNone(self.invoke_stop())
+        self.invoke_prompt({"prompt": "ну что там, продолжай", "session_id": "session-a"})
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
 
 
 if __name__ == "__main__":

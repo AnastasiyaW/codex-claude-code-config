@@ -367,6 +367,7 @@ ROUTES = [
     {
         "patterns": [
             r"\b(упрости|simplify|clean up|почисти код|refactor)\b",
+            r"\b(be lazy|yagni|simplest (solution|approach)|over-?engineer\w*|переусложн\w*)\b",
         ],
         "skill": "lean-code",
         "description": "Strip over-engineering while preserving correctness and verification",
@@ -407,6 +408,12 @@ ROUTES = [
     {
         "patterns": [
             r"\b(выдержит|нагрузк\w*|масштаб\w*|will it (hold|scale)|scal(e|ing)|throughput|capacity)\b",
+            # "this/that" alone also covers glue and court cases, so a load word must follow.
+            r"\bwill (this|that) (hold|scale)\b.{0,40}\b(load|traffic|requests?|rps|qps|users?|\d+k)\b",
+            # Question form only: "I need a database password reset" is not a design question.
+            r"\b(do we|should we|нужен ли|нужна ли|нужно ли|нужны ли)\s+(need\s+)?(an?\s+)?(тут\s+|здесь\s+|нам\s+)?"
+            r"(кеш\w*|очеред\w*|баз\w* данных|cache|queue|database|read replica)\b",
+            r"\b(how many (machines|servers|nodes) (do|would|will) we need|сколько (машин|серверов|нод) (нужно|понадобится))\b",
             r"\b(как(ую|ой)|выбрать|choose|which)\b.{0,24}\b(баз\w* данных|бд|database|db|кеш|cache|очеред\w*|queue)\b",
             r"\b(шард\w*|sharding|партиционир\w*|partition\w*|реплик\w*|replica\w*|consistency|консистентн\w*)\b",
             r"\b(медленн\w*|slow)\b.{0,30}\b(запрос\w*|quer(y|ies)|под нагрузкой|at scale|in production)\b",
@@ -432,6 +439,12 @@ ROUTES = [
             r"\b(разбей|раздели|вынеси|split|extract|break up|decompose)\b.{0,30}"
             r"\b(модул\w*|файл\w*|класс\w*|module|file|class|monolith|монолит)\b",
             r"\b(слишком (большой|длинный)|too (big|long|large)|god (object|class|module)|ball of mud)\b",
+            # A named source file plus its size. Only four-digit sizes count: a 120-line file
+            # is not a refactoring signal, and "1,000 lines changed" describes a diff.
+            r"\b\w+\.(py|ts|tsx|js|jsx|go|rs|java|kt|cs|cpp|cc|h|hpp|rb|php|swift)\b[\s,:(—-]*"
+            r"(it'?s |it is |is |has |уже |—\s*)?(now |grown to |over |about |almost |около |почти |больше )*"
+            r"(\d{1,3}(,\d{3})+|\d{4,})\s*(lines|loc|строк\w*)\b(?!\s+(changed|added|removed|deleted|of))",
+            r"\b(\d{1,3}(,\d{3})+|\d{4,})[- ](line|строчн\w*)\s+\w+\.(py|ts|tsx|js|jsx|go|rs|java|kt|cs|cpp|cc|h|hpp|rb|php|swift)\b",
             r"\b(связност\w*|связи|coupling|cohesion|circular (import|dependency))\b",
         ],
         "skill": "refactoring-safely",

@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/*api*.py"
+  - "**/*post*.py"
+  - "**/*webhook*"
+  - "**/vikunja_task.py"
+---
+
 # API UTF-8 Posting — non-ASCII (Cyrillic / CJK / etc) в любой API
 
 ## Принцип

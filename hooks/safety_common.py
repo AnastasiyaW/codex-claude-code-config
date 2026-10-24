@@ -39,6 +39,9 @@ GIT_FORCE_BRANCH_DELETE_PATTERNS = (
 )
 
 
+_CURRENT_EVENT: dict = {}
+
+
 def read_event() -> dict:
     """Parse the hook event from stdin. Returns empty dict on failure.
 
@@ -56,7 +59,12 @@ def read_event() -> dict:
         if not raw:
             return {}
         raw = raw.lstrip("\ufeff")
-        return json.loads(raw)
+        event = json.loads(raw)
+        if not isinstance(event, dict):
+            return {}
+        global _CURRENT_EVENT
+        _CURRENT_EVENT = event
+        return event
     except (json.JSONDecodeError, OSError) as exc:
         _announce_dead_event(exc)
         return {}
@@ -117,6 +125,11 @@ def log(level: str, hook: str, verdict: str, pattern: str, target: str) -> None:
 
 def block(reason: str) -> None:
     """Emit a structured block verdict and exit."""
+    if (
+        _CURRENT_EVENT.get("hook_event_name") in {"Stop", "SubagentStop"}
+        and _CURRENT_EVENT.get("stop_hook_active") is True
+    ):
+        allow()
     msg = {"decision": "block", "reason": reason}
     print(json.dumps(msg, ensure_ascii=False))
     sys.exit(0)
@@ -777,7 +790,25 @@ def transcripts_for(session_id: str) -> list:
     exact = list(root.glob(f"*/{session_id}.jsonl"))
     if exact or len(session_id) < 8:
         return exact
-    return list(root.glob(f"*/{session_id}*.jsonl"))
+    found = list(root.glob(f"*/{session_id}*.jsonl"))
+    if found:
+        return found
+    # A workspace session carries its id in the project DIRECTORY name, and the
+    # transcripts beneath it are named after the inner sessions -- so both globs
+    # above find nothing and a provably live owner reads as dead. Measured
+    # 2026-09-12: session de76258c had written three transfer records five
+    # minutes earlier and was appending a transcript at that moment, while every
+    # other session's Stop was blocked on its in-flight deploys.
+    #
+    # Directory match is deliberately last and needs the full-length id: a short
+    # prefix against directory names would match far more loosely than against
+    # file names, and this helper may only ever ADD evidence that an owner is
+    # alive. Nothing here can turn a live owner dead, so the gate stays
+    # fail-closed.
+    if len(session_id) < 32:
+        return []
+    return [p for d in root.glob(f"*{session_id}*") if d.is_dir()
+            for p in d.rglob("*.jsonl")]
 
 
 def same_session(a: str, b: str) -> bool:

@@ -1,3 +1,8 @@
+---
+paths:
+  - "**/__rule_on_demand__/**"
+---
+
 # Independent System Verification — control systems и functions verify behavior независимо
 
 ## Принцип (2026-05-13, после real case watchdog v1)

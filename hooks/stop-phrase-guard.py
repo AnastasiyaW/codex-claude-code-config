@@ -615,6 +615,179 @@ _PATH_SHAPE = re.compile(
     r"^(?:[a-z]:[/\\]|[/~.]|[^/\\]*://)|[/\\].*[/\\]|[/\\][^/\\]*\.\w+$",
     re.IGNORECASE,
 )
+# Measured 2026-09-24: requiring a listed verb or addressee (9c6e170) let an
+# instruction through whenever its verb was unlisted ("Feed curl -X POST ...")
+# or its addressee was a third party ("ask the release engineer to feed ..."),
+# and a `$env:` block after a neutral lead-in ("Команда для входа:") had
+# neither. Each is now recognised by grammar, not by growing the verb list,
+# and each yields to report grammar around the command: a fresh-context
+# review (2026-09-25) found the first cut firing on "Probe `curl ...`
+# returned 200", "Clients ask the registry to resolve ...", "Выполнено:" over
+# a `$env:` block.
+
+# Setting shell state has no use but to be run next -- unless the lead-in
+# reports it, the block is a PS> transcript, or, outside a fence, no command
+# follows the assignment: a lone `export KEY=value` names a format.
+_ENV_ASSIGNMENT = re.compile(
+    r"(?im)\$env:[a-z_]\w*\s*=(?!=)|(?:^|[`;&|]\s*)(?:export|set)[ \t]+[a-z_]\w*="
+)
+# A further assignment is not a command: `$env:A = 1; $env:B = 2` sets state only.
+_CHAINED_COMMAND = re.compile(r"(?i)(?:;|&&|\|\|)\s*(?!\$|(?:export|set)\s)[\w.\\/&'\"]")
+_PROMPT_TRANSCRIPT = re.compile(r"(?im)^[ \t]*PS(?: [a-z]:\\[^>\n]*)?>")
+_BARE_COMMAND_END = re.compile(r"[.!?](?=\s)|\n")
+# Request verb + recipient right before the command, said by the speaker
+# (modal, "please", "you") or opening its clause: "Clients ask the registry
+# to resolve ..." and "Managed to get Docker to mount ..." describe. Russian
+# forms are imperative or infinitive by themselves; "попросили" reports.
+_DELEGATION_LEAD = re.compile(
+    r"(?i)(?:(?:(?:[.!?:;]\s+|\n[ \t]*(?:[-*>]\s+|\d+[.)]\s+)?)(?:\*\*)?|"
+    r"(?:\b(?:please|should|must|could|can|will|would|shall|need to|needs to|have to|"
+    r"has to|going to|ought to|let's|you)|'ll)\s+)"
+    r"(?:ask|tell|remind|instruct|get|request)(?:\s+[\w@-]+){1,4}?\s+to"
+    r"(?:\s+[a-z][\w-]*){0,2}|"
+    r"(?<![\w-])(?:попроси(?:те|ть|м|мте)?|поручи(?:те|ть|м|мте)?)(?:\s+[\w-]+){1,4}"
+    r")(?P<gap>\s*)$"
+)
+_REQUEST_STEMS = ("ask", "tell", "remind", "instruct", "get", "request", "попроси", "поручи")
+# An imperative opens its clause with a bare verb and no subject. Diary-style
+# reports drop the subject too, but in the past tense ("Ran curl ...").
+_IMPERATIVE_LEAD = re.compile(
+    r"(?i)(?:[.!?;:]\s+|\n[ \t]*(?:[-*>]\s+|\d+[.)]\s+)?)"
+    r"(?:(?:then|next|now|finally|also|just|simply|please|and|"
+    r"потом|затем|теперь|сначала|далее|пожалуйста|и)\s+)?"
+    r"(?P<word>[^\W\d_]+)(?P<gap>\s+)$"
+)
+# Russian: only the polite plural is unambiguous by its ending; singular
+# "-и/-й/-ь" collides with plural nouns and adjectives ("Флаги", "Последний").
+_RU_IMPERATIVE = re.compile(r"(?i)^[а-яё]{3,}(?:ите|йте|ьте)$")
+_EN_NOT_IMPERATIVE_FORM = re.compile(r"(?i)(?:(?<!e)ed|ing|ly|(?<!s)s)$")
+# simplification: irregular pasts cover the report verbs seen in practice,
+# not all ~200 of English; a missing one reads a subject-drop report
+# ("Wove ...") as an imperative unless a predicate follows the command.
+_EN_IRREGULAR_PAST = frozenset("""
+    ran sent built wrote got made took gave kept left found brought bought
+    caught taught thought went came saw said told held fed led met paid lost
+    won spent stood began broke chose drove fell felt flew forgot grew hid knew
+    meant rode rose sat slept spoke stole struck threw woke wore done gone seen
+    shown known taken given written driven broken chosen forgotten gotten
+    hidden spoken thrown dealt drew fought hung shot spun stuck swept bent
+    bound fled heard lent lit slid sold sought rebuilt rewrote reran reread hit
+""".split())
+_EN_NOT_IMPERATIVE = _EN_IRREGULAR_PAST | frozenset("""
+    a an the this that these those each every either neither both all any some
+    no another other such what which whose my our your his her its their
+    i we you he she it they me us them one
+    with without via from to for in on at by of after before under over per
+    through into onto upon about against between during since until within
+    across behind despite except like near off out past than toward towards
+    inside outside around along among amid below above beside besides beneath
+    throughout underneath unlike versus
+    and or but nor so yet if when whenever while because although though
+    unless once twice whereas whether where as how why who whom
+    also then now here there next still only just even again already not never
+    always often too very thus hence instead otherwise meanwhile today
+    yesterday tomorrow later earlier first second third finally lastly plus
+    however therefore overall moreover furthermore additionally consequently
+    indeed nevertheless nonetheless accordingly afterwards anyway likewise
+    similarly
+    is are was were be been am do does did has have had can could will would
+    shall should may might must
+    yes ok okay note command output result status error warning example usage
+    evidence proof claim scope cause reason source default flag option value
+""".split())
+# What follows the command in its clause. A report puts its predicate there
+# ("Probe `curl ...` returned 200", "Datadir `du -sh` = 135 G", "— ok"); an
+# imperative puts a target ("into the deployment page"). The clause is cut at
+# a subordinate conjunction, whose verb is not the command's ("Kick `curl`
+# once the page is up").
+_TAIL_CUT = re.compile(
+    r"(?i)[.!?](?=\s|$)|[;\n]|\b(?:and|or|but|once|when|whenever|after|before|until|"
+    r"till|if|unless|because|since|while|where|which|that|so)\b"
+)
+_REPORT_PREDICATE = re.compile(
+    r"(?i):(?!\d)|(?<=\s)=|=(?=\s)|[→—–]|->|\s-\s|\b(?:is|are|was|were|be|been|has|"
+    r"have|had|does|did|will|would|can|could|should|must|may|might|shall|isn't|"
+    r"wasn't|won't|can't|ok|okay|clean|green|red|alive|active|fine|sane)\b|"
+    r"\b[a-z]{2,}ed\b"
+)
+_TAIL_WORD = re.compile(r"(?<![\w-])[A-Za-z][a-z]+\b")
+# What stands before the command in its clause. A report names what the
+# block is ("Content of start.ps1:", "Лог сессии:", "e.g."), or says it in
+# the past or passive ("Выполнено:", "прописано", "action is") or the third
+# person ("Задача выполняет", "the scheduler runs `...`").
+_LEAD_CUT = re.compile(r"(?<!e\.g)(?<!i\.e)[.!?](?=\s)|\n")
+_REPORT_LEAD = re.compile(
+    r"(?i)\b(?:is|are|was|were|been|has|had|content|contents|log|logs|output|"
+    r"transcript|example|format|e\.g)\b|\b(?!(?:need|requir)ed\b)[a-z]{2,}ed\b|"
+    r"\b[а-яё]{3,}(?:ено|ано|ято|ыто)\b|\b(?!если\b)[а-яё]{2,}(?:л|ла|ло|ли)\b|"
+    r"\b[а-яё]{3,}(?:ает|яет|ует|еет|ают|яют|уют)\b|"
+    r"\b(?:содержимое|лог|логи|вывод|пример|например|формат|результат)\b"
+)
+
+
+def _is_bare_imperative(word: str, before_bare_command: bool) -> bool:
+    if _RU_IMPERATIVE.match(word):
+        return True
+    # Before an unquoted command a lowercase word may be the program itself:
+    # in "Evidence: git rev-list --left-right" the shape starts at "rev-list".
+    # An all-capital word is a label ("TXT `...`"), not a verb.
+    if (before_bare_command and not word[0].isupper()) or (len(word) > 1 and word.isupper()):
+        return False
+    word = word.lower()
+    return (
+        word.isascii()
+        and word not in _EN_NOT_IMPERATIVE
+        and not _EN_NOT_IMPERATIVE_FORM.search(word)
+    )
+
+
+def _reports_after(masked: str, end: int) -> bool:
+    tail = masked[end:end + 200]
+    cut = _TAIL_CUT.search(tail)
+    tail = tail[:cut.start()] if cut else tail
+    if _REPORT_PREDICATE.search(tail):
+        return True
+    words = _TAIL_WORD.findall(tail)
+    if any(w.lower() in _EN_IRREGULAR_PAST for w in words):
+        return True
+    # Only the word right after the command can be its verb in "-s":
+    # "mirrors the tree", but "into the deployment pages" is a target.
+    first = words[0].lower() if words else ""
+    return first not in _EN_NOT_IMPERATIVE and bool(re.search(r"[^s]s$", first))
+
+
+def _reports_before(masked: str, start: int) -> bool:
+    text = masked[max(0, start - 200):start].rstrip()
+    lead = text[max((m.end() for m in _LEAD_CUT.finditer(text)), default=0):]
+    if _REPORT_LEAD.search(lead):
+        return True
+    words = re.findall(r"[a-z]+", lead.lower())
+    if any(w in _EN_IRREGULAR_PAST for w in words):
+        return True
+    # A verb in "-s" right before the command takes it as its object:
+    # "the scheduler runs `...`", unlike "Remaining steps: `...`".
+    last = re.search(r"\b([a-z]{3,})$", lead.lower())
+    return bool(last) and last.group(1) not in _EN_NOT_IMPERATIVE and bool(
+        re.search(r"[^s]s$", last.group(1))
+    )
+
+
+def _sets_shell_state(message: str, masked: str, start: int, end: int, fenced: bool) -> bool:
+    if fenced:
+        block = message[start:end]
+        if not _ENV_ASSIGNMENT.search(block) or _PROMPT_TRANSCRIPT.search(block):
+            return False
+    else:
+        if message.startswith("`", start):
+            span = message[start:end]
+        elif message[start:start + 5].lower() == "$env:":
+            stop = _BARE_COMMAND_END.search(message, start, start + 400)
+            span = message[start:stop.start() if stop else start + 400]
+        else:
+            return False
+        if not (_ENV_ASSIGNMENT.search(span) and _CHAINED_COMMAND.search(span)):
+            return False
+    return not _reports_before(masked, start)
 # A question hands a command over only when it asks the reader to act. Measured
 # 2026-09-25: "**Остановить тестовую базу `ops-test-pg-claude` на рабочей VM?**",
 # a request for the owner's "да" before a deletion, was blocked as homework
@@ -626,6 +799,12 @@ _ASKS_READER_TO_ACT = re.compile(
 )
 # "запустить?"/"запустим?" leave the act with the agent; "запустите?"/"запустишь?" do not.
 _AGENT_ACTS_FORM = re.compile(r"(?i)(?:ть|ти|м)$")
+# A question that opens with a polite imperative or a delegation still asks the
+# reader to act, whatever the verb: "Перезапустите `x`?", "Попросите инженера
+# скормить `x`?". Audit 2026-09-25: without this the question check cleared
+# hand-offs that the unlisted-verb grammar flags.
+_FIRST_WORD = re.compile(r"[\s*>\d.)\-«\"'„“]*([^\W\d_]+)")
+_RU_DELEGATING = re.compile(r"(?i)^(?:попроси|поручи)(?:те)?$")
 
 
 def _blank(match: re.Match) -> str:
@@ -683,6 +862,9 @@ def _question_leaves_act_to_agent(masked: str, head: int, tail: int) -> bool:
     sentence = masked[head:tail]
     if _ASKS_READER_TO_ACT.search(sentence):
         return False
+    first = _FIRST_WORD.match(sentence)
+    if first and (_RU_IMPERATIVE.match(first.group(1)) or _RU_DELEGATING.match(first.group(1))):
+        return False
     return not any(
         _RUSSIAN_DIRECTIVE.search(verb.group(0))
         and not _AGENT_ACTS_FORM.search(verb.group(0))
@@ -693,24 +875,65 @@ def _question_leaves_act_to_agent(masked: str, head: int, tail: int) -> bool:
 def shape_is_instruction(message: str, start: int, end: int) -> bool:
     """True when a command-shaped span is actually being assigned to someone.
 
-    The window is the surrounding sentence, where an instruction puts either
-    its addressee ("you", "вам") or its imperative ("run", "запусти"). A span
-    with neither is being described, not handed over; a span inside a question
-    that asks for a decision is not handed over either.
+    The window is the surrounding sentence, where an instruction puts its
+    addressee ("you", "вам"), a listed imperative ("run", "запусти"), a
+    request to a third party ("ask the engineer to"), or opens with a bare
+    verb ("Feed curl ..."). A span with none of these is being described,
+    not handed over; so is one whose clause reports it, and one inside a
+    question that asks for a decision. Shell state being set is handed over
+    unless its lead-in reports it.
     """
+    shape = message[start:end]
+    fenced = message.startswith("```", start)
+    base = _mask_code(message)
+    # A fence introduced by a question is left to the window: "Не работает?"
+    # above a command block hands that command over. The question comes before
+    # shell state: "Выполнить `$env:X = 1; psql ...`?" asks the owner to decide.
+    if not fenced and asks_for_decision(base, start, end):
+        return False
+    if _sets_shell_state(message, base, start, end, fenced):
+        return True
     left = max(0, start - 180)
     right = min(len(message), end + 80)
-    masked = _mask_code(message)
-    # A fence introduced by a question is left to the window: "Не работает?"
-    # above a command block hands that command over.
-    if not message.startswith("```", start) and asks_for_decision(masked, start, end):
-        return False
-    if message.startswith("```", start):
+    masked = base
+    if fenced:
         # A fenced block judged as the shape keeps its own words; a block the
         # agent ran and shows as evidence is cleared by agent_owns_phrase.
-        masked = masked[:start] + message[start:end] + masked[end:]
+        masked = masked[:start] + shape + masked[end:]
     window = masked[left:right]
-    return bool(_SECOND_PERSON.search(window) or _INSTRUCTION_VERB.search(window))
+    if _SECOND_PERSON.search(window) or _INSTRUCTION_VERB.search(window):
+        return True
+    # Grammar alone speaks only for a command; a whitespace-free span such as
+    # `docs/x.md` or `--verbose` after "File"/"Flag" names a thing.
+    if not fenced and not re.search(r"\S\s+\S", shape.strip("`")):
+        return False
+    lead = ("\n" if left == 0 else "") + masked[left:start]
+
+    def touches(grammar: re.Match | None, searched: str) -> bool:
+        # The grammar must touch the command in the raw text: masking blanks a
+        # path or a mis-paired backtick span, which must not bring a far word near.
+        gap = start - (len(searched) - grammar.start("gap")) if grammar else start
+        return bool(grammar) and not message[gap:start].strip()
+
+    # The $-anchored grammar is tried from every position of what it searches,
+    # so each is searched only where it can match: a request needs its verb,
+    # and an opener, an adverb and one word fit in the last 80 characters.
+    # Measured 2026-09-25 by a parallel session: ~50 us per command without
+    # this, a second on 16k commands, under a Stop hook with no timeout.
+    lower = lead.lower()
+    if any(stem in lower for stem in _REQUEST_STEMS) and touches(
+        _DELEGATION_LEAD.search(lead), lead
+    ):
+        return True
+    near = lead[-80:]
+    if not any(mark in near for mark in ".!?;:\n"):
+        return False
+    opener = _IMPERATIVE_LEAD.search(near)
+    return (
+        touches(opener, near)
+        and _is_bare_imperative(opener.group("word"), not message.startswith("`", start))
+        and not _reports_after(base, end)
+    )
 
 
 def agent_owns_phrase(message: str, start: int) -> bool:
@@ -932,7 +1155,7 @@ QUESTION_RUN_LIMIT = 3.0
 def _self_test() -> int:
     """Prove the handoff detector still separates describing from assigning.
 
-    Sixteen of these hand a command over and must stay caught; eight only name
+    28 of these hand a command over and must stay caught; 31 only name
     one or ask for a decision and must not fire. Without the mandatory-red half,
     loosening the detector would be indistinguishable from breaking it. Every case also
     holds the linear shape scan to the regex it replaces. The last checks
@@ -992,6 +1215,73 @@ def _self_test() -> int:
         ("addressed to a person",
          "тебе нужно `claude auth login --claudeai`",
          True),
+        # 2026-09-24: an instruction whose verb is unlisted, whose recipient is
+        # a third party, or whose only content is shell state. Each was silent
+        # since 9c6e170.
+        ("unlisted verb opening the sentence",
+         "Feed curl -X POST https://example.invalid/hook into the deployment page.", True),
+        ("russian polite imperative outside the list",
+         "Скормите `curl -X POST https://example.invalid/hook` странице.", True),
+        ("delegation to a third party",
+         "We should ask the release engineer to feed curl -X POST "
+         "https://example.invalid/hook into the deployment page.", True),
+        ("russian delegation to a third party",
+         "Попросите инженера скормить `curl -X POST https://example.invalid/hook`.", True),
+        ("environment block after a neutral lead-in",
+         "Команда для входа:\n```\n$env:TG_ID = '1'; python -m tg auth\n```", True),
+        # Found by replaying 9580 real final messages: the first cut fired on these.
+        ("subject-drop report in the past tense",
+         "Ran curl -X POST https://example.invalid/hook: HTTP 200.", False),
+        ("program name before its unquoted subcommand",
+         "Evidence: git rev-list --left-right --count HEAD...origin/main -> 0 0.", False),
+        ("masked path must not bring a far word near",
+         "Started: python C:\\x\\delivery.py start --intent-id f98 --title x", False),
+        ("mis-paired backticks after a preposition",
+         "Inside `store`, two content-addressed stores — `results` ~610 GB.", False),
+        ("mis-paired backticks after a noun",
+         "Volume `store`, two content-addressed stores — `results` ~610 GB.", False),
+        ("mis-paired backticks over a real flag",
+         "Inside `store`, two stores kept with --dedupe — `results` ~610 GB.", False),
+        ("a noun before a quoted name", "Branch `fix/stop-guard` for the fix.", False),
+        ("a lone inline assignment names a setting",
+         "`$env:TG_ID = '1'` задан в профиле PowerShell.", False),
+        ("a past request reports a delegation already made",
+         "I asked the release engineer to feed curl -X POST https://example.invalid/hook.",
+         False),
+        # Fresh-context review 2026-09-25: the first cut fired on report
+        # grammar around a command. The red half guards the fixes' own limits.
+        ("a subordinate clause is not the command's predicate",
+         "Kick `curl -X POST https://example.invalid/hook` once the page is up.", True),
+        ("delegation opening its clause", "Tell ops to feed curl -X POST https://example.invalid/hook.",
+         True),
+        ("remaining shell state inline",
+         "Remaining: `$env:TG_ID = '1'; python -m tg auth` on the deploy box.", True),
+        ("a predicate after the command",
+         "Probe `curl -sI https://example.invalid/health` returned 200 in 41 ms.", False),
+        ("a discourse adverb and a verb in -s",
+         "However `git diff a1..b2 -- web/index.html` shows the block was added here.", False),
+        ("an equation after the command", "Datadir `du -sh` = 135 G.", False),
+        ("an all-capital label", 'TXT `"127.0.0.1 refused, see https://example.invalid/why"`', False),
+        ("a predicate later in the clause",
+         "Note: bare `cmake -P` without the version line errored.", False),
+        ("a checklist result after a dash",
+         "- Guard `python hooks/stop-phrase-guard.py --self-test` — ok", False),
+        ("a request verb said by its subject",
+         "Clients ask the registry to resolve https://example.invalid/v2/ before pulling.", False),
+        ("a causative after an infinitive", "Managed to get Docker to mount C:\\data read-only.", False),
+        ("a second assignment is not a command",
+         "Профиль PowerShell: `$env:PYTHONUTF8 = '1'; $env:PYTHONIOENCODING = 'utf-8'`.", False),
+        ("a past lead-in reports a block",
+         "Выполнено:\n```powershell\n$env:PYTHONUTF8='1'; python scripts/build.py --release\n```",
+         False),
+        ("a prompt transcript",
+         "Сессия:\n```\nPS> $env:TG_ID = '1'\nPS> python -m tg auth --status\n```", False),
+        ("an unquoted command stops at its sentence",
+         "Проверено: python -m pytest -q прошёл; окружение `$env:CI = 1`; всё зелёное.", False),
+        ("a copula before an inline assignment",
+         "Scheduled task action is `$env:PYTHONUTF8=1; python D:\\jobs\\sync.py --once`.", False),
+        ("a decision about CI is not a delegation",
+         "Решили: пусть CI сам гоняет `pytest -q --maxfail 1` на каждом пуше.", False),
         # 2026-09-25: a yes/no question asks for a decision. The first list item
         # puts "вас" inside the old window of the second, which is what fired.
         ("permission questions before deletions",
@@ -1005,6 +1295,16 @@ def _self_test() -> int:
         ("russian imperative inside a question",
          f"{run_ru.capitalize()}те `claude auth login --claudeai`, хорошо?", True),
         ("english request question", "Could you run `claude auth login --claudeai`?", True),
+        # Audit 2026-09-25 of the merge with the unlisted-verb grammar.
+        ("a permission question that sets shell state",
+         "Выполнить `$env:PGPASSWORD = 'x'; psql -h db -c 'DROP DATABASE ops_test'`?", False),
+        ("an unlisted polite imperative in a question",
+         "Прогоните `pytest -q tests/ --maxfail 1`?", True),
+        ("a restart asked of the reader", "Перезапустите `autostart.pyw --restart`?", True),
+        ("a delegation asked as a question",
+         "Попросите инженера скормить `curl -X POST https://example.invalid/hook`?", True),
+        ("a polite imperative question that sets shell state",
+         "Выполните `$env:PGPASSWORD = 'x'; psql -h db -c 'SELECT 1'`?", True),
         ("question after the command is not its sentence",
          f"{run_ru.capitalize()}те `claude auth login --claudeai`. Получилось?", True),
     ]

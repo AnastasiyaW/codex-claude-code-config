@@ -13,6 +13,8 @@ what is inference, and what the fix does not cover.
 
 | | |
 |---|---|
+| **New - [Bounded harness-improvement pilot](docs/harness-improvement-pilot.md)** | A read-only evaluator for one frozen baseline and one candidate harness change. It accepts only a strict metric improvement with unchanged-or-better task outcomes, full candidate safety checks, and held-out coverage; it never edits active skills, hooks, or permissions. |
+| **New - [Skills that hand the task to each other](docs/development-skill-routing.md)** | The development skills now route to each other: four "moment" skills (start, will it hold, while writing, already too big) each name the other three, a delivery chain carries a bug or change from frozen plan to verified candidate, and the route follows the task into every subagent. The audit behind it found three phrasings the skills promised and the router never delivered; all three are fixed with failing cases first. Ships as [`keyword-skill-router.py`](hooks/keyword-skill-router.py) + [`agent-skill-contract.py`](hooks/agent-skill-contract.py) + [`root-cause-delivery`](skills/development/root-cause-delivery/SKILL.md). |
 | **[Starting from what you remember](docs/starting-from-what-you-remember.md)** | Why a brand-new project arrives years out of date, why an invented package name is now a security problem rather than a 404, and where manifest and install-time checks have to sit to catch either. Ships as [`dependency-currency-guard.py`](hooks/dependency-currency-guard.py) + [`dependency-provenance-guard.py`](hooks/dependency-provenance-guard.py). |
 | **[Why an agent circles instead of acting](docs/why-agents-circle-instead-of-acting.md)** | Two agents, identical rules, different gate shapes. Describing a fix instead of applying it turned out to be the only move with no gate on it. |
 | **[Gates that cannot bootstrap themselves](principles/30-gates-that-cannot-bootstrap.md)** | A check that only arms once the thing it checks for already exists will never arm. The failure looks exactly like compliance. |
@@ -33,7 +35,7 @@ Three paths depending on what you need:
 ### Option 1: Claude Code plugin (fastest)
 
 ```bash
-claude plugin install https://github.com/AnastasiyaW/claude-code-config
+claude plugin install https://github.com/AnastasiyaW/codex-claude-code-config
 ```
 
 Then in your Claude Code chat:
@@ -45,7 +47,7 @@ Read AGENTS.md and pick the principles, hooks, and skills that match my project.
 ### Option 2: Global install (hooks + skills available in every project)
 
 ```bash
-git clone https://github.com/AnastasiyaW/claude-code-config ~/claude-code-config
+git clone https://github.com/AnastasiyaW/codex-claude-code-config ~/claude-code-config
 
 # Copy the always-on safety hooks to your global config
 python ~/claude-code-config/scripts/install_hooks.py --global
@@ -68,7 +70,7 @@ safe defaults into the existing manifests and keeps backups before changes.
 
 ```bash
 cd /your/project
-git clone https://github.com/AnastasiyaW/claude-code-config .claude-config
+git clone https://github.com/AnastasiyaW/codex-claude-code-config .claude-config
 python .claude-config/scripts/install_hooks.py --local
 cp -r .claude-config/skills .claude/skills
 ```
@@ -105,6 +107,7 @@ offered? Nothing raises an error when that happens — see
 - **Agent claims "done" but it's broken?** Require durable proof artifacts ([Proof Loop](principles/02-proof-loop.md))
 - **Tests feel repetitive or a specialized gate blocks smoke?** Use the universal candidate-state sequence: focused slice, risk-based review, one full matrix, then only the relevant immutable-candidate compatibility proof ([testing strategy](docs/research/2026-08-testing-and-agent-evals.md))
 - **Need to improve a prompt/skill/config?** Automated Read-Change-Test loop ([Autoresearch](principles/03-autoresearch.md))
+- **Need proof before adopting one harness change?** Compare a frozen baseline and candidate without live mutation ([bounded pilot](docs/harness-improvement-pilot.md))
 - **LLM skips steps in complex workflows?** Shell scripts for mechanical tasks, one step at a time ([Deterministic Orchestration](principles/04-deterministic-orchestration.md))
 - **Wrong debugging conclusions?** Structured Premises-Trace-Conclusions format ([Structured Reasoning](principles/05-structured-reasoning.md))
 - **Task too big for one agent?** Coordinator + specialized sub-agents ([Multi-Agent Decomposition](principles/06-multi-agent-decomposition.md))
@@ -209,6 +212,25 @@ See [docs/rtk-integration.md](docs/rtk-integration.md) and
 | [kb-validate-gate](hooks/kb-validate-gate.py) | `Stop` | Runs the project knowledge-base validator when opted in |
 | [session-feedback-capture](hooks/session-feedback-capture.py) | `Stop` | Queues durable correction notes without blocking session closure |
 | [safety_common.py](hooks/safety_common.py) | shared | Shared event parsing and decision helpers for opt-in hooks |
+| [agent-skill-contract](hooks/agent-skill-contract.py) | `PreToolUse` + `PostToolUse` | Binds a skill/evidence contract to each delegated child (`Task`, Codex `spawn_agent`), reusing the keyword router on the child's own prompt — see [development skill routing](docs/development-skill-routing.md) |
+| [subagent-skill-context](hooks/subagent-skill-context.py) | Codex `SubagentStart` | Adds skill-routing and evidence discipline to every Codex child; the event carries no parent prompt, so it cannot pick a skill itself |
+| [subagent-evidence-receipt](hooks/subagent-evidence-receipt.py) | Codex `SubagentStop` | Requires one structured decision-source receipt (basis + evidence) from a child before its result is accepted |
+| [skill_contract_state.py](hooks/skill_contract_state.py) | shared | Fail-closed state bridge between the Codex pre- and post-hooks of a skill contract |
+| [root-cause-delivery-guard](hooks/root-cause-delivery-guard.py) | `UserPromptSubmit` + `PreToolUse` + `Stop` | Records a bug/change intent, keeps source edits behind a frozen plan, and closes only on red-to-green proof; companion of the [root-cause-delivery](skills/development/root-cause-delivery/SKILL.md) skill |
+| [task-cycle-controller](hooks/task-cycle-controller.py) | On demand | Turns verified findings into durable work orders: finding -> work order -> focused proof -> fresh review -> accepted |
+| [agent_policy_gates.py](hooks/agent_policy_gates.py) | shared | Claude-side half of a repo's `.github/agent-policy.json`: rules that can be checks become checks |
+| [codex_hook_dispatch](hooks/codex_hook_dispatch.py) | Codex, all events | One Codex hook entry per event that starts every configured handler itself, in parallel; Codex launching each handler through its own `pwsh` was measured at 8-25 s per start under load |
+| [powershell-dynamic-execution-guard](hooks/powershell-dynamic-execution-guard.py) | `PreToolUse` | Rejects dynamic text execution in PowerShell (`Invoke-Expression` and friends); static commands and script blocks pass |
+| [git-lock-homework-guard](hooks/git-lock-homework-guard.py) | `Stop` | Refuses to end a turn that hands a stale `.git/index.lock` to the user; the agent clears it with the proof tool instead |
+| [hook-tree-drift-check](hooks/hook-tree-drift-check.py) | `SessionStart` | Names a hook file that exists in two trees, so an edit does not land in the copy that never runs |
+| [disk-pressure-advisor](hooks/disk-pressure-advisor.py) | `SessionStart` | When a disk is tight, reports reclaimable development artifacts and expired temp-registry entries; never deletes |
+| [benjamin-plus-inject](hooks/benjamin-plus-inject.py) | `SessionStart` | Injects the vendored [benjamin-plus](https://github.com/JetBrains/benjamin-plus-skill) token-efficiency payload (MIT) with a local-precedence clause |
+| [telegram-mass-send-guard](hooks/telegram-mass-send-guard.py) | `PreToolUse` | Blocks a Telegram mass-send script that records no message ids — a mailing nobody could recall |
+| [widget-test-guard](hooks/widget-test-guard.py) | `PreToolUse` | Workspace example: Tk widget tests run only on a hidden desktop with a sandboxed `LOCALAPPDATA` |
+| [article-voice-gate](hooks/article-voice-gate.py) | `PreToolUse` | Workspace example: a machine-written knowledge-base article reaches the public repo only with an editor and fact-check pass behind it |
+| [handoff-to-todo](hooks/handoff-to-todo.py) | `PostToolUse` | Workspace example: attaches a handoff to its project task in a Vikunja-backed to-do |
+| [todo-inbox](hooks/todo-inbox.py) | `UserPromptSubmit` + `PreToolUse` | Workspace example: the owner's new notes on a project reach the session working on it |
+
 **Starter templates** for common project types: [web-app](templates/CLAUDE-web-app.md), [ML project](templates/CLAUDE-ml-project.md), [library](templates/CLAUDE-library.md), [code review](templates/REVIEW.md), [project chronicle](templates/chronicle.md), [memory files](templates/memory-project.md), [memory reference](templates/memory-reference.md), [proof plan](templates/proof-plan.md), [bug-fix prompt](templates/bug-fix-prompt.md) (anti-"pre-existing" constraints baked in), [long-run project harness pack](templates/long-run-project/) (drop-in `feature_list.schema.json` + `feature_list.template.json` + `init.sh.template` for any project crossing 5+ features and 5+ sessions).
 
 **Dynamic workflow commands** ([workflows/](workflows/)) - ready-to-drop `.js` orchestration scripts for Claude Code dynamic workflows (`/deep-review-flow`, `/research-cn-ru`) plus [EFFECTIVE-AGENTS.md](workflows/EFFECTIVE-AGENTS.md) - measured cost lessons (one `agent()` ≈ 95-150k tokens; resume as the main economy lever).
@@ -419,8 +441,9 @@ Freshness is mechanical, not aspirational: [scripts/sync_public_config.py](scrip
 - `templates/` - 适用于不同项目类型的 CLAUDE.md 起始模板 + 验证计划、记忆、项目编年史和长期项目脚手架（feature_list.json + init.sh）
 - `skills/` - 领域技能（AI/ML、视频制作、前端、iOS、写作、代码审查、验证、运维工具，包括 `harness-audit` 五子系统评估、`workflow-orchestration` 和 `gemini-delegate` 跨 CLI 委派）
 - 跨 harness 支持：每个项目一个 `AGENTS.md`，同时供 Claude Code、Gemini CLI、Codex 读取（无需符号链接），见 `rules/cross-harness-agents-md.md`
+- **新增：开发技能交叉路由。** 代码相关技能会互相移交任务：四个按“时刻”划分的技能（开始、能否承载、编写单元、已经过大）在描述中互相指向，交付链把缺陷或变更从冻结计划带到经过验证的候选版本，路由还会通过技能契约传递给每个子代理，见 `docs/development-skill-routing.md`
 
-**安装:** `claude plugin install https://github.com/AnastasiyaW/claude-code-config` 或直接复制所需文件。
+**安装:** `claude plugin install https://github.com/AnastasiyaW/codex-claude-code-config` 或直接复制所需文件。
 
 **灵感来源:** 部分设计理念受到中国工程社区的启发，包括红线(红线)模式、规范驱动开发(OpenSpec)、经验库模式。
 
@@ -439,8 +462,9 @@ Freshness is mechanical, not aspirational: [scripts/sync_public_config.py](scrip
 - `templates/` - стартовые CLAUDE.md + план верификации + шаблоны memory и хроник + **long-run harness pack** (drop-in `feature_list.json` + `init.sh` для проектов с 5+ фичами)
 - `skills/` - доменные навыки (AI/ML, видео, фронтенд, iOS, письмо, код-ревью, верификация, операционные инструменты, включая `harness-audit`, `workflow-orchestration` и `gemini-delegate` — делегирование в Gemini CLI с мульти-аккаунтом)
 - Кросс-harness: один `AGENTS.md` на проект читают Claude Code, Gemini CLI и Codex (без симлинков) — `rules/cross-harness-agents-md.md`
+- **Новое: кросс-маршрутизация навыков разработки.** Навыки для кода передают задачу друг другу: четыре навыка «по моменту» (начинаем, выдержит ли, пишем юнит, уже слишком большое) в своих описаниях называют друг друга, цепочка доставки ведёт баг или изменение от замороженного плана к проверенному кандидату, а маршрут доходит до каждого сабагента через контракт навыка — `docs/development-skill-routing.md`
 
-**Установка:** `claude plugin install https://github.com/AnastasiyaW/claude-code-config` или копирование нужных файлов.
+**Установка:** `claude plugin install https://github.com/AnastasiyaW/codex-claude-code-config` или копирование нужных файлов.
 
 ---
 

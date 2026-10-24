@@ -1,3 +1,9 @@
+---
+paths:
+  - "**/.git/COMMIT_EDITMSG"
+  - "**/COMMIT-HYGIENE.md"
+---
+
 # No Claude Attribution в git / GitHub / Issues / PR
 
 ## Принцип

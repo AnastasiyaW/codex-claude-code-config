@@ -2682,7 +2682,7 @@ def self_test() -> int:
         ("home child named by owner", "ssh h 'rm -rf /" + "home/someuser/lora-cache-20260823'",
          transcript("удали lora-cache-20260823")),
         # owner 2026-10-12: files in a folder directly on a drive root, general request naming the folder
-        ("files in a drive-root folder", "ssh h \"del E:\\Firefox-setup\\FirefoxSetup.exe E:\\Firefox-setup\\nastya-ff-profile.tar\"",
+        ("files in a drive-root folder", "ssh h \"del E:\\Firefox-setup\\FirefoxSetup.exe E:\\Firefox-setup\\FirefoxSession.tmp\"",
          transcript("удали установщик и архив из E:\\Firefox-setup")),
     ]
     refuse = [
