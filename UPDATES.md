@@ -12,6 +12,8 @@ Changelog for claude-code-skills. Newest first.
   skipped. Exit 0 clean, 1 findings, 2 not checked (bad or no-op glossary,
   non-UTF-8 or empty input, unclosed fence, nothing left to check). The
   self-test's must-fail controls catch six mutations of the detection logic.
+- `term_drift_check.py` skips YAML frontmatter at the top of a file (it was
+  flagged as a long sentence); an unclosed frontmatter block is still read as text.
 - Added [the output-legibility guide](docs/output-legibility.md): Karpathy's
   readability ladder and the two ASD-STE100 rules that need no licensed dictionary.
 - Added `references/dead-code-sweep.md` to the `refactoring-safely` skill: OpenAI's

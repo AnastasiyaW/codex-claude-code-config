@@ -79,7 +79,15 @@ def prose_lines(text: str) -> list[tuple[int, str]]:
     """Return (line number, text) with fenced code, inline code, URLs and HTML comments blanked."""
     out, fence = [], None
     text = HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
-    for number, line in enumerate(text.splitlines(), start=1):
+    lines = text.splitlines()
+    skip = 0
+    if lines and lines[0].strip() == "---":
+        # YAML frontmatter is metadata, not prose; without a closing line it is ordinary text
+        closing = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() in ("---", "...")), None)
+        skip = closing + 1 if closing is not None else 0
+    for number, line in enumerate(lines, start=1):
+        if number <= skip:
+            continue
         marker = FENCE.match(line)
         # CommonMark: a backtick fence's info string cannot contain a backtick
         if marker and marker.group(1)[0] == "`" and "`" in line.strip()[len(marker.group(1)):]:
@@ -162,6 +170,7 @@ def self_test() -> int:
         "short list items": "- Один два три.\n- Четыре пять шесть.",
         "heading is its own unit": "# One two three four five six seven\nOne two three four five six seven.",
         "table row is not a sentence": "| a | b | c | d | e | f | g | h | i | j | k | l | m |",
+        "frontmatter is not prose": "---\ntitle: one two three four five six seven eight nine ten eleven twelve thirteen screw\n---\nShort text.",
     }
     failed = [n for n, t in must_fail.items() if not check(t, n, rules, max_words)]
     failed += [n for n, t in must_pass.items() if check(t, n, rules, max_words)]
