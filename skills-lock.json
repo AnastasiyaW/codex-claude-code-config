@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-10-19T14:16:50+00:00",
+  "generated_at": "2026-10-24T11:08:17+00:00",
   "skill_count": 59,
-  "aggregate_hash": "sha256:83c4610d3cd23db7e96a3d0e15a42649d6f90b1810139d0a230185e3841a86e0",
+  "aggregate_hash": "sha256:d832b0734deb4eccf19ce433defd9dc9c10f362d58a5a4eddec3cb6ef5674cca",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -359,11 +359,12 @@
       ]
     },
     "development/refactoring-safely": {
-      "content_hash": "sha256:9bc6a4a20840c92aa6403cfa0326814963cae844f0a464e126eae20ae7152972",
-      "size_bytes": 107438,
-      "file_count": 8,
+      "content_hash": "sha256:3dac868ba51ff2d79a049f13a984b8782077a7a43b969c2b43ac71cba76c64aa",
+      "size_bytes": 111054,
+      "file_count": 9,
       "files": [
         "SKILL.md",
+        "references/dead-code-sweep.md",
         "references/refactoring-patterns-original.md",
         "references/refactoring-patterns/composing-methods.md",
         "references/refactoring-patterns/moving-features.md",

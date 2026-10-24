@@ -244,6 +244,20 @@ When optimizing multiple artifacts in parallel, improvement patterns (e.g. "pers
 **Execution infrastructure -- Contree:**
 Contree microVM = native implementation of the version graph: `result_image` UUID = immutable snapshot, `disposable=false` = save branch, `wait=false` x N = parallel exploration, `set_tag` = mark best parent. Full isolation, zero-cost rollback, 3-5 mutations in parallel. Self-modifying code runs in sandbox, not on host.
 
+### Harness² -- the same loop applied to the harness (Google Research, Oct 2026)
+
+Source: github.com/google-research/harness2, arxiv 2610.14224. Weights stay fixed; the loop edits harness components (system prompt, guardrails, memory, tool guidance, subagents, skills, scripts, plugins): propose edits -> probe them on the task -> compose the winners -> store adopted harnesses and lessons for the next task. Reported: one step lifted GLM-5 and Gemini 3.5 Flash on three professional-work benchmarks (WorkBuddy-Bench up to +11.5 points, JobBench +4.5, LAB +11.8 pp).
+
+Adopt the method, not the auto-patcher: its executor runs with network open and the Codex sandbox disabled, and its README describes no held-out protocol. Here a change is adopted only through `scripts/harness_improvement_pilot.py` -- frozen suite of 3-5 cases plus a held-out case, one change per candidate, mechanical receipts, strict improvement, no safety or held-out regression, git rollback, fresh-context review. Live hooks, permissions and guardrails are never pilot targets. Guide: `docs/harness-improvement-pilot.md`.
+
+## Output Legibility -- Make Agent Output Cheap to Read (2026-10)
+
+Source: Andrej Karpathy, 2 Oct 2026. Ladder, lowest rung that makes the answer obvious: (1) text in ASD-STE100 style -> (2) diagram -> (3) interactive HTML -> (4) explainer video.
+
+- Rung 1 without the licensed dictionary: **one concept = one term** (no synonyms for variety) and **short sentences** (STE: 20 words procedural, 25 descriptive). Aim for ~80% STE; never strip the reasons and risks.
+- Enforce, do not hope: `scripts/term_drift_check.py --glossary <project glossary.json>` flags synonyms (`stem*` covers Russian inflection) and long sentences; exit 0/1/2, `--self-test` with must-fail controls. Guide: `docs/output-legibility.md`.
+- Dead-code cleanup with agents (OpenAI GPT-6 maintenance guide): read-only audit with production evidence, one draft PR per removal, killswitches untouched -- `refactoring-safely` skill, `references/dead-code-sweep.md`.
+
 ## Deterministic Orchestration
 
 Core pattern: separate deterministic control flow from LLM reasoning.
