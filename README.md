@@ -38,8 +38,14 @@ Three paths depending on what you need:
 ### Option 1: Claude Code plugin (fastest)
 
 ```bash
-claude plugin install https://github.com/AnastasiyaW/codex-claude-code-config
+claude plugin marketplace add AnastasiyaW/codex-claude-code-config
+claude plugin install harness@aw-harness
 ```
+
+The plugin brings the skills, agents, workflows, the safe-default hooks, and an
+index of `rules/` injected at session start. Team distribution with pinned
+versions and auto-update, and the one-command Codex update, are in
+[docs/team-plugin.md](docs/team-plugin.md).
 
 Then in your Claude Code chat:
 

@@ -1,0 +1,44 @@
+name: plugin check
+
+# The plugin's hooks/hooks.json is generated from SAFE_DEFAULTS in
+# scripts/install_hooks.py, and every skill category must be listed in
+# .claude-plugin/plugin.json. A stale file or an unlisted category would ship
+# silently, so this job fails instead.
+#
+# Fix locally:
+#     python scripts/plugin_build.py
+
+on:
+  pull_request:
+    paths:
+      - '.claude-plugin/**'
+      - 'hooks/**'
+      - 'skills/**'
+      - 'rules/**'
+      - 'scripts/install_hooks.py'
+      - 'scripts/plugin_build.py'
+      - 'scripts/test_plugin_build.py'
+      - '.github/workflows/plugin-check.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.claude-plugin/**'
+      - 'hooks/**'
+      - 'skills/**'
+      - 'rules/**'
+      - 'scripts/install_hooks.py'
+      - 'scripts/plugin_build.py'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: hooks.json and skill categories are current
+        run: python scripts/plugin_build.py --check
+      - name: plugin tests
+        run: python scripts/test_plugin_build.py

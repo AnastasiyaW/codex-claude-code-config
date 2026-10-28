@@ -1,7 +1,7 @@
 {
-  "name": "claude-code-config",
-  "version": "3.20.0",
-  "description": "Battle-tested configuration system for Claude Code agents: architectural principles, safety hooks, composable skills, review agents, alternative comparisons, and project templates. Includes proof, handoff, feedback, UI/CLI harness, architecture, and multi-session coordination patterns.",
+  "name": "harness",
+  "displayName": "Harness (обвязка)",
+  "description": "Battle-tested configuration system for Claude Code agents: safety hooks, composable skills, review agents, workflows, and an index of the working rules injected at session start. The plugin version comes from the marketplace entry that lists it.",
   "author": {
     "name": "AnastasiyaW",
     "url": "https://github.com/AnastasiyaW"
@@ -25,5 +25,16 @@
     "account-migration",
     "pixel-art",
     "creative"
+  ],
+  "skills": [
+    "./skills/ai-ml/",
+    "./skills/architecture/",
+    "./skills/creative/",
+    "./skills/development/",
+    "./skills/frontend/",
+    "./skills/ios/",
+    "./skills/operational/",
+    "./skills/video-production/",
+    "./skills/writing/"
   ]
 }
