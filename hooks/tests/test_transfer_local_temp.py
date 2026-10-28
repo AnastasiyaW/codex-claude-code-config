@@ -23,7 +23,7 @@ BASH_TMP = "/" + TMP[0].lower() + TMP[2:] if TMP[1:2] == ":" else TMP
 
 CASES = [
     (f"cp -p rules/a.md {TMP}/bak/a.md", True, "plain local backup into TEMP"),
-    (f'cd C:/Users/x && cp -p a.md b.md "{BASH_TMP}/bak/"', True, "Git Bash spelling of TEMP"),
+    (f'cd C:/work/x && cp -p a.md b.md "{BASH_TMP}/bak/"', True, "Git Bash spelling of TEMP"),
     (f'mkdir -p "{TMP}/b" && cp -p a.md "{TMP}/b/" && cp -p c.md "{TMP}/b/"', True, "several copies, all into TEMP"),
     (f'Copy-Item "C:\\x\\a.md" "{TMP}\\b\\a.md"', True, "PowerShell positional"),
     (f'Copy-Item -Path C:\\x\\a.md -Destination "{TMP}\\b"', True, "PowerShell named destination"),
@@ -34,11 +34,11 @@ CASES = [
     (f"Copy-Item a.md -Destination:{TMP}\\b", True, "PowerShell -Destination:value"),
     (f"Copy-Item a.md -Destination: {TMP}\\b", True, "PowerShell '-Destination: value' takes the next token"),
     (f"Copy-Item -Recurse C:\\src {TMP}\\b", True, "a switch without a value does not eat the next token"),
-    (f"Copy-Item C:\\x\\a.md {TMP}\\b -Filter C:\\Users\\x", True, "a value parameter's value is not a positional"),
+    (f"Copy-Item C:\\x\\a.md {TMP}\\b -Filter C:\\work\\x", True, "a value parameter's value is not a positional"),
     (f"copy /Y a.md {TMP}\\b", True, "cmd copy with a /switch"),
     (f'cp a.md "{TMP}/b', False, "unbalanced quote cannot be parsed"),
-    ("cp -p a.md C:/Users/x/Desktop/a.md", False, "destination outside TEMP"),
-    (f"cp -p a.md {TMP}/b && cp -p a.md C:/Users/x/a.md", False, "one copy escapes TEMP"),
+    ("cp -p a.md C:/work/x/Desktop/a.md", False, "destination outside TEMP"),
+    (f"cp -p a.md {TMP}/b && cp -p a.md C:/work/x/a.md", False, "one copy escapes TEMP"),
     (f"scp host:/etc/x {TMP}/x", False, "remote source, even into TEMP"),
     (f"cp host:/etc/x {TMP}/x", False, "host:path token"),
     (f"robocopy \\\\nas\\share {TMP}\\dst", False, "UNC source"),
