@@ -253,23 +253,117 @@ def _read_blobs(shas) -> dict[str, bytes]:
     return blobs
 
 
-# Binary files that may be published once their bytes pass the regex agent. The magic
-# bytes must agree with the extension, so a text file renamed to .png with a NUL in
-# front cannot slip past the semantic reviewer as "an image".
+# Binary files that may be published once their bytes pass the regex agent: only
+# formats walked structurally to the last byte. A signature alone let GIF + zlib(secret)
+# and wOF2 + zlib(file) through, so GIF, ICO, WebP, AVIF and every font format are
+# blocked until they get such a walk.
 _PNG = b"\x89PNG\r\n\x1a\n"
-# simplification: the signature is checked, payload past it (pixels, brotli in woff2) is
-# not decoded; a format with a real decoder for its data chunks would close that.
 SAFE_BINARY_MAGIC = {
-    ".png": lambda d: d.startswith(_PNG) and png_structure_ok(d),
-    ".apng": lambda d: d.startswith(_PNG) and png_structure_ok(d),
-    ".jpg": lambda d: d.startswith(b"\xff\xd8\xff"), ".jpeg": lambda d: d.startswith(b"\xff\xd8\xff"),
-    ".gif": lambda d: d[:6] in (b"GIF87a", b"GIF89a"),
-    ".webp": lambda d: d[:4] == b"RIFF" and d[8:12] == b"WEBP",
-    ".ico": lambda d: d[:4] == b"\x00\x00\x01\x00",
-    ".avif": lambda d: d[4:12] in (b"ftypavif", b"ftypavis"),
-    ".woff": lambda d: d[:4] == b"wOFF", ".woff2": lambda d: d[:4] == b"wOF2",
-    ".ttf": lambda d: d[:4] in (b"\x00\x01\x00\x00", b"true"), ".otf": lambda d: d[:4] == b"OTTO",
+    ".png": lambda d: png_inspect(d)[0], ".apng": lambda d: png_inspect(d)[0],
+    ".jpg": lambda d: jpeg_structure_ok(d), ".jpeg": lambda d: jpeg_structure_ok(d),
 }
+_PNG_CHUNKS = {b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"cHRM", b"gAMA", b"iCCP", b"sBIT",
+               b"sRGB", b"cICP", b"mDCv", b"cLLi", b"tEXt", b"zTXt", b"iTXt", b"bKGD", b"hIST",
+               b"pHYs", b"sPLT", b"eXIf", b"tIME", b"acTL", b"fcTL", b"fdAT"}
+_INFLATE_LIMIT = 256 * 1024 * 1024
+
+
+def _inflate_whole(stream: bytes) -> bytes | None:
+    """One complete zlib stream with nothing after it, within the size limit; else None."""
+    import zlib
+    d = zlib.decompressobj()
+    try:
+        out = d.decompress(bytes(stream), _INFLATE_LIMIT)
+    except zlib.error:
+        return None
+    if d.unconsumed_tail or d.unused_data or not d.eof:
+        return None
+    return out
+
+
+def png_inspect(data: bytes) -> tuple[bool, list[str]]:
+    """Walk every chunk to IEND; inflate pixel and profile streams so their bytes are seen.
+
+    Not ok: unknown chunk type, short chunk, bytes after IEND, or a zlib stream that does
+    not decode completely (bytes hidden after the stream end).
+    """
+    if not data.startswith(_PNG):
+        return False, []
+    pos, texts, streams, frame = 8, [], [bytearray()], None
+    while pos + 12 <= len(data):
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind not in _PNG_CHUNKS or len(body) != length:
+            return False, texts
+        if kind == b"IDAT":
+            streams[0] += body
+        elif kind == b"fcTL":
+            frame = None
+        elif kind == b"fdAT":
+            if frame is None:
+                frame = bytearray()
+                streams.append(frame)
+            frame += body[4:]
+        elif kind == b"iCCP":
+            streams.append(bytearray(body.partition(b"\x00")[2][1:]))
+        elif kind == b"IEND":
+            ok = pos == len(data)
+            for stream in streams:
+                if not stream:
+                    continue
+                raw = _inflate_whole(stream)
+                if raw is None:
+                    return False, texts
+                texts += binary_strings(raw)
+            return ok, texts
+    return False, texts
+
+
+_JPEG_SEGMENTS_OK = {0xE0, 0xE1, 0xE2, 0xED, 0xEE, 0xFE}  # JFIF, Exif/XMP, ICC, IRB, Adobe, COM
+
+
+def jpeg_structure_ok(data: bytes) -> bool:
+    """Segments from SOI to EOI with nothing after; only known APPn segments."""
+    if not data.startswith(b"\xff\xd8"):
+        return False
+    pos, n = 2, len(data)
+    while pos < n:
+        if data[pos] != 0xFF:
+            return False
+        while pos < n and data[pos] == 0xFF:
+            pos += 1
+        if pos >= n:
+            return False
+        marker = data[pos]
+        pos += 1
+        if marker == 0xD9:
+            return pos == n
+        if 0xD0 <= marker <= 0xD7 or marker == 0x01:
+            continue
+        if 0xE0 <= marker <= 0xEF and marker not in _JPEG_SEGMENTS_OK:
+            return False
+        if pos + 2 > n:
+            return False
+        seglen = int.from_bytes(data[pos:pos + 2], "big")
+        if seglen < 2 or pos + seglen > n:
+            return False
+        pos += seglen
+        if marker == 0xDA:  # entropy-coded data runs to the next real marker
+            while pos < n:
+                if data[pos] == 0xFF and pos + 1 < n and data[pos + 1] != 0x00 \
+                        and not 0xD0 <= data[pos + 1] <= 0xD7:
+                    break
+                pos += 2 if data[pos] == 0xFF else 1
+    return False
+
+
+def binary_texts(data: bytes) -> list[str]:
+    """Everything readable in a binary blob: strings, PNG text chunks, inflated PNG streams."""
+    texts = binary_strings(data)
+    if data.startswith(_PNG):
+        texts += _png_text_chunks(data) + png_inspect(data)[1]
+    return texts
 
 
 def binary_strings(data: bytes) -> list[str]:
@@ -282,18 +376,6 @@ def binary_strings(data: bytes) -> list[str]:
     for chunk in (data, data[1:]):
         runs += [m.group(0).decode("utf-16-le") for m in re.finditer(rb"(?:[\x20-\x7e]\x00){6,}", chunk)]
     return runs
-
-
-def png_structure_ok(data: bytes) -> bool:
-    """Chunks walk cleanly from the signature to IEND with nothing after it."""
-    pos = 8
-    while pos + 12 <= len(data):
-        length = int.from_bytes(data[pos:pos + 4], "big")
-        kind = data[pos + 4:pos + 8]
-        pos += 12 + length
-        if kind == b"IEND":
-            return pos == len(data)
-    return False
 
 
 def _is_binary(data: bytes) -> bool:
@@ -368,33 +450,91 @@ def _diff_sections(lines: list[str], nonce: str):
             yield "header", line
 
 
-_IDENTITY = re.compile(r"^(author|committer|tagger) .*<[^>]*@([^>]*)>")
+def own_email() -> str:
+    """The pusher's configured address: the one identity e-mail that is not a finding."""
+    try:
+        r = subprocess.run(["git", "config", "--get", "user.email"], capture_output=True,
+                           stdin=subprocess.DEVNULL, env=_git_env())
+    except OSError as exc:
+        raise ScanIncomplete(f"git config could not start: {exc}") from exc
+    if r.returncode not in (0, 1):
+        raise ScanIncomplete(f"git config user.email exited {r.returncode}")
+    return r.stdout.decode("utf-8", "replace").strip()
 
 
-def _reduce_identity(line: str) -> str:
-    m = _IDENTITY.match(line)
-    return f"{m.group(1)}-domain {m.group(2)}" if m else line
+def _identity_line(line: str, own: str) -> str:
+    """Full identity (name and address) is scanned; only the pusher's own address is masked."""
+    line = re.sub(r" \d+ [+-]\d{4}$", "", line)
+    return line.replace(f"<{own}>", "<own-address>") if own else line
 
 
-def _commit_header_lines(sha: str) -> list[str]:
+_SIG_BEGIN = {"-----BEGIN PGP SIGNATURE-----": "-----END PGP SIGNATURE-----",
+              "-----BEGIN SSH SIGNATURE-----": "-----END SSH SIGNATURE-----",
+              "-----BEGIN SIGNED MESSAGE-----": "-----END SIGNED MESSAGE-----"}
+
+
+def signature_texts(lines: list[str]) -> list[str] | None:
+    """Strings of a well-formed ASCII-armoured signature body; None if it is anything else."""
+    import base64
+    import binascii
+    lines = [ln.strip() for ln in lines]
+    if len(lines) < 3 or _SIG_BEGIN.get(lines[0]) != lines[-1]:
+        return None
+    body = []
+    for ln in lines[1:-1]:
+        if not ln or re.fullmatch(r"=[A-Za-z0-9+/]{4}", ln):
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", ln):
+            return None
+        body.append(ln)
+    try:
+        decoded = base64.b64decode("".join(body), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return binary_strings(decoded)
+
+
+def _commit_header_lines(sha: str, own: str, findings: list) -> list[str]:
     """Published commit headers that %B does not show.
 
-    Extra headers (`x-note`, `mergetag`) are scanned in full. Author and committer are
-    reduced to their e-mail domain: an address is the same class as every past commit,
-    but a default identity (user at an internal host name) leaks that host.
+    Extra headers (`x-note`, `mergetag`) and full identities are scanned. A signature is
+    accepted only as well-formed armour, and the strings of its decoded body are scanned.
     """
     raw = git_bytes(["cat-file", "commit", sha]).decode("utf-8", "replace")
     header = raw.split("\n\n", 1)[0].split("\n")
-    out, in_sig = [], False
+    out: list[str] = []
+    sig: list[str] | None = None
+
+    def _close_sig() -> None:
+        texts = signature_texts(sig)
+        if texts is None:
+            findings.append(Finding(f"<commit-header {sha}>", 0, "structure:malformed-signature",
+                                    (sig[0] if sig else "")[:40], "secret"))
+            out.extend(sig)
+        else:
+            # Armour lines are base64 by syntax, yet `AKIA...` or `/home/x/` are valid
+            # base64 too: the raw lines are scanned as well as the decoded strings.
+            out.extend(sig[1:-1] + texts)
+
     for line in header:
-        if line.startswith(" "):
-            if not in_sig:
-                out.append(line)
+        if line.startswith(" ") and sig is not None:
+            sig.append(line[1:])
             continue
-        in_sig = line.startswith("gpgsig")
-        if in_sig or line.startswith(("tree ", "parent ", "encoding ")):
+        if sig is not None:
+            _close_sig()
+            sig = None
+        if line.startswith(("gpgsig ", "gpgsig-sha256 ")):
+            sig = [line.split(" ", 1)[1]]
             continue
-        out.append(_reduce_identity(line))  # a malformed identity is scanned whole
+        if line.startswith(("tree ", "parent ")):
+            continue
+        if line.startswith(("author ", "committer ")):
+            line = _identity_line(line, own)
+        elif own:
+            line = line.replace(f"<{own}>", "<own-address>")
+        out.append(line)
+    if sig is not None:
+        _close_sig()
     return out
 
 
@@ -417,10 +557,17 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
     if not tips:
         return PushMaterial("", [])
 
+    # The remote ref names are published even when no object is new.
+    findings: list[Finding] = []
+    ref_names = [ref for _, ref in tips]
+    for ref in ref_names:
+        for pattern, preview, kind in scan_text(ref):
+            findings.append(Finding(f"<ref name {ref}>", 0, pattern, preview, kind))
+    doc: list[str] = _message_section("pushed ref names", ref_names)
+
     advertised = remote_advertised_shas(remote)
     have = set(_object_info(advertised))  # only locally present ids can bound a walk
-    doc: list[str] = []
-    findings: list[Finding] = []
+    own = own_email()
     commit_tips: list[str] = []
     for sha, ref in tips:
         obj = sha
@@ -436,7 +583,8 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
                 head, _, body = text.partition("\n\n")
                 header = head.split("\n")
                 doc += _message_section(f"tag-object {obj} {ref}",
-                                        [_reduce_identity(ln) for ln in header] + body.split("\n"))
+                                        [_identity_line(ln, own) if ln.startswith("tagger ") else ln
+                                         for ln in header] + body.split("\n"))
                 target = next((ln.split()[1] for ln in header if ln.startswith("object ")), None)
                 if not target:
                     raise ScanIncomplete(f"tag object {obj} has no target")
@@ -454,7 +602,7 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
         revs_only = ("\n".join(commit_tips + ["^" + s for s in sorted(have)]) + "\n").encode()
         commits = git_bytes(["rev-list", "--stdin"], revs_only).decode().split()
         for sha in commits:
-            doc += _message_section(f"commit-header {sha}", _commit_header_lines(sha))
+            doc += _message_section(f"commit-header {sha}", _commit_header_lines(sha, own, findings))
         import secrets as _secrets
         nonce = "pre-push-" + _secrets.token_hex(16)
         revs = ("\n".join(commit_tips + ["^" + s for s in sorted(have)]) + "\n").encode()
@@ -488,10 +636,7 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
         for sha, data in binary.items():
             paths = sorted(set(blob_paths[sha]))
             hint = ", ".join(paths)
-            strings = binary_strings(data)
-            texts = [data.decode("latin-1"), "\n".join(strings)]
-            if data.startswith(_PNG):
-                texts += _png_text_chunks(data)
+            texts = [data.decode("latin-1"), "\n".join(binary_texts(data))]
             for text in texts:
                 for f in agent_a_regex("\n".join("+" + ln for ln in text.split("\n"))):
                     if f.kind == "pii" and all(_is_exempt(p) for p in paths):
@@ -501,7 +646,7 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
                 ext = os.path.splitext(p)[1].lower()
                 magic = SAFE_BINARY_MAGIC.get(ext)
                 if magic is None or not magic(data):
-                    findings.append(Finding(p, 0, "binary:not-an-allowed-image-or-font",
+                    findings.append(Finding(p, 0, "binary:not-a-structurally-valid-png-or-jpeg",
                                             f"{len(data)} bytes, blob {sha[:12]}", "secret"))
 
         # Pass 2: the document both agents read. Messages become added lines of a
@@ -527,7 +672,7 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
                         skipping = True
                         doc.append(line)
                         doc += _message_section(f"binary-strings {new} ({len(binary[new])} bytes)",
-                                                binary_strings(binary[new]))
+                                                binary_texts(binary[new]))
                         continue
                 doc.append(line)
             elif not skipping:
@@ -669,17 +814,18 @@ def _is_exempt(path: str) -> bool:
 
 
 # Personal data patterns (for public repos)
-_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_OCTET = r"0*(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"  # leading zeros: 192.168.001.010
 PII_PATTERNS = {
     "ssh_private_paths": r"(~/\.ssh/id_[a-z0-9_]+(?!\.pub))",
     # Windows homes also in JSON-escaped (\\) and double-escaped (\\\\) spellings and with /.
-    "home_user_path": (r"(/home/[a-z0-9_-]+/|/Users/[a-zA-Z0-9_-]+/"
+    # No trailing separator needed, any case: `cd /home/alice`, `/Users/Bob`, `C:\\Users\\Bob`.
+    "home_user_path": (r"(/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+"
                        r"|\b[A-Za-z]:(?:\\{1,4}|/)Users(?:\\{1,4}|/)[A-Za-z0-9_.-]+)"),
     "ssh_ports_internal": r"\bssh\s+.*-p\s+(2222|4000[0-7])\b",
     "email_address": r"\b([A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b",
     # RFC 1918 + RFC 6598 carrier-grade NAT (100.64/10, used by tailnets).
-    "private_ipv4": (rf"(?<![\d.])((?:10\.{_OCTET}|172\.(?:1[6-9]|2\d|3[01])|192\.168"
-                     rf"|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))(?:\.{_OCTET}){{2}})(?!\.?\d)"),
+    "private_ipv4": (rf"(?<![\d.])((?:0*10\.{_OCTET}|0*172\.0*(?:1[6-9]|2\d|3[01])|0*192\.0*168"
+                     rf"|0*100\.0*(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))(?:\.{_OCTET}){{2}})(?!\.?\d)"),
 }
 
 _PRIVATE_NAMES = _load_private_names()
@@ -732,17 +878,47 @@ def _compile_checks():
 _CHECKS = _compile_checks()
 
 
+# Look-alike letters folded to Latin after NFKC (which already maps full-width forms such
+# as U+FF20 to "@"): Cyrillic and Greek letters that render like Latin ones.
+_CONFUSABLES = str.maketrans(
+    "\u0430\u0435\u043e\u0440\u0441\u0443\u0445\u0455\u0456\u0458\u0501\u04bb\u04cf\u051b\u051d\u043a"
+    "\u0410\u0412\u0415\u041a\u041c\u041d\u041e\u0420\u0421\u0422\u0425\u0405\u0406\u0408\u04ae"
+    "\u03bf\u03b1\u03bd\u03c1\u0391\u0392\u0395\u0396\u0397\u0399\u039a\u039c\u039d\u039f\u03a1\u03a4\u03a5\u03a7",
+    "aeopcyxsijdhlqwk"
+    "ABEKMHOPCTXSIJY"
+    "oavpABEZHIKMNOPTYX")
+
+
+def normalized_variant(text: str) -> str | None:
+    """NFKC plus confusable folding, or None when that changes nothing."""
+    if text.isascii():
+        return None
+    import unicodedata
+    folded = unicodedata.normalize("NFKC", text).translate(_CONFUSABLES)
+    return folded if folded != text else None
+
+
 def scan_text(text: str) -> list[tuple[str, str, str]]:
-    """(pattern, preview, kind) for every check that fires on `text`."""
+    """(pattern, preview, kind) for every check that fires on `text` or its normalized form."""
     hits = []
+    variants = [text]
+    folded = normalized_variant(text)
+    if folded is not None:
+        variants.append(folded)
     for name, rx, kind in _CHECKS:
-        for m in rx.finditer(text):
-            val = m.group(1) if m.groups() else m.group(0)
-            if name == "pii:email_address" and _email_allowed(val):
-                continue
-            preview = (val[:6] + "...") if kind == "secret" and len(val) > 6 else val[:40]
+        found = None
+        for variant in variants:
+            for m in rx.finditer(variant):
+                val = m.group(1) if m.groups() else m.group(0)
+                if name == "pii:email_address" and _email_allowed(val):
+                    continue
+                found = val
+                break
+            if found is not None:
+                break
+        if found is not None:
+            preview = (found[:6] + "...") if kind == "secret" and len(found) > 6 else found[:40]
             hits.append((name, preview, kind))
-            break
     pem = _base64_pem(text)
     if pem:
         hits.append(("base64_pem_block", pem[:6] + "...", "secret"))
@@ -1232,8 +1408,8 @@ def main() -> int:
         for f in a_findings[:20]:
             print(f"  [{f.kind:6s}] {f.pattern:28s} in {f.file_hint}:{f.line} → {f.preview}", file=sys.stderr)
         if any(f.pattern.startswith("binary:") for f in a_findings):
-            print("[pre-push] binary files other than images/fonts (by extension AND magic bytes) "
-                  "are not published to a public repo; listed above.", file=sys.stderr)
+            print("[pre-push] only PNG/APNG and JPEG files that parse to their last byte may be "
+                  "published to a public repo; the binary files listed above are blocked.", file=sys.stderr)
         print("\n[pre-push] rotate leaked values, redact, retry.", file=sys.stderr)
         return 1
 
@@ -1439,8 +1615,9 @@ def self_test() -> int:
             sha1 = run(["git", "rev-parse", "HEAD"]).stdout.strip()
             run(["git", "push", "-q", bare, "main"])
 
-            check("published sha on a new ref yields nothing",
-                  collect_push_material([f"x {sha1} refs/heads/tmp {ZERO_SHA}"], bare).text, "")
+            check("published sha on a new ref yields only its ref name",
+                  "diff --git" in collect_push_material([f"x {sha1} refs/heads/tmp {ZERO_SHA}"], bare).text,
+                  False)
 
             with open("b.txt", "w", encoding="utf-8") as fh:
                 fh.write("two\n")

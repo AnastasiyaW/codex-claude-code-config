@@ -23,6 +23,13 @@ An executed audit found pushes that reached a public repository unscanned.
   `gh[oprsu]_` tokens, escaped Windows home paths and base64-wrapped PEM; marker
   exemptions now match the full repo-relative path only.
 
+Independent re-reviews closed further exit-0 classes: remote ref names, commit
+headers and signatures (armour validated, raw and decoded body scanned), full
+author/committer/tagger identities (only the pusher's own address is masked),
+`refs/replace`, `insteadOf` on ls-remote, and NFKC/look-alike folding. Only PNG/APNG
+and JPEG that parse to their last byte may be published (PNG streams are inflated
+and scanned); GIF, ICO, WebP, AVIF and fonts are blocked.
+
 Fixture regression: `hooks/tests/test_pre_push_scan_hardening.py`.
 
 ---

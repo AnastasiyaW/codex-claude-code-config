@@ -39,6 +39,11 @@ HOME = "/" + "home/" + "fixtureuser/project"       # developer home path shape
 SAFE = '{"verdict": "SAFE", "reason": "fixture"}'
 
 
+# SOI, APP0 JFIF, SOS with two bytes of entropy data, EOI.
+JPEG = (b"\xff\xd8" + b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        + b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00" + b"\x12\x34" + b"\xff\xd9")
+
+
 def png(*chunks: bytes) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
@@ -200,11 +205,13 @@ class ScanHardeningTests(unittest.TestCase):
         self.repo.git("update-ref", "refs/remotes/origin/main", tip)  # e.g. after set-url
         self.assertBlocked(self.scan([f"refs/heads/main {tip} refs/heads/main {ZERO}"]))
 
-    def test_item2_new_ref_on_published_history_passes_without_review(self) -> None:
+    def test_item2_new_ref_on_published_history_reviews_only_the_ref_name(self) -> None:
         self.repo.commit({"cfg.txt": f"{KEY}\n"}, "root")  # already public on the remote
         tip = self.repo.publish()
         self.assertPassed(self.scan([f"refs/heads/copy {tip} refs/heads/copy {ZERO}"]))
-        self.assertEqual([], self.reviewed)
+        self.assertEqual(1, len(self.reviewed))
+        self.assertIn("refs/heads/copy", self.reviewed[0])
+        self.assertNotIn(KEY, self.reviewed[0])
 
     # --- item 3: external diff, injected config and textconv cannot empty it ----
 
@@ -240,11 +247,11 @@ class ScanHardeningTests(unittest.TestCase):
         self.repo.commit({"logo.png": png((b"zTXt", b"Comment\x00\x00" + zlib.compress(KEY.encode())))})
         self.assertBlocked(self.scan(self.push_main(base)))
 
-    def test_item4_plain_png_and_font_pass(self) -> None:
+    def test_item4_plain_png_and_jpeg_pass(self) -> None:
         base = self.repo.commit({"a.txt": "base\n"})
         self.repo.publish()
         self.repo.commit({"logo.png": png((b"tEXt", b"Software\x00fixture")),
-                          "fonts/a.woff2": b"wOF2\x00\x01" + bytes(64)})
+                          "photo.jpg": JPEG})
         self.assertPassed(self.scan(self.push_main(base)))
 
     def test_item4_unknown_binary_blocks_and_is_named(self) -> None:
@@ -445,6 +452,96 @@ class ScanHardeningTests(unittest.TestCase):
         self.repo.commit({"logo.png": png((b"tEXt", b"Comment\x00" + marker.encode()))})
         self.assertPassed(self.scan(self.push_main(base)))
         self.assertTrue(any(marker in p for p in self.reviewed))
+
+    # --- third review round (re-review of 808432c) --------------------------------
+
+    def test_review3_remote_ref_names_are_scanned(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        ip = "10." + "20.30.40"
+        for ref in (f"refs/heads/{KEY}", f"refs/heads/deploy-{ip}", f"refs/tags/{KEY}"):
+            with self.subTest(ref):
+                self.assertBlocked(self.scan([f"refs/heads/main {base} {ref} {ZERO}"]))
+
+    def test_review3_only_structurally_valid_png_and_jpeg_pass(self) -> None:
+        blocked = {
+            "logo.gif": b"GIF89a\x01\x00\x01\x00\x00\x00\x00" + zlib.compress(KEY.encode()),
+            "f.woff2": b"wOF2\x00\x01\x00\x00" + zlib.compress(b"any file"),
+            "f.ttf": b"\x00\x01\x00\x00" + bytes(32),
+            "f.ico": b"\x00\x00\x01\x00" + bytes(32),
+            "p.jpg": JPEG + b"trailing",
+            "q.jpg": JPEG[:2] + b"\xff\xef\x00\x06" + b"\x00" * 4 + JPEG[2:],  # APP15 segment
+            "hidden.png": png((b"zzZz", zlib.compress(b"payload"))),       # unknown chunk
+            "cut.png": png()[:-12],                                          # no IEND
+        }
+        for name, data in blocked.items():
+            with self.subTest(name):
+                self.tearDown()
+                self.setUp()
+                base = self.repo.commit({"a.txt": "base\n"})
+                self.repo.publish()
+                self.repo.commit({name: data})
+                code, out = self.scan(self.push_main(base))
+                self.assertEqual(1, code, out)
+                self.assertIn(name, out)
+
+    def test_review3_key_in_png_pixel_stream_blocks(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        sig_ihdr = png()[:8 + 25]
+        body = zlib.compress(b"\x00\x00" + KEY.encode())
+        idat = struct.pack(">I", len(body)) + b"IDAT" + body + struct.pack(">I", zlib.crc32(b"IDAT" + body))
+        iend = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", zlib.crc32(b"IEND"))
+        self.repo.commit({"logo.png": sig_ihdr + idat + iend})
+        self.assertBlocked(self.scan(self.push_main(base)))
+
+    def raw_commit(self, base: str, header_extra: str, author: str = "a <a@example.com>") -> str:
+        tree = self.repo.git("rev-parse", "HEAD^{tree}")
+        raw = (f"tree {tree}\nparent {base}\nauthor {author} 1700000000 +0000\n"
+               f"committer a <a@example.com> 1700000000 +0000\n{header_extra}\nmsg\n")
+        path = self.repo.root / "raw-commit.txt"
+        path.write_text(raw, encoding="utf-8", newline="\n")
+        return self.repo.git("hash-object", "-t", "commit", "-w", str(path))
+
+    def test_review3_signature_header_is_scanned_and_validated(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        begin, end = "-----BEGIN PGP " + "SIGNATURE-----", "-----END PGP " + "SIGNATURE-----"
+        for label, body in (("key in armour", f" {KEY}\n"), ("home in armour", f" {HOME}/\n"),
+                            ("not base64", " this is not armour\n")):
+            with self.subTest(label):
+                c = self.raw_commit(base, f"gpgsig {begin}\n{body} {end}\n")
+                self.assertBlocked(self.scan([f"refs/heads/main {c} refs/heads/main {base}"]))
+        good = base64.b64encode(b"\x88\x5e\x04\x00signature bytes").decode()
+        c = self.raw_commit(base, f"gpgsig {begin}\n \n {good}\n {end}\n")
+        self.assertPassed(self.scan([f"refs/heads/main {c} refs/heads/main {base}"]))
+
+    def test_review3_author_name_is_scanned(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        name = "ops" + "@" + "build-host" + ".internal " + "10." + "1.2.3"
+        c = self.raw_commit(base, "", author=f"{name} <a@example.com>")
+        self.assertBlocked(self.scan([f"refs/heads/main {c} refs/heads/main {base}"]))
+
+    def test_review3_own_address_is_not_a_finding(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        own = "owner" + "@" + "mailfixture" + ".net"
+        self.repo.git("config", "user.email", own)
+        self.repo.commit({"b.txt": "b\n"})
+        self.assertPassed(self.scan(self.push_main(base)))
+        self.assertFalse(any(own in p for p in self.reviewed))
+
+    def test_review3_regex_widening(self) -> None:
+        at, fw_at, cyr_a = "@", "＠", "а"
+        for leak in ("cd " + "/" + "home/alice", "open " + "/" + "Users/Bob", "C" + ":" + "\\Users\\Bob",
+                     "host 192." + "168.001.010", "mail alice" + at + "gm" + cyr_a + "il.com",
+                     "mail alice" + fw_at + "gmail.com"):
+            with self.subTest(leak):
+                self.assertTrue(self.regex_hits(leak))
+        for fine in ("cd /usr/local", "version 1.2.3.4", "see docs" + at + "example.com"):
+            with self.subTest(fine):
+                self.assertFalse(self.regex_hits(fine))
 
     def test_control_clean_change_with_ordinary_readme_passes(self) -> None:
         base = self.repo.commit({"a.txt": "base\n"})
