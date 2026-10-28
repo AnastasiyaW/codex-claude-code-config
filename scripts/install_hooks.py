@@ -175,7 +175,7 @@ CODEX_NATIVE_EXTRAS = [
 ]
 
 # Shared utilities (not hooks themselves, but imported by installed hooks)
-SHARED = ["safety_common.py", "skill_contract_state.py"]
+SHARED = ["safety_common.py", "skill_contract_state.py", "handoff_sidecar.py", "problems_md.py"]
 
 # One local, unpushed implementation used a narrow batch-only name.  Retire its
 # registrations when the generic task guard is installed, while settings.json

@@ -11,7 +11,8 @@
       cwd, cliSessionId, lastActivityAt, isArchived
   ~/.claude/projects/*/<cliSessionId>.jsonl              -- переписка агента
   <cwd>/.claude/handoffs/**.md, ~/.claude/handoffs/**.md -- хендофы; агенту принадлежит
-      файл, в имени которого первые 8 знаков cliSessionId или в тексте полный id
+      файл, в имени которого первые 8 знаков cliSessionId или в тексте полный id;
+      соседний <хендоф>.json (handoff_sidecar.py) важнее текста: session_id, project, статус
 
 Номера стабильны: агент сохраняет свой номер между пересборками (roster.json), новые
 получают следующий свободный. Архивированные окна в реестр не попадают (--all — попадают).
@@ -32,6 +33,9 @@ import os
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+from handoff_sidecar import read_valid_sidecar  # noqa: E402
 
 HOME = Path.home()
 APPDATA = Path(os.environ.get("APPDATA", HOME / "AppData" / "Roaming"))
@@ -185,8 +189,8 @@ def handoff_dirs(cwds: set[str]) -> list[Path]:
     return [d for d in dirs if d.is_dir()]
 
 
-def index_handoffs(dirs: list[Path], out_dir: Path, since: dt.datetime) -> list[tuple[Path, str]]:
-    """(путь, начало текста) хендофов. Текст читаем только у файлов не старше `since`:
+def index_handoffs(dirs: list[Path], out_dir: Path, since: dt.datetime) -> list[tuple[Path, str, dict | None]]:
+    """(путь, начало текста, поля из <хендоф>.json или None) хендофов. Текст читаем только у файлов не старше `since`:
     тело нужно для поиска по полному id, а старый хендоф текущему агенту не принадлежит
     (имя с коротким id всё равно сверяется у всех)."""
     files, seen = [], set()
@@ -200,19 +204,21 @@ def index_handoffs(dirs: list[Path], out_dir: Path, since: dt.datetime) -> list[
             if key in seen:
                 continue
             seen.add(key)
-            head = ""
+            head, sidecar = "", None
             try:
                 if dt.datetime.fromtimestamp(p.stat().st_mtime) >= since:
                     head = p.read_text(encoding="utf-8", errors="replace")[:4000]
+                    sidecar = read_valid_sidecar(p)
             except OSError:
                 continue
-            files.append((p, head))
+            files.append((p, head, sidecar))
     return files
 
 
-def match_handoffs(s: dict, files: list[tuple[Path, str]]) -> list[Path]:
+def match_handoffs(s: dict, files: list[tuple[Path, str, dict | None]]) -> list[Path]:
     cli, short, sid = s["cli"], s["cli"][:8], s["sessionId"]
-    hits = [p for p, head in files if short in p.name or cli in head or sid in head]
+    hits = [p for p, head, sc in files
+            if (sc and sc["session_id"] in (cli, short, sid)) or short in p.name or cli in head or sid in head]
     return sorted(hits, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
@@ -238,6 +244,9 @@ def project_of(s: dict, marks: dict[str, str]) -> str | None:
     рабочая папка, если это не общий хаб. Иначе проекта нет и агент не группируется."""
     if s["cli"][:8] in marks:
         return marks[s["cli"][:8]] or None
+    sidecar = read_valid_sidecar(s["handoffs"][0]) if s["handoffs"] else None
+    if sidecar:
+        return sidecar["project"]
     if s["handoffs"] and s["handoffs"][0].parent.name != "handoffs":
         return s["handoffs"][0].parent.name
     cwd = Path(re.sub(r"[\\/]\.claude[\\/]worktrees[\\/][^\\/]+$", "", s["cwd"])) if s["cwd"] else None
@@ -295,8 +304,14 @@ def agent_block(s: dict) -> list[str]:
         f"последняя активность {_fmt(s['lastActivity'])}, окно `{s['sessionId']}`.",
         # полный путь отдельной строкой: новый чат открывает хендоф по нему, не ищет по папкам
         f"Хендоф: {s['handoffs'][0]}" if s["handoffs"] else "Хендоф: нет",
-        "",
     ]
+    sc = s.get("sidecar")
+    if sc:
+        audit = sc["closure_audit"]
+        open_items = "; ".join(f"{u['item']} → {u['tracker']}" for u in audit["unfinished"]) or "нет"
+        lines.append(f"Поля хендофа (.json): статус {sc['status']}, закрытие {audit['primary_status']}, "
+                     f"незакрытое: {open_items}, следующий шаг: {sc['next_step']}")
+    lines.append("")
     since = None
     if s["handoffs"]:
         h = s["handoffs"][0]
@@ -464,6 +479,7 @@ def build(args) -> int:
     marks = load_marks(out)
     for s in sessions:
         s["handoffs"] = match_handoffs(s, files)
+        s["sidecar"] = read_valid_sidecar(s["handoffs"][0]) if s["handoffs"] else None
         s["handoff_time"] = dt.datetime.fromtimestamp(s["handoffs"][0].stat().st_mtime) if s["handoffs"] else None
         s["stale"] = bool(s["handoff_time"] and s["lastActivity"]
                           and s["lastActivity"] - s["handoff_time"] > STALE_SLACK)
@@ -497,6 +513,7 @@ def build(args) -> int:
         "cwd": s["cwd"], "branch": (s["tr"] or {}).get("branch", ""), "lastActivity": _fmt(s["lastActivity"]),
         "archived": s["archived"], "transcript": s["transcript"], "brief": s["brief"],
         "handoffs": [str(p) for p in s["handoffs"][:3]], "handoffStale": s["stale"],
+        "handoffFields": s["sidecar"],
         "project": s["project"], "replaces": s["replaces"],
     } for s in sessions], "projects": {
         name: {"agents": [s["n"] for s in m],

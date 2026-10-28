@@ -20,12 +20,23 @@ Bypass:
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from safety_common import allow, block, bypass, log, read_event  # noqa: E402
+from handoff_sidecar import (  # noqa: E402
+    BAD_EVASION_RE,
+    PRIMARY_STATUS_RE,
+    TRACKER_RE,
+    check_consistency,
+    closure_section,
+    load_sidecar,
+    validate_sidecar,
+)
+from problems_md import is_closed, parse_entries  # noqa: E402
 
 
 REQUIRED_LABELS = {
@@ -35,27 +46,9 @@ REQUIRED_LABELS = {
     "Unfinished related tasks": re.compile(r"^\s*[-*]?\s*\**Unfinished related tasks\**\s*:", re.I | re.M),
     "Why not continuing now": re.compile(r"^\s*[-*]?\s*\**Why not continuing now\**\s*:", re.I | re.M),
 }
-
-HEADING_RE = re.compile(r"^##\s+(Closure Audit|Аудит закрытия)\s*$", re.I | re.M)
-NEXT_HEADING_RE = re.compile(r"^##\s+", re.M)
-PRIMARY_STATUS_RE = re.compile(
-    r"^\s*[-*]?\s*\**Primary request status\**\s*:\s*"
-    r"(COMPLETE|BLOCKED-[A-Z0-9_-]+|HANDOFF-NEAR-CONTEXT-LIMIT|USER-REDIRECTED)\b",
-    re.I | re.M,
-)
 UNFINISHED_RE = re.compile(
     r"^\s*[-*]?\s*\**Unfinished related tasks\**\s*:\s*(?P<value>.+)$",
     re.I | re.M,
-)
-TRACKER_RE = re.compile(
-    r"\b(PROBLEMS\.md|feature_list\.json|issue\s*#?\d+|ticket\s*#?\d+|"
-    r"backlog|task[-_ ]?inbox|DECISIONS\.md|BLOCKED-[A-Z0-9_-]+)\b",
-    re.I,
-)
-BAD_EVASION_RE = re.compile(
-    r"\b(todo later|later maybe|next session maybe|not checked|unknown|tbd|"
-    r"unclear|probably done|seems done|should be fine)\b",
-    re.I,
 )
 
 
@@ -80,6 +73,11 @@ def is_handoff_path(path: str) -> bool:
     if p.endswith("/.claude/handoff.md") or p.endswith(".claude/handoff.md"):
         return True
     return "/.claude/handoffs/" in p
+
+
+def is_sidecar_path(path: str) -> bool:
+    p = _norm(path)
+    return p.lower().endswith(".json") and is_handoff_path(p[:-5] + ".md")
 
 
 def apply_edit(original: str, tool_name: str, tool_input: dict) -> str | None:
@@ -118,16 +116,6 @@ def apply_edit(original: str, tool_name: str, tool_input: dict) -> str | None:
     return content
 
 
-def closure_section(content: str) -> str | None:
-    match = HEADING_RE.search(content)
-    if not match:
-        return None
-    start = match.start()
-    next_match = NEXT_HEADING_RE.search(content, match.end())
-    end = next_match.start() if next_match else len(content)
-    return content[start:end]
-
-
 def validate_closure_audit(content: str) -> list[str]:
     errors: list[str] = []
     section = closure_section(content)
@@ -164,14 +152,7 @@ def validate_closure_audit(content: str) -> list[str]:
     return errors
 
 
-# Heading line and identifier are matched separately: folded into one pattern, the
-# optional id group let the lazy prefix swallow the line and every entry came back
-# without an id, so the check silently found nothing. Caught by testing it, not by
-# reading it.
-PROBLEM_HEADING_RE = re.compile(r"^##\s+(?P<date>\d{4}-\d{2}-\d{2})[^\n]*$", re.M)
 TICKET_ID_RE = re.compile(r"\b[A-Z][A-Z0-9]{2,}(?:-[A-Z0-9]+)+\b")
-STATUS_RE = re.compile(r"^\*\*Status\*\*:\s*(?P<value>.+)$", re.M)
-CLOSED_WORDS = re.compile(r"\b(RESOLVED|CLOSED|FIXED|DONE|NOT[_ ]A[_ ]BUG|WONTFIX|ОТОЗВАНО)\b", re.I)
 
 
 def find_problems_file(handoff_path: Path) -> Path | None:
@@ -198,20 +179,14 @@ def tickets_opened_today(problems_text: str, today: str) -> list[tuple[str, str,
     label became the new wording. This checks the fact, not the label.
     """
     out: list[tuple[str, str, str]] = []
-    heads = list(PROBLEM_HEADING_RE.finditer(problems_text))
-    for i, match in enumerate(heads):
-        if match.group("date") != today:
+    for entry in parse_entries(problems_text):
+        if entry["date"] != today or is_closed(entry["status_line"]):
             continue
-        end = heads[i + 1].start() if i + 1 < len(heads) else len(problems_text)
-        body = problems_text[match.start():end]
-        status_match = STATUS_RE.search(body)
-        status = status_match.group("value").strip() if status_match else "NO STATUS"
-        if CLOSED_WORDS.search(status):
-            continue
-        heading = match.group(0).lstrip("# ").strip()
+        heading = entry["heading"]
         found = TICKET_ID_RE.search(heading)
         if not found:
             continue  # no stable identifier to match on; not blocked on fuzzy text
+        status = entry["status_line"] or "NO STATUS"
         out.append((found.group(0), status.split()[0][:40], heading[:90]))
     return out
 
@@ -256,6 +231,27 @@ def validate_todays_open_tickets(content: str, handoff_path: Path) -> list[str]:
     ]
 
 
+def sidecar_errors(text: str, handoff_md: Path) -> list[str]:
+    """Errors of a sidecar about to be written, checked against its handoff if present."""
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        return [f"sidecar is not valid JSON: {exc}"]
+    errors = validate_sidecar(data)
+    try:
+        errors += check_consistency(data, handoff_md.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        pass  # sidecar first, handoff next: the handoff write checks the pair
+    return errors
+
+
+def sibling_sidecar_errors(content: str, handoff_md: Path) -> list[str]:
+    data, errors = load_sidecar(handoff_md)
+    if data is not None:
+        errors += check_consistency(data, content)
+    return [f"sidecar {handoff_md.with_suffix('.json').name}: {e}" for e in errors]
+
+
 def main() -> None:
     event = read_event()
     tool_name = str(event.get("tool_name", ""))
@@ -264,7 +260,8 @@ def main() -> None:
 
     tool_input = event.get("tool_input", {}) or {}
     path = _tool_path(tool_input)
-    if not path or not is_handoff_path(path):
+    is_sidecar = bool(path) and is_sidecar_path(path)
+    if not path or not (is_sidecar or is_handoff_path(path)):
         allow()
 
     target = Path(path)
@@ -291,8 +288,22 @@ def main() -> None:
         log("WARN", "handoff_closure_audit", "bypass", "handoff", path)
         allow()
 
+    if is_sidecar:
+        errors = sidecar_errors(content, target.with_suffix(".md"))
+        if not errors:
+            allow()
+        log("BLOCK", "handoff_closure_audit", "invalid_sidecar", "handoff", path)
+        block(
+            f"Handoff sidecar write blocked for {path}.\n\nProblems:\n"
+            + "\n".join(f"  - {err}" for err in errors)
+            + "\n\nWrite it with the helper instead of by hand:\n"
+            "python hooks/handoff_sidecar.py write <handoff.md> --primary <STATUS> "
+            "--acceptance ... --related ... --why ... --next ... [--unfinished ITEM TRACKER]"
+        )
+
     errors = validate_closure_audit(content)
     errors += validate_todays_open_tickets(content, target)
+    errors += sibling_sidecar_errors(content, target)
     if not errors:
         allow()
 
