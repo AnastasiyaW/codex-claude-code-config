@@ -154,7 +154,7 @@ if (!audit || audit.count !== confirmed.length || !idsMatch)
 проверка что косяки найдены и правильно оформлены.
 
 ```
-~/.claude/skills/workflow-orchestration/fixtures/
+<skill folder>/fixtures/   # proposed layout, not created yet
   deep-review/
     buggy-repo/          # маленький репо с N намеренными косяками
     expected.json        # {findings:[{file,line,kind}], min_recall:0.8}

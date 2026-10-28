@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,8 +37,29 @@ IGNORED_DIRECTORY_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache"}
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
 
 
+def _git_ignored(paths: list[Path], cwd: Path) -> set[Path]:
+    """Files git ignores are not part of the repository; hashing them made the lock differ between
+    a working copy holding a local-only file and a clean checkout (and named that file publicly)."""
+    if not paths:
+        return set()
+    try:
+        result = subprocess.run(["git", "check-ignore", "--stdin", "-z"], cwd=cwd,
+                                input="\0".join(str(p) for p in paths).encode("utf-8"), capture_output=True)
+    except OSError:
+        return set()
+    if result.returncode not in (0, 1):  # 128: not a repository
+        return set()
+    return {Path(item.decode("utf-8")) for item in result.stdout.split(b"\0") if item}
+
+
 def _walk_skill(skill_dir: Path) -> list[Path]:
     """All files that contribute to a skill's identity."""
+    files = _walk_skill_all(skill_dir)
+    ignored = _git_ignored(files, skill_dir)
+    return [fp for fp in files if fp not in ignored]
+
+
+def _walk_skill_all(skill_dir: Path) -> list[Path]:
     files: list[Path] = []
     for fname in SKILL_FILES:
         fp = skill_dir / fname

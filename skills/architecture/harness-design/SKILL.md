@@ -24,7 +24,8 @@ model: opus
 - OpenClaw-RL paper (arxiv 2603.10165) — personal agent verification
 - DenisSergeevitch/repo-task-proof-loop — execution protocol with durable proof
 
-См. также: `references/proof-loop-research.md` — детали paper + repo mapping
+Детали paper и соответствие репозиторию — в первоисточниках: https://arxiv.org/abs/2603.10165
+и https://github.com/DenisSergeevitch/repo-task-proof-loop
 
 ## Когда нужен harness, а когда хватит solo agent
 

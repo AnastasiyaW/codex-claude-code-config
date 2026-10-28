@@ -24,7 +24,7 @@ This is our zero-dependency port of [Aider's repo-map](https://aider.chat/docs/r
 ## Usage
 
 ```bash
-python scripts/repo_map.py [ROOT] [--budget-tokens N] [--top N] [--json] [--no-signature] [--max-files N]
+python "${CLAUDE_SKILL_DIR}/scripts/repo_map.py" [ROOT] [--budget-tokens N] [--top N] [--json] [--no-signature] [--max-files N]
 ```
 
 - `ROOT` — repo root (default: cwd). If it's a git repo, only **tracked files** are
@@ -45,13 +45,13 @@ and `--max-files` can limit input. Never diagnose parser coverage from a capped 
 
 ```bash
 # Quick orientation in a new repo
-python scripts/repo_map.py . --budget-tokens 512
+python "${CLAUDE_SKILL_DIR}/scripts/repo_map.py" . --budget-tokens 512
 
 # Feed a fan-out: JSON map of the most important 40 symbols
-python scripts/repo_map.py /path/to/repo --top 40 --json > repo_map.json
+python "${CLAUDE_SKILL_DIR}/scripts/repo_map.py" /path/to/repo --top 40 --json > repo_map.json
 
 # Focus a subdirectory (a single layer/service)
-python scripts/repo_map.py /path/to/repo/services/auth --budget-tokens 800
+python "${CLAUDE_SKILL_DIR}/scripts/repo_map.py" /path/to/repo/services/auth --budget-tokens 800
 ```
 
 ## How ranking works

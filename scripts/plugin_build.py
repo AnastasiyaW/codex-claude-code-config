@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import skill_paths  # noqa: E402
 TARGET = REPO_ROOT / "hooks" / "hooks.json"
 MANIFEST = REPO_ROOT / ".claude-plugin" / "plugin.json"
 # Plugin-only: replaces the rules/ and CLAUDE.md context a plugin cannot ship.
@@ -77,6 +79,10 @@ def main(argv: list[str]) -> int:
         for folder in unlisted_skill_categories():
             print(f'{folder}/ holds skills but is not in .claude-plugin/plugin.json "skills"')
             failed = True
+        for problem in skill_paths.broken_references(REPO_ROOT):
+            print(problem)
+            failed = True
+
         if "version" in json.loads(MANIFEST.read_text(encoding="utf-8")):
             # The manifest version overrides the marketplace entry and would freeze every install.
             print('.claude-plugin/plugin.json sets "version"; the marketplace entry must own it')

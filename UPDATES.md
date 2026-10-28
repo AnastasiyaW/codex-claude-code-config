@@ -4,6 +4,37 @@ Changelog for codex-claude-code-config. Newest first.
 
 ---
 
+## 2026-10-28 (plugin fixes reported from a teammate install)
+
+- Skills pointed at paths that exist only on the author's machine. Fixed:
+  `ui-ux-pro-max` and `distill-feedback` now run their scripts from
+  `${CLAUDE_SKILL_DIR}`; `harness-design` points to the paper and repository
+  instead of a reference file that is private material; `ml-research-lab`, `feature-new`,
+  `layer-new` and `harness-audit` name repository files through
+  `${CLAUDE_PLUGIN_ROOT}`; `pixel-art-storyboard` names its real templates.
+  `pixel-art-studio`, `bug-reproducer`, `repo-map`, `desktop-sessions-discovery`
+  and `architecture-quality` ran shipped scripts as `python scripts/x.py`, which
+  only works from the skill folder; they now name them through the variables.
+- New `scripts/skill_paths.py`, run by `plugin_build.py --check` and CI: every
+  `${CLAUDE_SKILL_DIR}/`, `${CLAUDE_PLUGIN_ROOT}/` and relative `references/`,
+  `scripts/`, `assets/`, `templates/` path in a shipped SKILL.md must exist;
+  a user-local skill copy (`~`, `$HOME`, `%USERPROFILE%`), one user's home folder,
+  and `python scripts/x.py` for a script the plugin ships are refused. Variable
+  paths and user-local paths are checked in every `.md` of a skill, relative ones
+  in SKILL.md. It found 38 broken references, all fixed (including
+  `agent-harness-design` references to a split `agents-best-practices` file).
+- `sync_skills_to_codex.py` writes real paths for `${CLAUDE_SKILL_DIR}` and
+  `${CLAUDE_PLUGIN_ROOT}` into the copied `.md` files (Codex substitutes neither,
+  and user-level Claude skills do not get the plugin root), and, like
+  `generate_skills_lock.py`, skips files git ignores, so a local-only file in a
+  skill folder is neither synced nor hashed into the public lock.
+- `hooks/plugin-rules-context.py` no longer lists rules the user already has
+  under the same name in their own rules folder; it names them in one line.
+- `hooks/session-handoff-check.py` prints UTF-8, so a handoff with characters
+  outside the console codepage no longer crashes it on Windows.
+
+---
+
 ## 2026-10-28 (team distribution: Claude Code plugin and one-command Codex update)
 
 - The repo is now a valid Claude Code plugin named `harness` (the old name
