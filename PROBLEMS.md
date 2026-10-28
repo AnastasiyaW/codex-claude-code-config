@@ -40,9 +40,28 @@ drift, and the next editor changes whichever one they find first. Whether the se
 be deleted, made a thin loader, or is wired into some other harness (Codex reads its own config)
 is not a call for a session that only measured which one Claude Code loads.
 
+**Re-measured 2026-10-28** (branch fix/delivery-guard-problems). The copy is not in this repo:
+`%USERPROFILE%\.claude\hooks\` is outside any git tree. Now 43308 bytes, mtime 2026-10-13,
+sha256 prefix 56f5d9080209fc7b; the wired copy is 35ce545a90d30e62 on main 4940341.
+- No harness registers it: `settings.json` (3 hook entries), `~/.codex/hooks.json` (3) and
+  `claude-code-private/machines/Happyin/{settings,codex-hooks}.json` (3 each) all name
+  `claude-code-config/hooks/root-cause-delivery-guard.py`. The live root-cause-delivery skill in
+  `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills` and this repo uses the wired path too.
+  The only file reference left is `~/.claude/.skill-trees-backup-2026-08-23/` (a backup).
+- But it IS run: `logs/safety.log` has 52 commands calling `python ~/.claude/hooks/root-cause-delivery-guard.py
+  verify|capture|...`, the latest 2026-10-26. The cause was the wired guard itself: its "no
+  PLAN_FROZEN case" block message told agents to run the CLI at `~/.claude/hooks/`. Fixed here:
+  the message now names the running file (`Path(__file__)`), tested in
+  `hooks/tests/test_delivery_guard_machine_messages.py`.
+
+**Remaining owner decision**: delete `%USERPROFILE%\.claude\hooks\root-cause-delivery-guard.py`
+(or replace it with a loader of the wired file). Safe to act once this branch is merged and
+pulled into the live folder; before that, agents still get the old message. Agents already
+holding the old command in a handoff would then fail loudly instead of running stale case logic.
+
 ## 2026-09-15 - DELIVERY GUARD STILL CLASSIFIES PEER AND CODEX MACHINE MESSAGES
 
-**Status**: arch-decision
+**Status**: RESOLVED 2026-10-28 - owner's rule given with the task: messages from other agents, sessions, Codex and harness notifications never count as her request. `owner_text` removes closed `<cross-session-message>`, `<agent-message>` (incl. `[Subagent hand-back]`), `<subagent_notification>` and `<system-reminder>` elements, and drops whole "Stop hook feedback:" prompts and rendered "Another Claude session sent a message:" prompts; unclosed tags still classify (fail closed). Still reproduced on main 4940341: 22 live intents in `~/.claude/state/root-cause-delivery` have the digest of these shapes (15 bare peer elements, 4 behind a linked-sessions reminder, 2 agent-message hand-backs, 1 task notification plus plugin reminder; latest 2026-10-23), plus 4 from "Stop hook feedback:" in August. Codex hands `<subagent_notification>` over as a user-role message (65 of 65 closed, 250 newest rollouts); whether Codex fires UserPromptSubmit for it is still unmeasured, so it is stripped defensively. Evidence: `.agent/delivery-cases/delivery-guard-machine-messages-20261028/evidence/` - test red on main (22 of 36 wrong) and green after (36/36), run_guard_regressions 349/349, mutation_probe 15/15 killed, transcript replay: peer 195 -> 0 intents, no owner-word loss. Independent fresh-context review: PROCEED (its tag-name finding fixed; quadratic-regex and pasted-wrapper ceilings documented in the code). Ceiling: a teammate's real incident report no longer opens an intent by itself; the receiving agent opens one through the owner or `init`.
 
 The fix at a555849 excludes Claude Code <task-notification> elements from intent
 classification. The case is .agent/delivery-cases/delivery-guard-notification-overwrites-intent-20260915.

@@ -1,0 +1,39 @@
+  ok   bare cross-session-message records nothing
+  ok   bare cross-session-message leaves the owner's intent in place
+  ok   cross-session-message with from-name records nothing
+  ok   cross-session-message with from-name leaves the owner's intent in place
+  ok   cross-session-message behind a linked-sessions reminder records nothing
+  ok   cross-session-message behind a linked-sessions reminder leaves the owner's intent in place
+  ok   cross-session-message as rendered with the harness wrapper records nothing
+  ok   cross-session-message as rendered with the harness wrapper leaves the owner's intent in place
+  ok   agent-message subagent hand-back records nothing
+  ok   agent-message subagent hand-back leaves the owner's intent in place
+  ok   agent-message hand-back as rendered with the harness wrapper records nothing
+  ok   agent-message hand-back as rendered with the harness wrapper leaves the owner's intent in place
+  ok   Stop hook feedback records nothing
+  ok   Stop hook feedback leaves the owner's intent in place
+  ok   Codex subagent_notification records nothing
+  ok   Codex subagent_notification leaves the owner's intent in place
+  ok   task-notification followed by a plugin review reminder records nothing
+  ok   task-notification followed by a plugin review reminder leaves the owner's intent in place
+  ok   two peer messages back to back records nothing
+  ok   two peer messages back to back leaves the owner's intent in place
+  ok   task-notification ending in an incident word records nothing
+  ok   task-notification ending in an incident word leaves the owner's intent in place
+  ok   owner incident prompt records
+  ok   Russian owner incident prompt records
+  ok   owner prompt behind a linked-sessions reminder records
+  ok   owner words after a pasted peer message record
+  ok   owner prompt mentioning Stop hook feedback mid-text records
+  ok   owner prompt opening with a literal unclosed peer tag records
+  ok   a longer tag name is not a harness reminder
+  ok   unclosed peer element keeps the old classification
+  ok   owner prompt opening with an unclosed agent-message tag records
+  ok   owner intent with no case blocks a source edit
+  ok   ... and still blocks after a peer message
+  ok   block message names the running guard's own path
+  ok   block message does not name ~/.claude/hooks/
+  ok   block message carries the owner's intent kind
+
+all 36 cases correct
+exit=0

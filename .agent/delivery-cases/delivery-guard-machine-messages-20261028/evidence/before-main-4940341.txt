@@ -1,0 +1,39 @@
+  FAIL bare cross-session-message records nothing (expected None, got 'incident')
+  FAIL bare cross-session-message leaves the owner's intent in place (expected 'aa38b6520d8d', got '7b274c9054f0')
+  FAIL cross-session-message with from-name records nothing (expected None, got 'incident')
+  FAIL cross-session-message with from-name leaves the owner's intent in place (expected '2df3b167f26f', got '6625619c758e')
+  FAIL cross-session-message behind a linked-sessions reminder records nothing (expected None, got 'incident')
+  FAIL cross-session-message behind a linked-sessions reminder leaves the owner's intent in place (expected '4a77ffaa0551', got '9125db10faba')
+  FAIL cross-session-message as rendered with the harness wrapper records nothing (expected None, got 'incident')
+  FAIL cross-session-message as rendered with the harness wrapper leaves the owner's intent in place (expected 'f812fee53852', got '415fdb562285')
+  FAIL agent-message subagent hand-back records nothing (expected None, got 'incident')
+  FAIL agent-message subagent hand-back leaves the owner's intent in place (expected '68474e495907', got 'ce02ed724d3e')
+  FAIL agent-message hand-back as rendered with the harness wrapper records nothing (expected None, got 'incident')
+  FAIL agent-message hand-back as rendered with the harness wrapper leaves the owner's intent in place (expected 'a686dfb0e1ba', got 'fbeb42b979a4')
+  FAIL Stop hook feedback records nothing (expected None, got 'incident')
+  FAIL Stop hook feedback leaves the owner's intent in place (expected '7576c231b985', got '21cc84072efc')
+  FAIL Codex subagent_notification records nothing (expected None, got 'incident')
+  FAIL Codex subagent_notification leaves the owner's intent in place (expected 'c9f51a631122', got '6141589d5478')
+  FAIL task-notification followed by a plugin review reminder records nothing (expected None, got 'incident')
+  FAIL task-notification followed by a plugin review reminder leaves the owner's intent in place (expected 'a0b300018512', got '9cc9be26fa2e')
+  FAIL two peer messages back to back records nothing (expected None, got 'incident')
+  FAIL two peer messages back to back leaves the owner's intent in place (expected '0315674db96a', got '1f1562339689')
+  ok   task-notification ending in an incident word records nothing
+  ok   task-notification ending in an incident word leaves the owner's intent in place
+  ok   owner incident prompt records
+  ok   Russian owner incident prompt records
+  ok   owner prompt behind a linked-sessions reminder records
+  ok   owner words after a pasted peer message record
+  ok   owner prompt mentioning Stop hook feedback mid-text records
+  ok   owner prompt opening with a literal unclosed peer tag records
+  ok   a longer tag name is not a harness reminder
+  ok   unclosed peer element keeps the old classification
+  ok   owner prompt opening with an unclosed agent-message tag records
+  ok   owner intent with no case blocks a source edit
+  ok   ... and still blocks after a peer message
+  FAIL block message names the running guard's own path (expected True, got False)
+  FAIL block message does not name ~/.claude/hooks/ (expected False, got True)
+  ok   block message carries the owner's intent kind
+
+22 of 36 wrong
+exit=1
