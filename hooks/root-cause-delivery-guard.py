@@ -405,6 +405,24 @@ _MARKER_LEAD = re.compile(r"(?:<system-reminder>\s*)?" + re.escape(SYSTEM_NOTIFI
 # failures opened a false incident intent and blocked every hub edit. Only a block closed by
 # its own id is removed; an unclosed or mismatched one stays and is classified (fail closed).
 _PASTED_BLOCK = re.compile(r'<pasted_content id="([^"<>]+)">.*?</pasted_content id="\1">', re.DOTALL)
+# delivery-guard-machine-messages-20261028: other agents and the harness reach this hook through the
+# same prompt field. Live intents were recorded from a bare <cross-session-message ...> element, one
+# behind a "Linked sessions" <system-reminder>, <agent-message ...> subagent hand-backs, a plugin
+# review <system-reminder> after a task notification, and "Stop hook feedback:" prompts. Codex
+# delivers <subagent_notification> as a user-role message. None of them is the owner's request.
+# Only an element closed by its own tag is removed; an unclosed one stays and is classified.
+# simplification: owner words are lost when she starts a prompt with a pasted "Stop hook feedback:"
+# or "Another Claude session sent a message:" plus an element, or writes one of these closed
+# elements herself (none of 1500+ human prompts in the 2026-10-28 replay). Many unclosed tags make
+# the lazy match quadratic, the same class as _PASTED_BLOCK. Upgrade path: origin.kind from the
+# transcript record, as the task-notification ceiling above says.
+_MACHINE_BLOCK = re.compile(
+    r"<(cross-session-message|agent-message|subagent_notification|system-reminder)(?=[\s>])[^>]*>.*?</\1>",
+    re.DOTALL,
+)
+# The transcript rendering puts this line before a peer element and harness guidance after it.
+_PEER_WRAPPER_LEAD = "Another Claude session sent a message:"
+_STOP_FEEDBACK_LEAD = "Stop hook feedback:"
 
 
 def owner_text(prompt: str) -> str:
@@ -414,23 +432,28 @@ def owner_text(prompt: str) -> str:
     removed through the last closing tag, so several concatenated notifications
     go together and words written after the last one are still classified.
     Pasted third-party text (harness <pasted_content id=X> blocks) is removed
-    wherever it appears. Text without that structure is returned as is.
+    wherever it appears, and so are closed messages from other agents and harness
+    reminders. A Stop-hook feedback prompt or a rendered peer message is machine
+    text as a whole. Text without that structure is returned as is.
     """
     text = _PASTED_BLOCK.sub("", prompt).lstrip()
+    if text.startswith(_PEER_WRAPPER_LEAD) and _MACHINE_BLOCK.search(text):
+        return ""
+    text = _MACHINE_BLOCK.sub("", text).lstrip()
+    if text.startswith(_STOP_FEEDBACK_LEAD):
+        return ""
     if _MARKER_LEAD.match(text):
         opening = _NOTIFICATION_OPEN.search(text)
     else:
         opening = _NOTIFICATION_OPEN.match(text)
     if opening is None:
         return text
-    end = text.rfind(NOTIFICATION_CLOSE, opening.end())
-    if end < 0:
+    _, closed, after = text[opening.end():].rpartition(NOTIFICATION_CLOSE)
+    if not closed:
         # An unclosed element proves nothing (no real record is truncated), so
         # keep the old classification rather than let owner words pass the gate.
         return text
-    # A wrapper's trailing </system-reminder> stays in the result: it carries no
-    # words the classifier matches.
-    return text[end + len(NOTIFICATION_CLOSE):]
+    return after
 
 
 def classify_prompt(prompt: str) -> str | None:
@@ -981,7 +1004,8 @@ def block_missing_case(intent: dict[str, Any], detail: str = "") -> None:
         "Source edit blocked: this repository has an active " + kind + " delivery intent, "
         "but no valid PLAN_FROZEN delivery case. " + detail
         + "Create .agent/delivery-cases/<id>/case.json with the affected layer and bounded plan, then freeze it. Use: "
-        "python ~/.claude/hooks/root-cause-delivery-guard.py init <case-id> "
+        # The running file, not a fixed path: an unwired copy under ~/.claude/hooks/ once sat there.
+        f"python \"{Path(__file__).resolve().as_posix()}\" init <case-id> "
         f"--kind {kind} --summary \"...\". Case documents themselves remain writable."
     )
 
