@@ -1473,8 +1473,14 @@ def _human_text(e) -> str | None:
     origin = a.get("origin") if isinstance(a, dict) else None
     if (isinstance(a, dict) and a.get("type") == "queued_command" and a.get("commandMode") == "prompt"
             and isinstance(origin, dict) and origin.get("kind") == "human" and not a.get("isMeta")
-            and isinstance(a.get("prompt"), str)):
-        return a["prompt"]
+            and isinstance(a.get("prompt"), (str, list))):
+        # owner 2026-10-28: the host also writes the prompt as content blocks (a reminder plus her text).
+        # A reminder block is dropped whole: a closing tag quoted inside it must not end the strip early.
+        prompt = a["prompt"]
+        if isinstance(prompt, list):
+            prompt = [b for b in prompt if not (isinstance(b, dict) and isinstance(b.get("text"), str)
+                                                and b["text"].lstrip().startswith("<system-reminder>"))]
+        return _entry_text(prompt)
     return None
 
 
@@ -2105,6 +2111,9 @@ def _claude_limit(path: str) -> str | None:
     return None
 
 
+ROOT_FILE = "a file directly in a drive root - the owner must name its full path herself"
+
+
 def target_hard_limit(target: str, recursive: bool = False) -> str | None:
     """Why a target may never be deleted on request, or None."""
     t = _norm(target)
@@ -2138,6 +2147,12 @@ def target_hard_limit(target: str, recursive: bool = False) -> str | None:
     # (could be a folder). System folders are already caught by PROTECTED above.
     depth2_file = (len(parts) == 2 and not recursive and re.match(r"^[A-Za-z]:/", t)
                    and "." in parts[1].strip(".") and low[0] not in {"users", "home"})
+    # Owner 2026-10-28 («должно удалять просто по моему разрешению», D:/cw-msg.txt and D:/_x refused):
+    # an existing regular file directly in a Windows drive root goes only when the owner names its full
+    # path herself (_approve checks that). The drive root, folders in it and recursion stay a hard limit.
+    if (len(parts) == 1 and not recursive and re.match(r"^[A-Za-z]:/", t)
+            and os.path.isfile(t) and not os.path.islink(t)):
+        return ROOT_FILE
     if len(parts) < 3 and not depth2_file:
         return "root-level path"
     if low[0] in {"home", "users"} and len(parts) < 3:
@@ -2218,7 +2233,11 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
     text = named_in.replace("\\", "/")
     for t, recursive in targets:
         why = target_hard_limit(t, recursive)
-        if why:
+        if why == ROOT_FILE:
+            own = prompt.replace("\\", "/").lower()
+            if not _named(own, _norm(t).rstrip("/").lower()):
+                return False, f"{t}: hard limit ({why})"
+        elif why:
             return False, f"{t}: hard limit ({why})"
         full = _norm(t).rstrip("/")
         hay = text
