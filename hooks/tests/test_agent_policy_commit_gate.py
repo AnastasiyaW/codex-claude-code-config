@@ -101,6 +101,32 @@ def test_commit_parsing_review_cases(tmp_path):
     assert inv("VAR=x git commit -m y") == [(here, False)]
 
 
+def test_commit_inside_a_shell_string_or_alias_is_seen(tmp_path):
+    """PROBLEMS.md 2026-09-26 14:40: a commit handed to a shell as a string, or
+    spelled through a git alias, skipped the commit checks."""
+    g = _gates()
+    inv = lambda c, base=tmp_path: [(str(t), w) for t, w in g.commit_invocations(c, base)]  # noqa: E731
+    here = str(tmp_path)
+    assert inv("bash -c 'git commit -m x'") == [(here, False)]
+    assert inv('sh -c "cd sub && git commit -am x"') == [(str(tmp_path / "sub"), True)]
+    assert inv('powershell -Command "git commit -m x"') == [(here, False)]
+    assert inv("bash -c 'git status'") == []
+    assert inv("bash -x -c 'git commit -m x'") == [(here, False)]          # review: flags before -c
+    assert inv("sh -ce 'git commit -m x'") == [(here, False)]
+    assert inv("bash --norc -o pipefail -c 'git commit -m x'") == [(here, False)]
+    assert inv("bash script.sh") == []
+    repo = _repo(tmp_path)
+    _git(repo, "config", "alias.ci", "commit -a")
+    _git(repo, "config", "alias.sci", "!git commit")
+    assert inv("git ci -m x", repo) == [(str(repo), True)]
+    assert inv("git sci -m x", repo) == [(str(repo), False)]
+    assert inv("git st", repo) == []
+    (repo / "a.txt").write_text("BAD\n")
+    _git(repo, "add", "a.txt")
+    assert _hook(repo, "bash -c 'git commit -m x'")
+    assert _hook(repo, "git sci -m x")
+
+
 def test_variable_target_judges_the_named_repo_not_the_cwd(tmp_path):
     """2026-10-04: `$r='...'; git -C $r commit` from inside a policy repo ran that
     repo's checks (38 C++ functions) against a commit made in another repo."""

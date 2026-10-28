@@ -609,6 +609,10 @@ def remote_command(segment: str) -> str | None:
     word = toks[i].rsplit("/", 1)[-1].lower().removesuffix(".exe") if i < len(toks) else ""
     if word in INNER_SHELLS and i + 2 < len(toks) and re.fullmatch(r"-[a-z]*c", toks[i + 1]):
         return toks[i + 2]  # bash -c '<cmd>': the string is the command (review 2026-10-06)
+    if word in {"iex", "invoke-expression"} and i + 1 < len(toks):
+        # PROBLEMS.md 2026-09-26 14:40: `iex "ri C:\data\x"` ran a delete the guard never parsed
+        rest = toks[i + 2:] if toks[i + 1].lower() in {"-command", "-c"} else toks[i + 1:]
+        return " ".join(rest) or None
     if word in {"powershell", "pwsh"}:
         j = i + 1
         while j < len(toks) and toks[j].lower() not in {"-c", "-command", "-encodedcommand", "-ec"}:
