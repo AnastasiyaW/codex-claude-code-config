@@ -1039,6 +1039,18 @@ def judge_http(cmd: Cmd, findings: list[Finding]) -> None:
                                 "commit and `git push` instead", [(urls[0].lower(),)]))
 
 
+_WORD_SPLIT = re.compile(r"[\s'\"`;|&(),{}=]+")
+
+
+def _git_push_words(raw_low: str) -> bool:
+    """`git` and `push` each as a whole word: a git binary (`git`, `/usr/bin/git`, `git.exe`) and the
+    bare word `push`. File names such as `.git/hooks/pre-push` or `scripts/git-hooks/pre-push` and
+    flags such as `--push` are not a push; a word-boundary regex read them as one."""
+    words = [w for w in _WORD_SPLIT.split(raw_low) if w]
+    has_git = any(re.split(r"[\\/]", w)[-1] in ("git", "git.exe") for w in words)
+    return has_git and "push" in words
+
+
 def judge(cmd: Cmd, text_env: dict[str, str], findings: list[Finding], depth: int = 0) -> None:
     raw_low = cmd.raw.lower()
     if cmd.name == "<undecodable-encodedcommand>":
@@ -1055,8 +1067,7 @@ def judge(cmd: Cmd, text_env: dict[str, str], findings: list[Finding], depth: in
         judge_gh(cmd, findings, text_env, depth)
     elif cmd.name in HTTP_CLIENTS:
         judge_http(cmd, findings)
-    elif cmd.name not in PRINTERS and cmd.name not in KNOWN_SHAPES \
-            and re.search(r"\bgit\b", raw_low) and re.search(r"\bpush\b", raw_low):
+    elif cmd.name not in PRINTERS and cmd.name not in KNOWN_SHAPES and _git_push_words(raw_low):
         findings.append(Finding("unknown-shape", f"`{cmd.raw.strip()}` reads as a git push behind "
                                 f"`{cmd.name}`, which this guard does not understand",
                                 "run git push directly", [(cmd.raw.strip().lower(),)]))

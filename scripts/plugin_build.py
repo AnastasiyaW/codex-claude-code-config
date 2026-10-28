@@ -87,7 +87,7 @@ def main(argv: list[str]) -> int:
             print('.claude-plugin/plugin.json sets "version"; the marketplace entry must own it')
             failed = True
         if not failed:
-            print("hooks/hooks.json matches SAFE_DEFAULTS; every skill category is listed")
+            print("hooks/hooks.json matches SAFE_DEFAULTS + PLUGIN_EXTRAS; every skill category is listed")
         return 1 if failed else 0
     TARGET.write_text(text, encoding="utf-8", newline="\n")
     print(f"wrote {TARGET.relative_to(REPO_ROOT)}")

@@ -43,7 +43,8 @@ It allows a push only through the global pre-push leak scan, or to a repository 
 
 The global wrapper `scripts/git-hooks/pre-push` is not yet portable: it requires
 `~/.claude/scripts/pre_push_claude_attribution.py`, which is not in this repository,
-and on Windows looks for Python only in uv's interpreter folder. Installed on another
+and on Windows looks for Python only in uv's interpreter folder; it also expects the
+scanner in a clone at `~/.claude/claude-code-config`. Installed on another
 machine it blocks every push, private ones included, so do not run
 `install_hooks.py --git-hooks` there until the wrapper is fixed. Public pushes from such a
 machine go through the owner.

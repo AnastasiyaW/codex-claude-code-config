@@ -286,6 +286,17 @@ class ThirdReview(unittest.TestCase):
         self.check("env -C ../beta git push", "local-hooks")
         self.check("mywrap --flag git push", "unknown-shape")
 
+    def test_1b_hook_file_names_are_not_a_push(self) -> None:
+        # Review 2026-10-28: `\bgit\b` + `\bpush\b` read hook paths as a push behind an unknown command.
+        for command in ("sed -n 1,5p scripts/git-hooks/pre-push", "ls -la .git/hooks/pre-push",
+                        "chmod +x .git/hooks/pre-push", "diff scripts/git-hooks/pre-push hooks/pre-push-chain.sh",
+                        "code scripts/git-hooks/pre-push",
+                        "python scripts/install_hooks.py --git-hooks --dry-run --push"):
+            self.assertNotIn("unknown-shape", routes(command), command)
+        for command in ("mywrap /usr/bin/git push", 'mywrap "git" "push"', "mywrap git.exe push"):
+            self.check(command, "unknown-shape")
+        self.check(r"mywrap C:\Git\cmd\git.exe push origin main", "unknown-shape", shell="powershell")
+
     def test_2_push_target_changed_in_the_same_command(self) -> None:
         public = "https://github.com/acme/alpha.git"
         self.check(f"git remote set-url origin {public} && git push", "local-hooks", cwd=Fixture.private)
