@@ -204,6 +204,8 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             "The smoke test found that the parser is too strict with dates.",
             "The staging run shows the spam filter has too many false positives.",
             "Гейт нашёл ложные срабатывания детектора лиц.",
+            "Staging smoke — 2 false positives in OCR.",
+            "Smoke-тест — ложные срабатывания детектора: 2.",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-product-") as raw:
                 root = Path(raw)
@@ -239,6 +241,8 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             "Профиль смоука слишком строгий.",
             "Харнесс избыточен для такой правки.",
             "Гейт — слишком строгий.",
+            "Гейт — избыточен.",
+            "Гейт показался слишком строгим.",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-gate-") as raw:
                 payload, output = run_hook(Path(raw), text)

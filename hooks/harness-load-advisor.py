@@ -85,16 +85,19 @@ _SUBJECT = (
 # last week is way too strict") is missed; a parser of who-does-what is the upgrade.
 _REPORT_VERB = (
     r"(?:found|finds|shows?|showed|shown|reports?|reported|flag(?:s|ged)?|caught|catches|"
-    r"нашел|нашла|нашли|находит|показ\w*|выявил\w*|обнаружил\w*|поймал\w*)"
+    # "показался" (seemed) is a complaint, not a report
+    r"нашел|нашла|нашли|находит|показал(?!ся|ось|ась|ись)\w*|показыва\w*|"
+    r"выявил\w*|обнаружил\w*|поймал\w*)"
 )
 _CLAUSE = rf"(?:(?!\b{_REPORT_VERB}\b)[^.?!\n,;:—–]){{0,40}}"
-# A dash right after the subject is the Russian copula ("Гейт — слишком строгий").
-_COPULA = r"(?:[ \t]*[—–][ \t]*)?"
 SIGNALS.append((
     "explicit-feedback",
     [
-        rf"\b{_SUBJECT}\b{_COPULA}{_CLAUSE}\b{_FEEDBACK}\b",
+        rf"\b{_SUBJECT}\b{_CLAUSE}\b{_FEEDBACK}\b",
         rf"\b{_FEEDBACK}\b{_CLAUSE}\b{_SUBJECT}\b",
+        # a dash after the subject is the Russian copula ("Гейт — слишком строгий"),
+        # but only before a judgement: "Smoke — 2 false positives in OCR" is a heading
+        rf"\b{_SUBJECT}[ \t]*[—–][ \t]*(?:too|слишком|избыточ\w*|overkill|over[- ]engineer\w*)\b",
     ],
 ))
 # A stated absence of false positives is a result, not a complaint. Only the
