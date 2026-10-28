@@ -57,7 +57,7 @@ shape to need one, not a reason to create ceremony around a toy.
 Run the repository audit before broadening a new app and after a structural change:
 
 ```powershell
-python scripts/architecture_audit.py --root .
+python "${CLAUDE_PLUGIN_ROOT}/scripts/architecture_audit.py" --root .
 ```
 
 The audit is intentionally conservative. It reports, rather than invents, findings:

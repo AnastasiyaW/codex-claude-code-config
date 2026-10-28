@@ -215,19 +215,19 @@ For fast attacks/throws, insert 1-2 stretched intermediate frames (smear). Heavy
 
 ```bash
 # Animated GIF
-python scripts/animate.py walk.json --format gif -o walk.gif
+python "${CLAUDE_SKILL_DIR}/scripts/animate.py" walk.json --format gif -o walk.gif
 
 # APNG (better, supports semi-transparency)
-python scripts/animate.py walk.json --format apng -o walk.apng
+python "${CLAUDE_SKILL_DIR}/scripts/animate.py" walk.json --format apng -o walk.apng
 
 # Sprite sheet (for game engines)
-python scripts/animate.py walk.json --format spritesheet -o walk_sheet.png --layout horizontal
+python "${CLAUDE_SKILL_DIR}/scripts/animate.py" walk.json --format spritesheet -o walk_sheet.png --layout horizontal
 ```
 
 ### Animation quality check
 
 ```bash
-python scripts/quality_check.py --animation walk.json
+python "${CLAUDE_SKILL_DIR}/scripts/quality_check.py" --animation walk.json
 ```
 
 Checks: palette stability across frames (no off-palette colors), pixel rate consistency (sub-pixel-AA matches), total mass conservation (8-pixel torso stays 8 pixels across frames), per-frame quality scores.
@@ -248,7 +248,7 @@ When user provides a real photo / hi-res illustration and asks for pixel art ver
 
 Usage:
 ```bash
-python scripts/preprocess.py photo.jpg --target-size 64x64 --palette aap-64 --dither floyd-steinberg -o pixel.png
+python "${CLAUDE_SKILL_DIR}/scripts/preprocess.py" photo.jpg --target-size 64x64 --palette aap-64 --dither floyd-steinberg -o pixel.png
 ```
 
 Important: **AI-generated art (Stable Diffusion, Midjourney) is NOT pixel art** even if it looks pixelated. It usually has fractional pixel widths and noise instead of dithering. Always run preprocess pipeline + quality check on AI output before treating it as pixel art.
@@ -261,7 +261,7 @@ For game engines (Unity, Godot, Unreal) wanting a single PNG with all frames.
 
 ```bash
 # Layout: rows = animation type, cols = frames (canonical convention)
-python scripts/animate.py character.json --format spritesheet \
+python "${CLAUDE_SKILL_DIR}/scripts/animate.py" character.json --format spritesheet \
   --layout grid --rows 4 --cols 8 -o character_sheet.png
 ```
 
@@ -277,7 +277,7 @@ Conventions:
 When user asks "review this pixel art" or "is this good":
 
 ```bash
-python scripts/quality_check.py existing_sprite.png --verbose
+python "${CLAUDE_SKILL_DIR}/scripts/quality_check.py" existing_sprite.png --verbose
 ```
 
 Returns JSON with:
@@ -296,7 +296,7 @@ For Generator-Evaluator review (independent agent), invoke the **pixel-art-revie
 ### List bundled palettes
 
 ```bash
-python scripts/palette.py --list
+python "${CLAUDE_SKILL_DIR}/scripts/palette.py" --list
 ```
 
 Returns 30+ palettes grouped by category:
@@ -307,7 +307,7 @@ Returns 30+ palettes grouped by category:
 ### Extract palette from image
 
 ```bash
-python scripts/palette.py --extract photo.jpg --colors 16 --method median-cut
+python "${CLAUDE_SKILL_DIR}/scripts/palette.py" --extract photo.jpg --colors 16 --method median-cut
 ```
 
 Methods: `kmeans` (slow, high quality), `median-cut` (default, balanced), `octree` (fast).
@@ -315,7 +315,7 @@ Methods: `kmeans` (slow, high quality), `median-cut` (default, balanced), `octre
 ### Generate hue-shifted ramp
 
 ```bash
-python scripts/palette.py --ramp "#5b3a3a" --steps 5 --hue-shift 40
+python "${CLAUDE_SKILL_DIR}/scripts/palette.py" --ramp "#5b3a3a" --steps 5 --hue-shift 40
 ```
 
 Generates a 5-step ramp from dark→bright with proper hue rotation (Endesga rule). Use this when you need a fresh material color (skin tone, metal, leather) without a full palette.

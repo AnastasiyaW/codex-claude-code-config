@@ -110,7 +110,7 @@ Show no more than five candidates and label confidence `high`, `medium`, or `low
 - Capture the narrow command with `scripts/capture_command.py` when appropriate:
 
 ```bash
-python3 scripts/capture_command.py --label reproduced --output reproduced.json -- npm test -- path/to/regression.test.ts
+python3 "${CLAUDE_SKILL_DIR}/scripts/capture_command.py" --label reproduced --output reproduced.json -- npm test -- path/to/regression.test.ts
 ```
 
 - Confirm that a failure matches the predicted behavior and cause. Syntax errors, missing dependencies, invalid fixtures, unrelated failures, and assertions built on an unsupported assumption reject or invalidate the candidate.
@@ -137,15 +137,15 @@ python3 scripts/capture_command.py --label reproduced --output reproduced.json -
 - Capture and classify the fixed run:
 
 ```bash
-python3 scripts/capture_command.py --label fixed --output fixed.json -- npm test -- path/to/regression.test.ts
-python3 scripts/capture_command.py --label relevant-check --output relevant-check.json -- npm test -- path/to/affected-area
-python3 scripts/compare_evidence.py reproduced.json fixed.json result.json --reproduction confirmed --relevant-evidence relevant-check.json
+python3 "${CLAUDE_SKILL_DIR}/scripts/capture_command.py" --label fixed --output fixed.json -- npm test -- path/to/regression.test.ts
+python3 "${CLAUDE_SKILL_DIR}/scripts/capture_command.py" --label relevant-check --output relevant-check.json -- npm test -- path/to/affected-area
+python3 "${CLAUDE_SKILL_DIR}/scripts/compare_evidence.py" reproduced.json fixed.json result.json --reproduction confirmed --relevant-evidence relevant-check.json
 ```
 
 When the exact targeted reproducer is genuinely the only proportionate relevant check, do not reuse `fixed.json` as `--relevant-evidence` or pretend an additional command ran. Record that boundary explicitly instead:
 
 ```bash
-python3 scripts/compare_evidence.py reproduced.json fixed.json result.json --reproduction confirmed --targeted-scope-sufficient --scope-rationale "Pure function; no additional integration boundary exists."
+python3 "${CLAUDE_SKILL_DIR}/scripts/compare_evidence.py" reproduced.json fixed.json result.json --reproduction confirmed --targeted-scope-sufficient --scope-rationale "Pure function; no additional integration boundary exists."
 ```
 
 - Classify a passing targeted test with a failing captured relevant check as `FIX_REGRESSION`.
@@ -180,7 +180,7 @@ Never claim a bug from code inspection alone. Never claim a fix without red-to-g
 Create a native report only when the user requests one or the repository requires one. Use the existing project evidence or audit location specified by the user or repository; do not create a generic `outputs/` directory. Prepare context JSON following `references/report-schema.md`, including discovery scope and ranked candidates when using `hunt-and-prove`, then run:
 
 ```bash
-python3 scripts/generate_report.py result.json context.json path/to/existing-evidence-location/bug-reproducer-report.md
+python3 "${CLAUDE_SKILL_DIR}/scripts/generate_report.py" result.json context.json path/to/existing-evidence-location/bug-reproducer-report.md
 ```
 
 Include discovery evidence, tested candidates, minimal reproduction, root cause, approvals and scope, changed files, red/green commands, broader checks, limitations, and residual risks. Link the Markdown report in the final response.

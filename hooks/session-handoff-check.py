@@ -246,7 +246,7 @@ def main() -> int:
         lines.append("")
 
     if lines:
-        # Handoffs hold any Unicode; a Windows console codepage (cp1251) cannot print it (Vikunja #1251).
+        # Handoffs hold any Unicode; a Windows console codepage (cp1251) cannot print it (teammate report 2026-10-28).
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         print("\n".join(lines))
     return 0

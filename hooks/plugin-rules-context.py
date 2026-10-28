@@ -47,7 +47,7 @@ def user_rules_dir() -> Path:
 
 def build_index(root: Path, user_rules: Path | None = None) -> str:
     """Rules the user already has under the same name in their own rules folder are loaded by
-    Claude Code itself; listing them again only duplicates context (Vikunja #1251: 30 of 37)."""
+    Claude Code itself; listing them again only duplicates context (teammate install 2026-10-28: 30 of 37)."""
     rules_dir = root / "rules"
     own = {p.name.lower() for p in user_rules.glob("*.md")} if user_rules and user_rules.is_dir() else set()
     lines = [
