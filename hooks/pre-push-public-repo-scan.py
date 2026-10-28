@@ -54,7 +54,9 @@ def get_remote_url(remote: str) -> str | None:
 
 def parse_github_slug(url: str) -> tuple[str, str] | None:
     """Return (owner, repo) for github.com URLs, or None."""
-    m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", url)
+    # Anchored to the host: `https://gitlab.com/x/github.com/o/r` is not GitHub.
+    m = re.match(r"(?:https?://(?:[^@/]+@)?|ssh://(?:[^@/]+@)?|git@)github\.com[:/]"
+                 r"([^/]+)/([^/]+?)(?:\.git)?/?$", url)
     if not m:
         return None
     return m.group(1), m.group(2)
@@ -62,10 +64,12 @@ def parse_github_slug(url: str) -> tuple[str, str] | None:
 
 def repo_is_public(owner: str, repo: str) -> bool | None:
     """Return True/False for public/private. None if gh unavailable."""
-    r = run(["gh", "api", f"repos/{owner}/{repo}", "--jq", ".private"])
+    r = run(["gh", "api", "--hostname", "github.com", f"repos/{owner}/{repo}", "--jq", ".private"])
     if r.returncode != 0:
         return None
-    return r.stdout.strip() == "false"
+    answer = r.stdout.strip()
+    # Only an explicit answer counts; empty or odd output must not read as "private".
+    return {"false": True, "true": False}.get(answer)
 
 
 def _self_hosted_git_conf() -> dict:
@@ -127,7 +131,7 @@ def gitea_repo_is_public(url: str) -> bool | None:
         return None
 
     host = re.sub(r"^https?://", "", base)
-    m = re.search(re.escape(host) + r"/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    m = re.match(r"https?://(?:[^@/]+@)?" + re.escape(host) + r"/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
     if not m:
         return None
 
@@ -156,7 +160,9 @@ class ScanIncomplete(Exception):
 
 # Caller-controlled environment can replace or empty what git shows us: an external
 # diff program prints nothing, injected `-c` config sets diff.external or textconv.
-_GIT_ENV_DROP = ("GIT_EXTERNAL_DIFF", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_DIFF_OPTS")
+# refs/replace and grafts make log/cat-file show other objects than the ones push sends.
+_GIT_ENV_DROP = ("GIT_EXTERNAL_DIFF", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_DIFF_OPTS",
+                 "GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE")
 
 
 def _git_env() -> dict[str, str]:
@@ -164,14 +170,17 @@ def _git_env() -> dict[str, str]:
     for key in list(env):
         if key in _GIT_ENV_DROP or key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
             del env[key]
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return env
 
 
-def git_bytes(args: list[str], stdin: bytes | None = None) -> bytes:
+def git_bytes(args: list[str], stdin: bytes | None = None, *, env: dict | None = None,
+              cwd: str | None = None) -> bytes:
     """Run git for the scan; any non-zero exit raises ScanIncomplete (never an empty result)."""
-    cmd = ["git", "-c", "core.quotePath=false", *args]
+    cmd = ["git", "--no-replace-objects", "-c", "core.quotePath=false", *args]
     try:
-        r = subprocess.run(cmd, input=stdin, capture_output=True, env=_git_env())
+        r = subprocess.run(cmd, input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL,
+                           capture_output=True, env=env or _git_env(), cwd=cwd)
     except OSError as exc:
         raise ScanIncomplete(f"git {args[0]} could not start: {exc}") from exc
     if r.returncode != 0:
@@ -189,7 +198,18 @@ def remote_advertised_shas(remote: str) -> set[str]:
     """
     if not remote or remote.startswith("-"):
         raise ScanIncomplete(f"no usable push target to ask for its refs: {remote!r}")
-    out = git_bytes(["ls-remote", remote]).decode("utf-8", "replace")
+    # argv[2] is already the rewritten push URL. ls-remote would apply url.*.insteadOf
+    # again and could ask a mirror; so run it outside the repository with no global or
+    # system config. A local path stays relative to the repository's cwd.
+    if os.path.exists(remote):
+        remote = os.path.abspath(remote)
+    env = {k: v for k, v in _git_env().items()
+           if not k.startswith(("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                                "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES"))}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
+    with tempfile.TemporaryDirectory(prefix="pre-push-ls-remote-", ignore_cleanup_errors=True) as neutral:
+        out = git_bytes(["ls-remote", remote], env=env, cwd=neutral).decode("utf-8", "replace")
     shas = set()
     for line in out.splitlines():
         sha = line.split("\t", 1)[0].strip()
@@ -236,13 +256,44 @@ def _read_blobs(shas) -> dict[str, bytes]:
 # Binary files that may be published once their bytes pass the regex agent. The magic
 # bytes must agree with the extension, so a text file renamed to .png with a NUL in
 # front cannot slip past the semantic reviewer as "an image".
+_PNG = b"\x89PNG\r\n\x1a\n"
+# simplification: the signature is checked, payload past it (pixels, brotli in woff2) is
+# not decoded; a format with a real decoder for its data chunks would close that.
 SAFE_BINARY_MAGIC = {
-    ".png": (b"\x89PNG\r\n\x1a\n",), ".jpg": (b"\xff\xd8\xff",), ".jpeg": (b"\xff\xd8\xff",),
-    ".gif": (b"GIF87a", b"GIF89a"), ".webp": (b"RIFF",), ".ico": (b"\x00\x00\x01\x00",),
-    ".bmp": (b"BM",), ".avif": (b"\x00\x00\x00",),
-    ".woff": (b"wOFF",), ".woff2": (b"wOF2",), ".ttf": (b"\x00\x01\x00\x00", b"true"),
-    ".otf": (b"OTTO",), ".eot": (b"",),
+    ".png": lambda d: d.startswith(_PNG) and png_structure_ok(d),
+    ".apng": lambda d: d.startswith(_PNG) and png_structure_ok(d),
+    ".jpg": lambda d: d.startswith(b"\xff\xd8\xff"), ".jpeg": lambda d: d.startswith(b"\xff\xd8\xff"),
+    ".gif": lambda d: d[:6] in (b"GIF87a", b"GIF89a"),
+    ".webp": lambda d: d[:4] == b"RIFF" and d[8:12] == b"WEBP",
+    ".ico": lambda d: d[:4] == b"\x00\x00\x01\x00",
+    ".avif": lambda d: d[4:12] in (b"ftypavif", b"ftypavis"),
+    ".woff": lambda d: d[:4] == b"wOFF", ".woff2": lambda d: d[:4] == b"wOF2",
+    ".ttf": lambda d: d[:4] in (b"\x00\x01\x00\x00", b"true"), ".otf": lambda d: d[:4] == b"OTTO",
 }
+
+
+def binary_strings(data: bytes) -> list[str]:
+    """Printable runs (>= 6) as ASCII and as UTF-16LE in both alignments, like strings(1).
+
+    Each run is its own line, so a \\b at the edge of a pattern is not defeated by the
+    byte glued to it (a PNG CRC, a UTF-16 code unit that happens to be a letter).
+    """
+    runs = [m.group(0).decode("ascii") for m in re.finditer(rb"[\x20-\x7e\t]{6,}", data)]
+    for chunk in (data, data[1:]):
+        runs += [m.group(0).decode("utf-16-le") for m in re.finditer(rb"(?:[\x20-\x7e]\x00){6,}", chunk)]
+    return runs
+
+
+def png_structure_ok(data: bytes) -> bool:
+    """Chunks walk cleanly from the signature to IEND with nothing after it."""
+    pos = 8
+    while pos + 12 <= len(data):
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        kind = data[pos + 4:pos + 8]
+        pos += 12 + length
+        if kind == b"IEND":
+            return pos == len(data)
+    return False
 
 
 def _is_binary(data: bytes) -> bool:
@@ -317,6 +368,36 @@ def _diff_sections(lines: list[str], nonce: str):
             yield "header", line
 
 
+_IDENTITY = re.compile(r"^(author|committer|tagger) .*<[^>]*@([^>]*)>")
+
+
+def _reduce_identity(line: str) -> str:
+    m = _IDENTITY.match(line)
+    return f"{m.group(1)}-domain {m.group(2)}" if m else line
+
+
+def _commit_header_lines(sha: str) -> list[str]:
+    """Published commit headers that %B does not show.
+
+    Extra headers (`x-note`, `mergetag`) are scanned in full. Author and committer are
+    reduced to their e-mail domain: an address is the same class as every past commit,
+    but a default identity like user@host.corp names an internal host.
+    """
+    raw = git_bytes(["cat-file", "commit", sha]).decode("utf-8", "replace")
+    header = raw.split("\n\n", 1)[0].split("\n")
+    out, in_sig = [], False
+    for line in header:
+        if line.startswith(" "):
+            if not in_sig:
+                out.append(line)
+            continue
+        in_sig = line.startswith("gpgsig")
+        if in_sig or line.startswith(("tree ", "parent ", "encoding ")):
+            continue
+        out.append(_reduce_identity(line))  # a malformed identity is scanned whole
+    return out
+
+
 def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
     """Everything this push would publish that the target does not already have.
 
@@ -351,11 +432,12 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
                 raise ScanIncomplete(f"pushed object {obj} for {ref} is not in this repository")
             kind = info[obj][0]
             if kind == "tag":
-                raw = git_bytes(["cat-file", "tag", obj]).decode("utf-8", "replace").split("\n")
-                # The tagger identity is the same class as a commit author, which is not scanned.
+                text = git_bytes(["cat-file", "tag", obj]).decode("utf-8", "replace")
+                head, _, body = text.partition("\n\n")
+                header = head.split("\n")
                 doc += _message_section(f"tag-object {obj} {ref}",
-                                        [ln for ln in raw if not ln.startswith("tagger ")])
-                target = next((ln.split()[1] for ln in raw if ln.startswith("object ")), None)
+                                        [_reduce_identity(ln) for ln in header] + body.split("\n"))
+                target = next((ln.split()[1] for ln in header if ln.startswith("object ")), None)
                 if not target:
                     raise ScanIncomplete(f"tag object {obj} has no target")
                 obj = target
@@ -369,6 +451,10 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
             raise ScanIncomplete(f"tag chain from {sha} is deeper than 64")
 
     if commit_tips:
+        revs_only = ("\n".join(commit_tips + ["^" + s for s in sorted(have)]) + "\n").encode()
+        commits = git_bytes(["rev-list", "--stdin"], revs_only).decode().split()
+        for sha in commits:
+            doc += _message_section(f"commit-header {sha}", _commit_header_lines(sha))
         import secrets as _secrets
         nonce = "pre-push-" + _secrets.token_hex(16)
         revs = ("\n".join(commit_tips + ["^" + s for s in sorted(have)]) + "\n").encode()
@@ -402,8 +488,9 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
         for sha, data in binary.items():
             paths = sorted(set(blob_paths[sha]))
             hint = ", ".join(paths)
-            texts = [data.decode("latin-1")]
-            if data.startswith(SAFE_BINARY_MAGIC[".png"][0]):
+            strings = binary_strings(data)
+            texts = [data.decode("latin-1"), "\n".join(strings)]
+            if data.startswith(_PNG):
                 texts += _png_text_chunks(data)
             for text in texts:
                 for f in agent_a_regex("\n".join("+" + ln for ln in text.split("\n"))):
@@ -413,7 +500,7 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
             for p in paths:
                 ext = os.path.splitext(p)[1].lower()
                 magic = SAFE_BINARY_MAGIC.get(ext)
-                if magic is None or not any(data.startswith(m) for m in magic):
+                if magic is None or not magic(data):
                     findings.append(Finding(p, 0, "binary:not-an-allowed-image-or-font",
                                             f"{len(data)} bytes, blob {sha[:12]}", "secret"))
 
@@ -439,8 +526,8 @@ def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
                     if new in binary:
                         skipping = True
                         doc.append(line)
-                        doc.append(f"diff --binary-note blob {new} ({len(binary[new])} bytes) "
-                                   f"scanned as bytes by the regex agent")
+                        doc += _message_section(f"binary-strings {new} ({len(binary[new])} bytes)",
+                                                binary_strings(binary[new]))
                         continue
                 doc.append(line)
             elif not skipping:
@@ -693,6 +780,11 @@ def agent_a_regex(diff: str) -> list[Finding]:
     for line in diff.split("\n"):  # not splitlines(): \x0c inside an added line must not split it
         if line.startswith("diff "):
             in_hunk = False
+            # An empty new file has no '+++' line; its name is only here.
+            m = re.match(r"^diff --(?:git a/.* b/|cc |combined )(.*)$", line)
+            if m:
+                current_file = m.group(1)
+                _scan(current_file, current_file, 0)
             continue
         m = re.match(r"^(@{2,}) (?:-\S+ )+\+(\d+)", line)
         if m:

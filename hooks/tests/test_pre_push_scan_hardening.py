@@ -55,8 +55,8 @@ class Repo:
         self.root = root
         self.bare = root / "remote.git"
         self.work = root / "work"
-        subprocess.run(["git", "init", "-q", "--bare", str(self.bare)], check=True)
-        subprocess.run(["git", "init", "-q", "-b", "main", str(self.work)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(self.bare)], check=True, stdin=subprocess.DEVNULL, capture_output=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.work)], check=True, stdin=subprocess.DEVNULL, capture_output=True)
         (root / "no-hooks").mkdir()
         for key, value in (("core.hooksPath", str(root / "no-hooks")), ("user.name", "fixture"),
                            ("user.email", "fixture@example.invalid"), ("commit.gpgsign", "false"),
@@ -65,7 +65,7 @@ class Repo:
         self.git("remote", "add", "origin", str(self.bare))
 
     def git(self, *args: str, env: dict | None = None) -> str:
-        r = subprocess.run(["git", *args], cwd=self.work, capture_output=True, text=True,
+        r = subprocess.run(["git", *args], cwd=self.work, capture_output=True, text=True, stdin=subprocess.DEVNULL,
                            env=env or os.environ.copy())
         if r.returncode:
             raise AssertionError(f"git {args}: {r.stderr}")
@@ -346,6 +346,105 @@ class ScanHardeningTests(unittest.TestCase):
             self.assertFalse([f for f in self.regex_hits(HOME, "README.md") if f.kind == "pii"])
             self.assertTrue([f for f in self.regex_hits(HOME, "docs/README.md") if f.kind == "pii"])
             self.assertTrue([f for f in self.regex_hits(KEY, "README.md") if f.kind == "secret"])
+
+    # --- independent review findings (fresh-context reviewer, 2026-10-28) ---------
+
+    def test_review_replace_ref_cannot_show_a_clean_twin(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        leaky = self.repo.commit({"cfg.txt": f"{KEY}\n"}, "add")
+        self.repo.git("reset", "-q", "--hard", base)
+        clean = self.repo.commit({"cfg.txt": "clean\n"}, "add")
+        self.repo.git("replace", leaky, clean)
+        self.assertBlocked(self.scan([f"refs/heads/x {leaky} refs/heads/x {ZERO}"]))
+
+    def test_review_ls_remote_ignores_insteadof_rewrites(self) -> None:
+        self.repo.commit({"cfg.txt": f"{KEY}\n"}, "root")
+        tip = self.repo.git("rev-parse", "HEAD")
+        mirror = self.repo.root / "mirror.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(mirror)], check=True, stdin=subprocess.DEVNULL, capture_output=True)
+        self.repo.git("push", "-q", str(mirror), "main")  # the mirror already has it
+        self.repo.git("config", f"url.{mirror.as_posix()}.insteadOf", self.repo.bare.as_posix())
+        self.assertBlocked(self.scan([f"refs/heads/main {tip} refs/heads/main {ZERO}"]))
+
+    def test_review_binary_needs_real_signature(self) -> None:
+        for name, data in (("f.eot", b"PK\x03\x04\x00" + zlib.compress(KEY.encode())),
+                           ("f.webp", b"RIFF\x00\x00\x00\x00WAVEfmt \x00"),
+                           ("f.avif", b"\x00\x00\x00\x1cnot-an-image")):
+            with self.subTest(name):
+                self.tearDown()
+                self.setUp()
+                base = self.repo.commit({"a.txt": "base\n"})
+                self.repo.publish()
+                self.repo.commit({name: data})
+                self.assertBlocked(self.scan(self.push_main(base)))
+
+    def test_review_utf16_text_in_image_blocks(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        self.repo.commit({"p.jpg": b"\xff\xd8\xff\xe1\x00\x10" + KEY.encode("utf-16-le") + b"\x00\x00"})
+        self.assertBlocked(self.scan(self.push_main(base)))
+
+    def test_review_extra_commit_header_and_identity_host(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        tree = self.repo.git("rev-parse", "HEAD^{tree}")
+        raw = (f"tree {tree}\nparent {base}\nauthor f <f@example.invalid> 1 +0000\n"
+               f"committer f <f@example.invalid> 1 +0000\nx-note {KEY}\n\nclean message\n")
+        path = self.repo.root / "commit.txt"
+        path.write_text(raw, encoding="utf-8", newline="\n")
+        odd = self.repo.git("hash-object", "-t", "commit", "-w", str(path))
+        self.assertBlocked(self.scan([f"refs/heads/x {odd} refs/heads/x {base}"]))
+        host = "10." + "9.8.7"
+        self.repo.git("reset", "-q", "--hard", base)
+        env = dict(os.environ, GIT_AUTHOR_EMAIL=f"dev@{host}", GIT_COMMITTER_EMAIL=f"dev@{host}")
+        (self.repo.work / "b.txt").write_text("b\n", encoding="utf-8")
+        self.repo.git("add", "b.txt")
+        self.repo.git("commit", "-q", "-m", "clean", env=env)
+        self.assertBlocked(self.scan(self.push_main(base)))
+
+    def test_review_empty_file_name_is_scanned(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        self.repo.commit({f"keys/{KEY}.txt": ""})
+        self.assertBlocked(self.scan(self.push_main(base)))
+
+    def test_review_visibility_needs_an_explicit_answer(self) -> None:
+        for out, want in (("false\n", True), ("true\n", False), ("", None), ("null\n", None)):
+            with self.subTest(out), patch.object(
+                    MODULE, "run", return_value=subprocess.CompletedProcess(["gh"], 0, out, "")):
+                self.assertEqual(want, MODULE.repo_is_public("o", "r"))
+        self.assertIsNone(MODULE.parse_github_slug("https://gitlab.com/x/github.com/o/r"))
+        self.assertEqual(("o", "r"), MODULE.parse_github_slug("https://github.com/o/r.git"))
+        self.assertEqual(("o", "r"), MODULE.parse_github_slug("git" + "@" + "github.com:o/r.git"))
+
+    # --- second review round (coordinator, 2026-10-28) --------------------------
+
+    def test_review2_tag_body_line_starting_with_tagger_is_scanned(self) -> None:
+        self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        self.repo.git("tag", "-a", "v2", "-m", "release\n\ntagger " + KEY)
+        tag = self.repo.git("rev-parse", "v2")
+        self.assertBlocked(self.scan([f"refs/tags/v2 {tag} refs/tags/v2 {ZERO}"]))
+
+    def test_review2_png_with_bytes_after_iend_blocks(self) -> None:
+        for label, tail in (("plain trailer", b"appended notes, nothing secret"),
+                            ("key trailer", b"x" + KEY.encode() + b"y")):
+            with self.subTest(label):
+                self.tearDown()
+                self.setUp()
+                base = self.repo.commit({"a.txt": "base\n"})
+                self.repo.publish()
+                self.repo.commit({"logo.png": png() + tail})
+                self.assertBlocked(self.scan(self.push_main(base)))
+
+    def test_review2_binary_strings_reach_the_semantic_reviewer(self) -> None:
+        base = self.repo.commit({"a.txt": "base\n"})
+        self.repo.publish()
+        marker = "semantic-review-marker"
+        self.repo.commit({"logo.png": png((b"tEXt", b"Comment\x00" + marker.encode()))})
+        self.assertPassed(self.scan(self.push_main(base)))
+        self.assertTrue(any(marker in p for p in self.reviewed))
 
     def test_control_clean_change_with_ordinary_readme_passes(self) -> None:
         base = self.repo.commit({"a.txt": "base\n"})
