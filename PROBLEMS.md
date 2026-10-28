@@ -237,3 +237,19 @@ next to each handoff (status, slug, closure-audit enums, next step, unfinished
 items with tracker links) and JSONL entries for PROBLEMS.md, so agent_roster.py
 and handoff-closure-audit-guard.py read fields instead of regexes. Touches the
 handoff hooks and the roster; needs the owner's go-ahead on the format.
+
+## 2026-10-28 12:30 - harness-load-advisor reads a product's "false positives" as harness overload
+
+**Status**: RESOLVED 2026-10-28 (PR AnastasiyaW/codex-claude-code-config#32, merge 3564cba;
+live hook hash 4ef2a06 equals origin/main; 38 tests OK, 26/26 mutants killed, reviewer PROCEED
+on f61883f). Remaining known misses: a complaint whose feedback word is more than 40 characters
+from the subject; "the gate flags/reports false positives".
+
+The `explicit-feedback` signal matches `ложн\w* срабатыван\w*` / `false positive` anywhere in
+the final reply, and `_profile()` labels it `staging-smoke` when "smoke" appears anywhere (here
+the file name `click_smoke.py`). A report on a Crossweft sandbox run ("ложных срабатываний про
+кнопки не было", the click test `click_smoke.py`) blocked Stop three times although no gate or
+profile of ours ran in that session. Fix direction: require a harness/gate subject in the same
+sentence for `explicit-feedback` (as `declared-overload` does) and skip negated forms ("не было
+ложных срабатываний"). A public-repo hook change needs a red/green test and an independent
+reviewer, so it is not patched in passing.
