@@ -66,8 +66,10 @@ GIT_TIMEOUT = 15
 GH_TIMEOUT = 25
 
 MENTIONS = re.compile(r"\bgit\b|\bgh\b|\bgit\.exe\b|\bgh\.exe\b|GIT_", re.IGNORECASE)
-PUSH_ENV = re.compile(r"^(?:GIT_CONFIG\w*|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH)$", re.IGNORECASE)
-_ENV_NAME = r"(GIT_CONFIG\w*|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH)"
+# HOME/USERPROFILE/XDG_CONFIG_HOME move the global config, so the global core.hooksPath disappears.
+PUSH_ENV = re.compile(r"^(?:GIT_CONFIG\w*|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|HOME|USERPROFILE|"
+                      r"XDG_CONFIG_HOME)$", re.IGNORECASE)
+_ENV_NAME = r"(GIT_CONFIG\w*|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|HOME|USERPROFILE|XDG_CONFIG_HOME)\b"
 # Environment set by a separate statement of the same command line, Bash or PowerShell.
 TEXT_ENV = re.compile(
     r"\$env:" + _ENV_NAME + r"\s*=|\bexport\s+" + _ENV_NAME + r"=|\bset\s+" + _ENV_NAME + r"=|"
@@ -87,6 +89,8 @@ WRAPPERS = {"sudo", "nohup", "command", "builtin", "exec", "nice", "ionice", "st
             "time", "caffeinate", "doas"}
 VALUE_WRAPPERS = {"timeout"}  # first positional is a duration
 WRAPPER_VALUED = {"-I", "-n", "-P", "-L", "-d", "-u", "-g", "-E", "-s"}
+CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list",
+                "--show-origin", "--show-scope", "get", "list"}
 GIT_BUILTINS = set("""
 status log diff add commit fetch pull checkout switch branch show rev-parse config remote worktree
 stash merge rebase reset restore tag clone init ls-files grep blame cherry-pick describe rm mv
@@ -98,10 +102,12 @@ write-tree update-index diff-tree diff-index diff-files ls-tree check-attr check
 """.split())
 GO = re.compile(
     r"разреш|можно|давай|делай|сделай|выполн|запуш|пушь|пушни|опубликуй|публикуй|выкладывай|выложи|"
-    r"approve|allow|go\s+ahead|do\s+it|proceed|\byes\b|\bда\b|\bок\b|\bok\b|\bokay\b",
+    r"\bapprove\b|\ballow\b|\bgo\s+ahead\b|\bdo\s+it\b|\bproceed\b|\byes\b|\bда\b|\bок\b|\bok\b|"
+    r"\bokay\b",
     re.IGNORECASE)
 NOT_GO = re.compile(
     r"\bне\b|\bнельзя\b|\bнет\b|\bзапрещ|\bпогоди|\bподожди|\bdon'?t\b|\bdo\s+not\b|\bnever\b|"
+    r"disapprov|disallow|\bden(?:y|ied)\b|\breject|\bforbid|\bstop\b|\bwait\b|"
     r"\bno\b|\bnot\b|\?",
     re.IGNORECASE)
 FLAG_TOKEN = re.compile(r"(?<!\S)-{1,2}[\w.=-]+")
@@ -125,6 +131,7 @@ class Cmd:
     cwd: str | None          # None: unknown local directory
     remote: bool             # runs on another machine (ssh)
     raw: str
+    fed: bool = False        # arguments also arrive on stdin (xargs)
 
 
 # ---------------------------------------------------------------- command reading
@@ -176,7 +183,16 @@ def _command_name(token: str) -> str:
     return name
 
 
+def local_path(target: str) -> str:
+    """Git Bash spells C:/x as /c/x; the probes run Windows git, which needs the drive form."""
+    match = re.match(r"^/([A-Za-z])(?:/(.*))?$", target)
+    if os.name == "nt" and match:
+        return f"{match.group(1).upper()}:/{match.group(2) or ''}"
+    return target
+
+
 def _resolve_dir(base: str | None, target: str) -> str | None:
+    target = local_path(target)
     if base is None or re.search(r"[$`%]", target):
         return None
     if target.startswith("~") and len(target) > 1 and target[1] not in "/\\":
@@ -199,6 +215,7 @@ def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int =
                 yield from iter_commands(inner, current, remote, depth + 1)
             tokens = tokenize(segment)
             env: dict[str, str] = {}
+            fed = False
             while tokens:
                 head = tokens[0]
                 if head in KEYWORDS or head in {"(", "{"}:
@@ -215,6 +232,7 @@ def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int =
                 name = _command_name(head)
                 if name in WRAPPERS or name in VALUE_WRAPPERS or name in ("env", "xargs"):
                     tokens = tokens[1:]
+                    fed = fed or name == "xargs"
                     needs_value = name in VALUE_WRAPPERS
                     while tokens:
                         word = tokens[0]
@@ -241,7 +259,7 @@ def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int =
                 args = [t for t in argv[1:] if not t.startswith("-")]
                 current = _resolve_dir(current, args[0]) if args else str(Path.home())
                 continue
-            yield Cmd(name, argv, env, current, remote, segment)
+            yield Cmd(name, argv, env, current, remote, segment, fed)
             if name in PRINTERS:
                 continue
             if name in SHELLS and "-c" in argv:
@@ -392,7 +410,7 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
         token = argv[index]
         nxt = argv[index + 1] if index + 1 < len(argv) else ""
         if token == "-C":
-            location += ["-C", nxt]
+            location += ["-C", local_path(nxt)]
             index += 2
         elif token == "-c":
             config.append(nxt)
@@ -423,6 +441,20 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
                 "pre-push scan does not run",
                 "drop the -c/--config-env core.hooksPath override",
                 [("core.hookspath",)]))
+    if sub == "config" and any("core.hookspath" in a.lower() for a in args) \
+            and not any(a.lower() in CONFIG_READS for a in args):
+        findings.append(Finding(
+            "hookspath-config",
+            f"`{cmd.raw.strip()}` rewrites core.hooksPath; a push after it (in this command or "
+            "later) can run without the global pre-push scan",
+            "leave core.hooksPath alone; chain a local pre-push to the global one instead",
+            [("core.hookspath",)]))
+    if sub.startswith(("$", "@")) or "$(" in sub or (cmd.fed and sub in ("", "push", "send-pack")):
+        findings.append(Finding(
+            "dynamic-git", f"`{cmd.raw.strip()}` takes its git subcommand or arguments from a "
+            "variable, splat or stdin, so a hook skip cannot be ruled out",
+            "write the push literally", [(cmd.raw.strip().lower(),)]))
+        return
 
     if sub and sub not in GIT_BUILTINS and sub not in ("push", "send-pack") and depth < 3:
         expansion = None
@@ -456,6 +488,11 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
                 if k.upper().startswith("GIT_CONFIG_VALUE") or k.upper().startswith("GIT_CONFIG_KEY"))):
             env_names.add(name + " (inherited)")
 
+    if any((a.startswith(("$", "@")) and not a.startswith("@{")) or "$(" in a for a in args):
+        findings.append(Finding(
+            "dynamic-git", f"`{cmd.raw.strip()}` passes push arguments through a variable or "
+            "splat, which can carry --no-verify", "write the push arguments literally",
+            [(cmd.raw.strip().lower(),)]))
     repo: Repo | None = None
     slug: str | None = None
     if cmd.cwd and not cmd.remote and Path(cmd.cwd).is_dir():
@@ -482,10 +519,10 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
                                 [("--no-verify",), needle]))
     if cmd.remote:
         return
-    if cmd.cwd is None:
+    if cmd.cwd is None or not Path(cmd.cwd).is_dir():
         findings.append(Finding(
             "unknown-repo", f"cannot resolve which repository `{cmd.raw.strip()}` pushes from "
-            "(the working directory comes from a variable or substitution)",
+            f"(working directory {cmd.cwd or 'from a variable or substitution'} is not found here)",
             "cd to a literal path before the push", [(cmd.raw.strip().lower(),)]))
         return
     if repo is None or not repo.top or not repo.hooks:
@@ -538,6 +575,12 @@ def _positionals(args: list[str], valued: set[str]) -> list[str]:
     return out
 
 
+def _flag_on(lowered: list[str], flag: str) -> bool:
+    """`--public` and `--public=true` count; `--public=false` does not."""
+    return any(a == flag or (a.startswith(flag + "=") and a.split("=", 1)[1] not in ("false", "0"))
+               for a in lowered)
+
+
 def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
     argv = cmd.argv
     sub = argv[1].lower() if len(argv) > 1 else ""
@@ -558,7 +601,7 @@ def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
                                     "any scan", "keep the repo private",
                                     [PUBLIC, _repo_needle(slug, None) if slug else
                                      (Path(local_cwd).name if local_cwd else "<repo>",)]))
-    elif sub == "repo" and verb == "create" and "--public" in lowered:
+    elif sub == "repo" and verb == "create" and _flag_on(lowered, "--public"):
         pos = _positionals(args, {"--description", "-d", "--homepage", "-h", "--source", "-s",
                                   "--remote", "-r", "--team", "-t", "--template", "-p",
                                   "--gitignore", "-g", "--license", "-l"})
@@ -566,7 +609,8 @@ def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
         findings.append(Finding("repo-public", f"`gh repo create --public` creates {name} as a "
                                 "PUBLIC repo (with --push its content is published unscanned)",
                                 "create it with --private", [PUBLIC, (name, name.split("/")[-1])]))
-    elif sub == "gist" and verb == "create" and ("--public" in lowered or "-p" in lowered):
+    elif sub == "gist" and verb == "create" and (_flag_on(lowered, "--public")
+                                                 or _flag_on(lowered, "-p")):
         findings.append(Finding("gist-public", "`gh gist create --public` publishes files with no "
                                 "scan", "create a secret gist or a private repo",
                                 [("gist", "гист"), PUBLIC]))
@@ -596,7 +640,8 @@ def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
                                         "commit and `git push` instead",
                                         [("graphql",), ("createcommitonbranch", "--input")]))
         elif method in ("PUT", "POST", "PATCH"):
-            if re.match(r"repos/[^/]+/[^/]+/(?:contents|git)(?:/|$)", path, re.IGNORECASE):
+            if re.match(r"(?:repos/[^/]+/[^/]+/(?:contents|git|releases)|gists)(?:/|$)", path,
+                        re.IGNORECASE):
                 findings.append(Finding("api-write", f"`gh api -X {method} {path}` writes repo "
                                         "content directly, past the pre-push scan",
                                         "commit and `git push` instead", [(path.lower(),)]))

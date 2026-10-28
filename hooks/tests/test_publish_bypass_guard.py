@@ -130,6 +130,36 @@ class MustBlock(unittest.TestCase):
 
     def test_unknown_repo(self) -> None:
         self.check("cd $REPO && git push", "unknown-repo")
+        self.check("cd /no/such/dir/here && git push", "unknown-repo")
+
+    # Fresh-context review 2026-10-28: each of these passed the first version.
+    def test_git_bash_drive_paths(self) -> None:
+        if os.name != "nt":
+            self.skipTest("drive-letter spelling exists only on Windows")
+        posix = "/" + Fixture.unscanned.as_posix().replace(":", "", 1)
+        posix = posix[0] + posix[1].lower() + posix[2:]
+        self.check(f"cd {posix} && git push", "local-hooks")
+        self.check(f"git -C {posix} push", "local-hooks")
+
+    def test_hookspath_rewritten_in_config(self) -> None:
+        self.check("git config core.hooksPath .nohooks && git push", "hookspath-config")
+        self.check("git config --global --unset core.hooksPath; git push", "hookspath-config")
+
+    def test_home_moves_global_config(self) -> None:
+        self.check("HOME=/tmp/empty git push", "git-config-env")
+        self.check("$env:HOME='C:\\x'; git push", "git-config-env")
+
+    def test_dynamic_subcommand_or_arguments(self) -> None:
+        self.check("$a='push','--no-verify'; git @a", "dynamic-git")
+        self.check("p=push; git $p --no-verify", "dynamic-git")
+        self.check("echo push --no-verify | xargs git", "dynamic-git")
+        self.check("git push origin $FLAGS", "dynamic-git")
+
+    def test_public_flag_with_value_and_release_api(self) -> None:
+        self.check("gh gist create --public=true f", "gist-public")
+        self.check("gh repo create acme/x --public=true --push", "repo-public")
+        self.check("gh api -X POST repos/acme/alpha/releases -f body=x", "api-write")
+        self.check("gh api gists -f public=true -f files[a][content]=x", "api-write")
 
     def test_visibility_and_gist(self) -> None:
         self.check("gh repo edit acme/alpha --visibility public --accept-visibility-change-consequences",
@@ -189,6 +219,10 @@ class MustPass(unittest.TestCase):
 
     def test_other_git(self) -> None:
         self.check("git status && git log --oneline -3 && git fetch origin")
+        self.check("git config --get core.hooksPath")
+        self.check("git push origin HEAD:@{u}")
+        self.check("git ls-files | xargs git add")
+        self.check("gh gist create --public=false f")
 
 
 class Approval(unittest.TestCase):
@@ -210,6 +244,8 @@ class Approval(unittest.TestCase):
 
     def test_negation_question_or_absence_do_not_approve(self) -> None:
         for prompt in (None, "", "не делай git push --no-verify в alpha",
+                       "I disapprove: push alpha with --no-verify",
+                       "disallow --no-verify push to alpha",
                        "можно git push --no-verify в alpha?", "git push --no-verify в alpha"):
             self.assertEqual({"push-no-verify"}, self.blocked("git push --no-verify", prompt), prompt)
 
