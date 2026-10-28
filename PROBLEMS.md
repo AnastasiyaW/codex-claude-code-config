@@ -175,6 +175,8 @@ same command. The premise is removed: a printf/echo payload is masked only when 
 the whole command, the target is under `.claude/tmp/` or inside TEMP/TMP, and no existing
 component is a symlink or junction and an existing target is a regular file with one link.
 Everything else stays visible (docs are written with the Write tool, not printf).
+Review of b9c1fbd: scheduled tasks on this machine run .ps1 files from TEMP and from
+.claude/tmp, so scratch alone is not inert; the last suffix must also be txt/md/log/csv.
 `agent_policy_gates.commit_invocations` now sees commits inside `bash/sh -c`, `powershell -c`
 and git aliases (`!` aliases included). Evidence: `hooks/tests/test_command_text_is_data.py`
 (202 cases, 12 red on main, all green after; registered in `run_guard_regressions.py`),

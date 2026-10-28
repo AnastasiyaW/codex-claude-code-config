@@ -574,6 +574,9 @@ _PRINT_OPTIONS = {"-n", "-e", "-E", "-ne", "-en", "--"}
 # of name lists (e73a804, ccda9e8, f758e24) showed that "a .md/.txt write is inert" is
 # false, so the premise is gone: elsewhere the payload stays visible to the guards.
 _SCRATCH_PREFIX = ".claude/tmp/"
+# Scratch is not inert either: scheduled tasks here run .ps1 files from TEMP and from
+# .claude/tmp (review of b9c1fbd). The last suffix decides, so a.txt.ps1 is a script.
+_DATA_EXTENSIONS = {"txt", "md", "log", "csv"}
 _NOT_BASH_QUOTING = re.compile("[`‘’‚‛“”„]")
 _MESSAGE_FILE_FLAGS = {"-F", "--file", "--body-file", "--notes-file"}
 # A name defined in the same command could turn `git` or `printf` into anything.
@@ -748,6 +751,9 @@ def _plain_file_target(path: str) -> bool:
         return False
     current, parts, free = location
     if any(not part for part in parts) or any(part.startswith(".") for part in parts[free:]):
+        return False
+    stem, _, extension = parts[-1].rpartition(".")
+    if not stem or extension.lower() not in _DATA_EXTENSIONS:
         return False
     for index, part in enumerate(parts, 1):
         current = os.path.join(current, part)

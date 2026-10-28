@@ -55,6 +55,15 @@ DATA = [
 
 # Code: the deletion guard (or, for transfers, the transfer guard) must block.
 DELETE = [
+    ("printf 'rm -rf /srv/data' > D:/tmp/claude/task-a/run.ps1",
+     "review b9c1fbd: scheduled task script in TEMP"),
+    ("printf 'rm -rf /srv/data' > .claude/tmp/jobs/nightly.ps1",
+     "review b9c1fbd: scheduled task script in .claude/tmp"),
+    ("printf 'rm -rf /srv/data' > .claude/tmp/x.ps1", "review b9c1fbd: ps1 in scratch"),
+    ("printf 'rm -rf /srv/data' > D:/tmp/x.sh", "review b9c1fbd: sh in TEMP"),
+    ("printf 'rm -rf /srv/data' > D:/tmp/x.txt.ps1", "review b9c1fbd: double extension"),
+    ("printf 'rm -rf /srv/data' > .claude/tmp/x.json", "review b9c1fbd: json in scratch"),
+    ("printf 'rm -rf /srv/data' > .claude/tmp/run", "review b9c1fbd: no extension in scratch"),
     ("printf 'rm -rf /srv/data' > CLAUDE.local.md", "review f758e24: CLAUDE.local.md"),
     ("printf 'rm -rf /srv/data' > AGENT.md", "review f758e24: AGENT.md"),
     ("printf 'rm -rf /srv/data' > agents/a.md", "review f758e24: md under agents"),
@@ -236,8 +245,21 @@ UNIT = [
     ("scratch", sc._plain_file_target, (".claude/tmp/msg.txt",), True),
     ("scratch backslash", sc._plain_file_target, (".claude\\tmp\\m.txt",), True),
     ("scratch upper", sc._plain_file_target, (".CLAUDE/Tmp/m.txt",), True),
-    ("scratch any extension", sc._plain_file_target, (".claude/tmp/CLAUDE.md",), True),
-    ("scratch nested", sc._plain_file_target, (".claude/tmp/a/b.sh",), True),
+    ("scratch instruction name", sc._plain_file_target, (".claude/tmp/CLAUDE.md",), True),
+    ("scratch nested", sc._plain_file_target, (".claude/tmp/a/b.txt",), True),
+    ("scratch script", sc._plain_file_target, (".claude/tmp/a/b.sh",), False),
+    ("scratch ps1 upper", sc._plain_file_target, (".claude/tmp/B.PS1",), False),
+    ("scratch double extension", sc._plain_file_target, (".claude/tmp/a.txt.ps1",), False),
+    ("scratch txt after ps1", sc._plain_file_target, (".claude/tmp/a.ps1.txt",), True),
+    ("scratch no extension", sc._plain_file_target, (".claude/tmp/run",), False),
+    ("scratch trailing dot", sc._plain_file_target, (".claude/tmp/run.",), False),
+    ("scratch md", sc._plain_file_target, (".claude/tmp/msg.MD",), True),
+    ("scratch log", sc._plain_file_target, (".claude/tmp/a.log",), True),
+    ("scratch csv", sc._plain_file_target, (".claude/tmp/a.csv",), True),
+    ("scratch json", sc._plain_file_target, (".claude/tmp/a.json",), False),
+    ("scratch msg", sc._plain_file_target, (".claude/tmp/a.msg",), False),
+    ("TEMP md", sc._plain_file_target, (os.path.join(tempfile.gettempdir(), "no-such-dir", "commit-msg.md"),), True),
+    ("TEMP ps1", sc._plain_file_target, (os.path.join(tempfile.gettempdir(), "no-such-dir", "run.ps1"),), False),
     ("scratch parent", sc._plain_file_target, (".claude/tmp/../x.txt",), False),
     ("scratch dot folder", sc._plain_file_target, (".claude/tmp/.git/x",), False),
     ("scratch empty part", sc._plain_file_target, (".claude/tmp//x.txt",), False),
@@ -361,11 +383,12 @@ with tempfile.TemporaryDirectory() as root:
     sc._CURRENT_EVENT = {"tool_name": "Bash", "cwd": project}
     must("new scratch file", ".claude/tmp/new.txt", True)
     must("existing scratch file", ".claude/tmp/plain.txt", True)
-    must("scratch folder as target", ".claude/tmp/real", False)
-    must("file used as a folder", ".claude/tmp/plain.txt/x", False)
+    os.makedirs(os.path.join(scratch, "folder.txt"))
+    must("scratch folder as target", ".claude/tmp/folder.txt", False)
+    must("file used as a folder", ".claude/tmp/plain.txt/x.txt", False)
     must("absolute TEMP file", os.path.join(root, "abs.txt"), True)
     must("name too long to stat", ".claude/tmp/" + "a" * 300 + ".txt", False)
-    must("path too long to stat", ".claude/tmp/" + "x" * 40000, False)
+    must("path too long to stat", ".claude/tmp/" + "x" * 40000 + ".txt", False)
     # A hard link needs no privilege on NTFS or POSIX: writing it writes .bashrc.
     os.link(bashrc, os.path.join(scratch, "hard.txt"))
     os.link(bashrc, os.path.join(root, "hard.txt"))
