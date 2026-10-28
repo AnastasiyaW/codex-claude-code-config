@@ -381,7 +381,7 @@ def _commit_header_lines(sha: str) -> list[str]:
 
     Extra headers (`x-note`, `mergetag`) are scanned in full. Author and committer are
     reduced to their e-mail domain: an address is the same class as every past commit,
-    but a default identity like user@host.corp names an internal host.
+    but a default identity (user at an internal host name) leaks that host.
     """
     raw = git_bytes(["cat-file", "commit", sha]).decode("utf-8", "replace")
     header = raw.split("\n\n", 1)[0].split("\n")
