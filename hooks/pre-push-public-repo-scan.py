@@ -512,7 +512,7 @@ def _commit_header_lines(sha: str, own: str, findings: list) -> list[str]:
                                     (sig[0] if sig else "")[:40], "secret"))
             out.extend(sig)
         else:
-            # Armour lines are base64 by syntax, yet `AKIA...` or `/home/x/` are valid
+            # Armour lines are base64 by syntax, yet an access key id or a home path are valid
             # base64 too: the raw lines are scanned as well as the decoded strings.
             out.extend(sig[1:-1] + texts)
 
@@ -814,11 +814,11 @@ def _is_exempt(path: str) -> bool:
 
 
 # Personal data patterns (for public repos)
-_OCTET = r"0*(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"  # leading zeros: 192.168.001.010
+_OCTET = r"0*(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"  # octets may carry leading zeros
 PII_PATTERNS = {
     "ssh_private_paths": r"(~/\.ssh/id_[a-z0-9_]+(?!\.pub))",
     # Windows homes also in JSON-escaped (\\) and double-escaped (\\\\) spellings and with /.
-    # No trailing separator needed, any case: `cd /home/alice`, `/Users/Bob`, `C:\\Users\\Bob`.
+    # No trailing separator needed and any letter case, Unix and Windows spellings.
     "home_user_path": (r"(/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+"
                        r"|\b[A-Za-z]:(?:\\{1,4}|/)Users(?:\\{1,4}|/)[A-Za-z0-9_.-]+)"),
     "ssh_ports_internal": r"\bssh\s+.*-p\s+(2222|4000[0-7])\b",
