@@ -1,6 +1,29 @@
 # Updates
 
-Changelog for claude-code-skills. Newest first.
+Changelog for codex-claude-code-config. Newest first.
+
+---
+
+## 2026-10-28 (temp backups are not transfers, mutation probe)
+
+- `transfer-contract-guard` no longer asks for a transfer contract when a
+  local copy (`cp`, `copy`, `Copy-Item`, `xcopy`, `robocopy`) lands entirely
+  inside a temp folder, for example a backup before an edit. Moves, syncs,
+  clones, remote endpoints, mapped network drives, command substitution,
+  unresolved variables and junctions that point out of temp are still gated.
+  39-case test, 22 of them must-block controls; an independent review found
+  four bypasses in the first version, all closed before merge.
+- `directory-creation-guard` accepts a new folder inside the harness session
+  scratchpad without a lifecycle marker.
+- New `scripts/mutation_probe.py`: applies one small mutation at a time to the
+  named Python functions (flip a comparison, swap and/or, drop `not`, flip a
+  boolean return, return `None`) and checks that the test fails. Exit 0 all
+  mutants killed, 3 a mutant survived, 2 not checked; `--self-test` includes a
+  must-survive negative control. The idea comes from
+  [unclebob/mutator](https://github.com/unclebob/mutator); the tool is ours.
+  Both hook fixes above: every mutant killed.
+- `PROBLEMS.md`: two open design items, a guard reading a `git commit -m`
+  message as a command, and a JSON sidecar for handoffs.
 
 ---
 
