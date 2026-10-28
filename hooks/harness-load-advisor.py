@@ -52,19 +52,65 @@ SIGNALS: list[tuple[str, list[str]]] = [
             r"[^.?!\n]{0,120}\b(staging|smoke|обычн\w* тест|стейдж\w*|быстр\w* тест)\b",
         ],
     ),
-    (
-        "explicit-feedback",
-        [
-            r"\b(too (strict|restrictive|much|heavy)|overkill|over[- ]engineer\w*|"
-            r"blocks? (the )?(staging|smoke)|false positive|false-positive)\b",
-            r"\b(слишком (строг\w*|жестк\w*|зажат\w*|много|тяжел\w*)|"
-            # bare "перегруж" is not here: it also describes a slow computer (2026-10-07
-            # false positive); harness overload is caught by declared-overload, which
-            # requires a harness/test-system subject in the same sentence.
-            r"избыточн\w*|ложн\w* срабатыван\w*|блокир\w* smoke)\b",
-        ],
-    ),
 ]
+
+# Feedback words count only next to one of our gates or test profiles, within one
+# clause: the same words describe a product under test ("no false positives on
+# the buttons", 2026-10-28), a report ("overkill for a two-line change"), or a
+# product next to a gate result ("gate passed, but the detector has false
+# positives"). A hook is not a subject: its false positive is not a profile overload.
+# Bare "перегруж" is not a feedback word: it also describes a slow computer
+# (2026-10-07); harness overload is caught by declared-overload.
+_FEEDBACK = (
+    r"(?:too (?:strict|restrictive|much|heavy)|overkill|over[- ]engineer\w*|"
+    r"blocks? (?:the )?(?:staging|smoke)|false[- ]positives?|"
+    r"слишком (?:строг\w*|жестк\w*|зажат\w*|много|тяжел\w*)|"
+    r"избыточ\w*|ложн\w* срабатыван\w*|блокир\w* smoke)"
+)
+# Bare smoke/staging is a place a product is tested ("false positives on staging"),
+# not a subject: only a smoke/staging test, gate, profile or run counts. A bare
+# validator is usually a product's input validator, so it is not a subject either.
+_STAGE = r"(?:smoke|staging|смоук\w*|стейдж\w*)"
+_SUBJECT = (
+    r"(?:harness(?:es)?|test (?:systems?|suites?|profiles?)|gates?|"
+    rf"{_STAGE}[- ]?(?:tests?|gates?|profiles?|suites?|runs?|тест\w*|гейт\w*|профил\w*|"
+    r"прогон\w*|набор\w*|провер\w*)|"
+    r"(?:staging|стейдж\w*)[- ](?:smoke|смоук\w*)|"
+    rf"(?:тестов\w*|test) профил\w*|профил\w* (?:тест\w*|{_STAGE})|"
+    r"харнесс\w*|гейт\w*|обвязк\w*|тестов\w* контур\w*|систем\w* тест\w*)"
+)
+# simplification: one clause of at most 40 characters, with no report verb in it,
+# stands for "the feedback describes the subject": "the gate found that the parser
+# is too strict" is a product finding. A long complaint ("the staging gate we added
+# last week is way too strict") is missed; a parser of who-does-what is the upgrade.
+_REPORT_VERB = (
+    r"(?:found|finds|shows?|showed|shown|reports?|reported|flag(?:s|ged)?|caught|catches|"
+    # "показался" (seemed) is a complaint, not a report
+    r"нашел|нашла|нашли|находит|показал(?!ся|ось|ась|ись)\w*|показыва\w*|"
+    r"выявил\w*|обнаружил\w*|поймал\w*)"
+)
+_CLAUSE = rf"(?:(?!\b{_REPORT_VERB}\b)[^.?!\n,;:—–]){{0,40}}"
+SIGNALS.append((
+    "explicit-feedback",
+    [
+        rf"\b{_SUBJECT}\b{_CLAUSE}\b{_FEEDBACK}\b",
+        rf"\b{_FEEDBACK}\b{_CLAUSE}\b{_SUBJECT}\b",
+        # a dash after the subject is the Russian copula ("Гейт — слишком строгий"),
+        # but only before a judgement: "Smoke — 2 false positives in OCR" is a heading
+        rf"\b{_SUBJECT}[ \t]*[—–][ \t]*(?:too|слишком|избыточ\w*|overkill|over[- ]engineer\w*)\b",
+    ],
+))
+# A stated absence of false positives is a result, not a complaint. Only the
+# false-positive words are negated, and only within one clause on one line:
+# "без того слишком строгий" or "раньше такого не было" stay complaints.
+_FALSE_POSITIVE = r"(?:false[- ]positives?|ложн\w* срабатыван\w*)"
+NEGATED_FEEDBACK = re.compile(
+    r"\b(?:no(?:[ \t]+more)?|zero|0|none[ \t]+of[ \t]+the|нет|без|ни одного)[ \t]+"
+    rf"(?:(?:real(?:[- ]world)?|реальн\w*)[ \t]+)?{_FALSE_POSITIVE}"
+    rf"|{_FALSE_POSITIVE}[^.?!\n,;:—–]{{0,40}}"
+    r"\b(?:не было|больше нет|нет|не нашл\w*|не найден\w*|не обнаружен\w*|отсутству\w*)\b"
+    rf"|{_FALSE_POSITIVE}[ \t]*[:—–-][ \t]*(?:0|none|нет)\b"
+)
 
 # Quoted text is a mention, not a statement: a UI title «слишком много попыток»,
 # a screen name or a `file_name` must not read as overload. A stray mark must not
@@ -137,6 +183,7 @@ def detect(message: str) -> list[str]:
         return []
     # ё folds to е so "жёсткий" meets the same pattern as "жесткий".
     prose = _blank_quotes(lowered).replace("ё", "е")
+    prose = NEGATED_FEEDBACK.sub(lambda m: _NOT_SENTENCE_MARK.sub(" ", m.group()), prose)
     hits: list[str] = []
     for name, patterns in SIGNALS:
         if any(re.search(pattern, prose, re.IGNORECASE) for pattern in patterns):

@@ -166,6 +166,88 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             self.assertEqual(payload and payload.get("decision"), "block", output)
             self.assertIn("declared-overload", payload["reason"])
 
+    def test_feedback_words_about_a_product_under_test_are_silent(self) -> None:
+        # 2026-10-28 false positive: a report on a checker's sandbox run ("no false
+        # positives on the buttons") blocked Stop; no gate or profile of ours had run.
+        for text in (
+            "Ложных срабатываний про кнопки не было. Проверка доказывает связи в исходниках.",
+            "No false positives on the buttons; the click smoke test turns red on a planted throw.",
+            "Crossweft дал 2 ложных срабатывания на боте, оба помечены в карте.",
+            "Это ложное срабатывание хука, а не перегрузка.",
+            "The report is overkill for a two-line change.",
+            # a product tested on staging: smoke/staging alone is a place, not a subject
+            "Модель даёт ложные срабатывания на стейдже, 3 из 100.",
+            "Классификатор на staging выдал 2 false positives.",
+            "The smoke detector gives false positives.",
+            "Smoke test passed; the UI has too much padding.",
+            # stated absence, with one of our gates in the sentence
+            "The smoke gate passed, 0 false positives.",
+            "Ложных срабатываний у гейта на стейдже не было.",
+            "Ложные срабатывания гейта отсутствуют.",
+            "Ложных срабатываний гейта не обнаружено.",
+            # a gate result next to a product result, in another clause
+            "Gate passed, but the button logic has too many false positives.",
+            "Гейт прошёл, детектор даёт ложные срабатывания на тенях.",
+            "The model has false positives; I added a gate to catch them.",
+            "The spam filter is too strict, I fixed it and the gate is green.",
+            "Гейт прошёл: ложных срабатываний у детектора нет.",
+            "Gate green, no more false positives.",
+            "The gate has zero real-world false positives.",
+            "The gate has false positives: 0.",
+            "The gate has false positives — none.",
+            "The gate gives no false positives.",
+            "The gate gives no more false positives.",
+            "Ложных срабатываний у гейта нет.",
+            # a product's validator, and a gate reporting a product finding
+            "In the product, the input validators are too strict for phone numbers.",
+            "Валидатор формы был слишком строгим к телефонам.",
+            "The smoke test found that the parser is too strict with dates.",
+            "The staging run shows the spam filter has too many false positives.",
+            "Гейт нашёл ложные срабатывания детектора лиц.",
+            "Staging smoke — 2 false positives in OCR.",
+            "Smoke-тест — ложные срабатывания детектора: 2.",
+        ):
+            with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-product-") as raw:
+                root = Path(raw)
+                payload, output = run_hook(root, text)
+                self.assertIsNone(payload, output)
+                self.assertFalse((root / "feedback" / "events.jsonl").exists())
+
+    def test_feedback_words_about_our_gates_still_block(self) -> None:
+        for text in (
+            "Гейт слишком строгий для обычного smoke.",
+            "The staging gate is overkill: it waits for a VM run.",
+            "Тестовый контур даёт ложные срабатывания и не пускает стейдж.",
+            "A false positive in the harness keeps failing the smoke.",
+            "Smoke-профиль избыточный: в нём подпись релиза.",
+            "The harness raises false positives on every smoke.",
+            "The gates are overkill.",
+            "Harnesses are too strict here.",
+            # a negation elsewhere in the sentence must not hide the complaint
+            "Гейт слишком строгий, раньше такого не было.",
+            "Гейт избыточный, смысла в нём не было.",
+            "гейт и без того слишком строгий",
+            "The gate is without doubt overkill.",
+            "Retry?\nno\ntoo strict gate",
+            "Гейт даёт ложные срабатывания, раньше такого не было.",
+            "У гейта без конца ложные срабатывания.",
+            "Retry?\nno\nfalse positives from the gate",
+            "Гейт избыточный и смысла в нём не было.",
+            # smoke/staging tests and test profiles in their usual wording
+            "The smoke test is too strict.",
+            "Smoke-тест слишком строгий.",
+            "The staging smoke is too strict.",
+            "Тестовый профиль слишком строгий.",
+            "Профиль смоука слишком строгий.",
+            "Харнесс избыточен для такой правки.",
+            "Гейт — слишком строгий.",
+            "Гейт — избыточен.",
+            "Гейт показался слишком строгим.",
+        ):
+            with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-gate-") as raw:
+                payload, output = run_hook(Path(raw), text)
+                self.assertEqual(payload and payload.get("decision"), "block", output)
+
     def test_staging_policy_cannot_embed_release_only_command(self) -> None:
         with tempfile.TemporaryDirectory(prefix="harness-policy-") as raw:
             root = Path(raw)
