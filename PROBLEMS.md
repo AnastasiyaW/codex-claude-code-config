@@ -195,3 +195,24 @@ after instructions for the owner ("выполни у себя: `kill 4242`"), an
 Options that were weighed: (a) the same strict grammar for stop/kill (safe, but natural phrasings like
 "убей 4242, он висит" stop passing) or (b) keep heuristics and accept these classes. The resolution
 above is the middle path between them; the three probe rows are now refused.
+
+## 2026-10-28 09:30 - transfer-contract-guard reads a git commit message as a transfer command
+
+**Status**: arch-decision
+
+`git commit -m "... Copy-Item/robocopy ..."` is blocked as a transfer: the quoted
+message is data, but `safety_common.executable_text` masks quoted arguments only
+for search/print commands. Masking commit messages there is a decision for every
+guard that shares the helper (a command substitution inside double quotes still
+executes, so the mask must keep it). Workaround: `git commit -F <file>`.
+Found by session 71b3da3f while committing 8a36515.
+
+## 2026-10-28 09:30 - handoff Closure Audit and PROBLEMS.md are prose that machines parse
+
+**Status**: arch-decision
+
+Proposal from the mindfulmodeler review (session 71b3da3f): a small JSON sidecar
+next to each handoff (status, slug, closure-audit enums, next step, unfinished
+items with tracker links) and JSONL entries for PROBLEMS.md, so agent_roster.py
+and handoff-closure-audit-guard.py read fields instead of regexes. Touches the
+handoff hooks and the roster; needs the owner's go-ahead on the format.
