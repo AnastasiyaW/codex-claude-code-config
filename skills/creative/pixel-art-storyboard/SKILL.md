@@ -109,7 +109,7 @@ Layer order (bottom to top):
 
 Each layer can have its own loop sub-period, but the parent loop must be the LCM (or use periods that don't drift visibly within reasonable view time).
 
-See `templates/cover-template.js` for a starter canvas program.
+See `templates/single-cover.html` (one cover) and `templates/grid-cover.html` (a grid) for starter canvas programs.
 
 ### Step 4 — Compose into HTML
 

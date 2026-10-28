@@ -18,7 +18,7 @@ model: sonnet
 # /layer-new -- scaffold a project layer
 
 Creates `docs/layers/<layer-name>/` with the full template structure
-defined by [principle 28](https://github.com/AnastasiyaW/claude-code-config/blob/main/principles/28-feature-layer-architecture.md).
+defined by [principle 28](https://github.com/AnastasiyaW/codex-claude-code-config/blob/main/principles/28-feature-layer-architecture.md).
 
 ## When to use
 
@@ -58,7 +58,7 @@ Check the current working directory:
    private GitHub repo per global rule).
 2. Does `docs/` exist? If not, create it.
 3. Does `docs/layers/README.md` exist? If not, copy from
-   `<claude-code-skills-checkout>/templates/kb-skeleton/docs/layers/README.md`.
+   `${CLAUDE_PLUGIN_ROOT}/templates/kb-skeleton/docs/layers/README.md`.
 4. Check if `docs/layers/<layer-name>/` already exists. If yes,
    **stop** with a message -- do not overwrite. Suggest
    `/feature-new <layer> <slug>` instead.
@@ -73,7 +73,7 @@ Check the current working directory:
 
 ### Step 3 -- Copy the template
 
-Source: `<claude-code-skills-checkout>/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/`
+Source: `${CLAUDE_PLUGIN_ROOT}/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/`
 
 Destination: `<repo>/docs/layers/<layer-name>/`
 
@@ -149,9 +149,9 @@ Suggested next steps:
 
 ## Blueprints (files this skill writes from)
 
-- `templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/` -- the source
+- `${CLAUDE_PLUGIN_ROOT}/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/` -- the source
   tree to copy
-- `templates/kb-skeleton/docs/layers/README.md` -- the layers index
+- `${CLAUDE_PLUGIN_ROOT}/templates/kb-skeleton/docs/layers/README.md` -- the layers index
   template (used only if missing)
 
 ## Gotchas
@@ -165,10 +165,10 @@ Suggested next steps:
   `docs/layers/`), refuse and ask the user which they want -- there
   is no automatic merge.
 - **Templates may have moved.** If the template path
-  `<claude-code-skills-checkout>/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/`
+  `${CLAUDE_PLUGIN_ROOT}/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/`
   does not exist (e.g. user is on a different machine), fall back to
   reading from
-  `https://github.com/AnastasiyaW/claude-code-config/tree/main/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE`
+  `https://github.com/AnastasiyaW/codex-claude-code-config/tree/main/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE`
   via `gh api`.
 - **Encoding boundary.** When writing files with Cyrillic content,
   follow the global rule from `~/.claude/rules/api-utf8-posting.md` --
@@ -179,7 +179,7 @@ Suggested next steps:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | "Layer already exists" | Directory `docs/layers/<name>/` present | Use `/feature-new` to add to it, or pick a different name |
-| Template files missing | Path moved or different machine | Pull templates from public repo via `gh api repos/AnastasiyaW/claude-code-config/contents/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE` |
+| Template files missing | Path moved or different machine | Pull templates from public repo via `gh api repos/AnastasiyaW/codex-claude-code-config/contents/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE` |
 | Layers README not updated | `docs/layers/README.md` had no `## Layer index` table | Open file manually, add table per the kb-skeleton template |
 | Validator warns about layer | `validate_kb_links.py` flagged broken link | Layer is fine; broken link is in a feature doc inside it. Run `python scripts/build_kb_graph.py` from the project root for the full health report. |
 

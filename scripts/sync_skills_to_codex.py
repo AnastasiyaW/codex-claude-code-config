@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -39,21 +40,63 @@ def files_in(skill_dir: Path) -> list[Path]:
     ]
 
 
-def differences(source: Path, target: Path) -> list[Path]:
+def _git_ignored(paths: list[Path], cwd: Path) -> set[Path]:
+    """Files git ignores (local-only, possibly private) are not part of the repo and are not synced."""
+    if not paths:
+        return set()
+    try:
+        result = subprocess.run(["git", "check-ignore", "--stdin", "-z"], cwd=cwd,
+                                input="\0".join(str(p) for p in paths).encode("utf-8"), capture_output=True)
+    except OSError:
+        return set()
+    if result.returncode not in (0, 1):  # 128: not a repository
+        return set()
+    return {Path(item.decode("utf-8")) for item in result.stdout.split(b"\0") if item}
+
+
+def shipped_files(skill_dir: Path) -> list[Path]:
+    files = files_in(skill_dir)
+    ignored = _git_ignored(files, skill_dir)
+    return [path for path in files if path not in ignored]
+
+
+def rendered(source_file: Path, target_skill: Path, repo_root: Path) -> bytes:
+    """A skill written for the plugin names its files through ${CLAUDE_SKILL_DIR} and
+    ${CLAUDE_PLUGIN_ROOT}. Codex substitutes neither, and Claude Code substitutes the plugin root
+    only in plugin skills, so a copy gets the real paths written in."""
+    data = source_file.read_bytes()
+    if source_file.suffix.lower() != ".md":
+        return data
+    return (data.replace(b"${CLAUDE_SKILL_DIR}", target_skill.as_posix().encode("utf-8"))
+                .replace(b"${CLAUDE_PLUGIN_ROOT}", repo_root.as_posix().encode("utf-8")))
+
+
+def _repo_root(skill_dir: Path) -> Path:
+    """The folder holding skills/: a skill sits at skills/<name> or skills/<category>/<name>."""
+    for parent in skill_dir.resolve().parents:
+        if parent.name == "skills":
+            return parent.parent
+    return skill_dir.resolve().parent
+
+
+def differences(source: Path, target: Path, repo_root: Path | None = None) -> list[Path]:
+    root = repo_root or _repo_root(source)
     missing_or_changed: list[Path] = []
-    for source_file in files_in(source):
+    for source_file in shipped_files(source):
         relative = source_file.relative_to(source)
         target_file = target / relative
-        if not target_file.is_file() or source_file.read_bytes() != target_file.read_bytes():
+        if not target_file.is_file() or rendered(source_file, target, root) != target_file.read_bytes():
             missing_or_changed.append(relative)
     return missing_or_changed
 
 
-def copy_source_files(source: Path, target: Path) -> None:
-    for source_file in files_in(source):
+def copy_source_files(source: Path, target: Path, repo_root: Path | None = None) -> None:
+    root = repo_root or _repo_root(source)
+    for source_file in shipped_files(source):
         target_file = target / source_file.relative_to(source)
         target_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_file, target_file)
+        target_file.write_bytes(rendered(source_file, target, root))
 
 
 def sync(source_root: Path, target_root: Path, backup_root: Path, apply: bool) -> tuple[dict[str, list[Path]], list[str]]:

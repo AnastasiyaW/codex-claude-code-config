@@ -3,7 +3,7 @@
 
 ## 2026-08-29 - PUBLIC PUSH BLOCKED: THE SEMANTIC LEG OF THE PRE-PUSH SCAN CANNOT RUN
 
-**Status**: missing-dep
+**Status**: RESOLVED 2026-10-28 - waiting commit 89aef8c is in origin/main; the semantic leg runs again (Agent B rotates registered logins on quota), e.g. the push of PR #31 printed "Agent A passed, invoking Agent B ... on 1 chunk(s)" and "both agents passed".
 
 `git push` to `AnastasiyaW/codex-claude-code-config` is refused, and refused correctly:
 
@@ -40,9 +40,28 @@ drift, and the next editor changes whichever one they find first. Whether the se
 be deleted, made a thin loader, or is wired into some other harness (Codex reads its own config)
 is not a call for a session that only measured which one Claude Code loads.
 
+**Re-measured 2026-10-28** (branch fix/delivery-guard-problems). The copy is not in this repo:
+`%USERPROFILE%\.claude\hooks\` is outside any git tree. Now 43308 bytes, mtime 2026-10-13,
+sha256 prefix 56f5d9080209fc7b; the wired copy is 35ce545a90d30e62 on main 4940341.
+- No harness registers it: `settings.json` (3 hook entries), `~/.codex/hooks.json` (3) and
+  `claude-code-private/machines/Happyin/{settings,codex-hooks}.json` (3 each) all name
+  `claude-code-config/hooks/root-cause-delivery-guard.py`. The live root-cause-delivery skill in
+  `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills` and this repo uses the wired path too.
+  The only file reference left is `~/.claude/.skill-trees-backup-2026-08-23/` (a backup).
+- But it IS run: `logs/safety.log` has 52 commands calling `python ~/.claude/hooks/root-cause-delivery-guard.py
+  verify|capture|...`, the latest 2026-10-26. The cause was the wired guard itself: its "no
+  PLAN_FROZEN case" block message told agents to run the CLI at `~/.claude/hooks/`. Fixed here:
+  the message now names the running file (`Path(__file__)`), tested in
+  `hooks/tests/test_delivery_guard_machine_messages.py`.
+
+**Remaining owner decision**: delete `%USERPROFILE%\.claude\hooks\root-cause-delivery-guard.py`
+(or replace it with a loader of the wired file). Safe to act once this branch is merged and
+pulled into the live folder; before that, agents still get the old message. Agents already
+holding the old command in a handoff would then fail loudly instead of running stale case logic.
+
 ## 2026-09-15 - DELIVERY GUARD STILL CLASSIFIES PEER AND CODEX MACHINE MESSAGES
 
-**Status**: arch-decision
+**Status**: RESOLVED 2026-10-28 - owner's rule given with the task: messages from other agents, sessions, Codex and harness notifications never count as her request. `owner_text` removes closed `<cross-session-message>`, `<agent-message>` (incl. `[Subagent hand-back]`), `<subagent_notification>` and `<system-reminder>` elements, and drops whole "Stop hook feedback:" prompts and rendered "Another Claude session sent a message:" prompts; unclosed tags still classify (fail closed). Still reproduced on main 4940341: 22 live intents in `~/.claude/state/root-cause-delivery` have the digest of these shapes (15 bare peer elements, 4 behind a linked-sessions reminder, 2 agent-message hand-backs, 1 task notification plus plugin reminder; latest 2026-10-23), plus 4 from "Stop hook feedback:" in August. Codex hands `<subagent_notification>` over as a user-role message (65 of 65 closed, 250 newest rollouts); whether Codex fires UserPromptSubmit for it is still unmeasured, so it is stripped defensively. Evidence: `.agent/delivery-cases/delivery-guard-machine-messages-20261028/evidence/` - test red on main (22 of 36 wrong) and green after (36/36), run_guard_regressions 349/349, mutation_probe 15/15 killed, transcript replay: peer 195 -> 0 intents, no owner-word loss. Independent fresh-context review: PROCEED (its tag-name finding fixed; quadratic-regex and pasted-wrapper ceilings documented in the code). Ceiling: a teammate's real incident report no longer opens an intent by itself; the receiving agent opens one through the owner or `init`.
 
 The fix at a555849 excludes Claude Code <task-notification> elements from intent
 classification. The case is .agent/delivery-cases/delivery-guard-notification-overwrites-intent-20260915.
@@ -62,7 +81,7 @@ land a structural exclusion with a behavioural test.
 
 ## 2026-09-24 - PUBLIC PUSH BLOCKED AGAIN: SEMANTIC SCAN CLI OUT OF WEEKLY QUOTA
 
-**Status**: missing-dep
+**Status**: RESOLVED 2026-10-28 - waiting commit b892835 is in origin/main; both scan legs ran on every public push today (PRs #23-#31).
 
 Same gate as 2026-08-29, different cause. The first attempt was stopped by Agent A on a real
 private host name in a self-test string; that commit was never pushed and was amended to a
@@ -192,7 +211,7 @@ paths), never in arbitrary ones.
 
 ## 2026-09-30 15:58 - PUBLIC PUSH BLOCKED: SEMANTIC SCAN CLI OUT OF WEEKLY QUOTA (b10aeb3)
 
-**Status**: missing-dep
+**Status**: RESOLVED 2026-10-28 - waiting commit b10aeb3 is in origin/main; both scan legs ran on every public push today (PRs #23-#31).
 
 Same gate and cause as 2026-09-24. Refused twice, the second time captured by machine in
 `.agent/user-tasks/REQ-5B886CC0BC3A/push-refusal.log`:
@@ -275,13 +294,23 @@ Found by session 71b3da3f while committing 8a36515.
 
 ## 2026-10-28 09:30 - handoff Closure Audit and PROBLEMS.md are prose that machines parse
 
-**Status**: arch-decision
+**Status**: RESOLVED (branch feat/handoff-json-sidecar, owner go-ahead 2026-10-28)
 
 Proposal from the mindfulmodeler review (session 71b3da3f): a small JSON sidecar
 next to each handoff (status, slug, closure-audit enums, next step, unfinished
 items with tracker links) and JSONL entries for PROBLEMS.md, so agent_roster.py
-and handoff-closure-audit-guard.py read fields instead of regexes. Touches the
-handoff hooks and the roster; needs the owner's go-ahead on the format.
+and handoff-closure-audit-guard.py read fields instead of regexes.
+
+Done: optional `X.json` next to handoff `X.md` (`hooks/handoff_sidecar.py`: schema,
+validator, `write`/`check` helper). The guard validates it on either file's write and
+still accepts prose-only handoffs; agent_roster.py matches by its `session_id` and takes
+its `project` first. PROBLEMS.md was not turned into JSONL: the gap was two hooks with
+their own parsers and status lists, so `hooks/problems_md.py` now holds the parser and
+the status values for problems-md-validator.py and the handoff guard. Accepted
+difference for the guard's ticket list: it now reads the validator's looser `Status:`
+line (unbolded, indented) and requires `## ` before the date; on 548 real PROBLEMS.md
+files x 106 dates both lists matched exactly. Tests:
+`hooks/tests/test_handoff_sidecar.py` (in run_guard_regressions.py).
 
 ## 2026-10-28 12:30 - harness-load-advisor reads a product's "false positives" as harness overload
 

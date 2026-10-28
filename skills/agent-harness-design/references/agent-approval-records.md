@@ -119,7 +119,7 @@ Audit query: «who approved external sends to customer X в last 30 days?» = gr
 - `agent-plan-artifact.md` — plan version bump = approval invalidation
 - `agent-observability.md` — approval_requests / approval_results — обязательные trace fields
 - `agent-evals.md` — eval категория 5 (approval_correctness) проверяет это правило
-- `~/.claude/skills/agents-best-practices/references/security-evals-observability.md` — original source
+- `${CLAUDE_PLUGIN_ROOT}/skills/agents-best-practices/references/security-observability.md` — original source
 
 ## Source
 

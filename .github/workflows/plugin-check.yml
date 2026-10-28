@@ -18,6 +18,8 @@ on:
       - 'scripts/install_hooks.py'
       - 'scripts/plugin_build.py'
       - 'scripts/test_plugin_build.py'
+      - 'scripts/skill_paths.py'
+      - 'scripts/test_skill_paths.py'
       - '.github/workflows/plugin-check.yml'
   push:
     branches: [main]
@@ -28,6 +30,7 @@ on:
       - 'rules/**'
       - 'scripts/install_hooks.py'
       - 'scripts/plugin_build.py'
+      - 'scripts/skill_paths.py'
 
 jobs:
   check:
@@ -38,7 +41,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: hooks.json and skill categories are current
+      - name: hooks.json, skill categories and skill paths are current
         run: python scripts/plugin_build.py --check
       - name: plugin tests
-        run: python scripts/test_plugin_build.py
+        run: |
+          python scripts/test_plugin_build.py
+          python scripts/test_skill_paths.py

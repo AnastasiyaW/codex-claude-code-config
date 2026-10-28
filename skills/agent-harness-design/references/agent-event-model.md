@@ -79,7 +79,7 @@ Cross-references через `parent_event_id`:
 - `agent-plan-artifact.md` — `plan_update` event фиксирует version bump в audit log
 - `agent-approval-records.md` — `approval_request` / `approval_result` events — это persistence для approval records формата
 - `agent-evals.md` — eval categories могут проверяться напрямую на event stream
-- `~/.claude/skills/agents-best-practices/references/architecture.md` — original source
+- `${CLAUDE_PLUGIN_ROOT}/skills/agents-best-practices/references/architecture.md` — original source
 
 ## Когда применяется
 

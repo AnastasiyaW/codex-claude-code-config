@@ -66,7 +66,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -83,26 +82,10 @@ except ImportError:  # fail-open: keep the original one-shot behaviour
 # Gate name for the shared Stop-hook rejection budget (safety_common).
 BUDGET_NAME = "problems-md"
 
-VALID_5_EXCEPTIONS = {
-    "missing-data",
-    "missing-dep",
-    "arch-decision",
-    "scope-explosion",
-    "inaccessible-repo",
-}
-RESOLVED_STATES = {
-    "RESOLVED",
-    "WORKAROUND",
-    "NOT_A_BUG",
-    "CLOSED",
-}
-
-STATUS_LINE_RE = re.compile(
-    r"^\s*\**\s*Status\s*\**\s*:\s*([A-Za-z0-9_\-]+)",
-    re.IGNORECASE | re.MULTILINE,
-)
-# Real entries start with a date; pure section headings are not entries.
-ENTRY_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+# Status values and the entry parser live in problems_md.py (shared with
+# handoff-closure-audit-guard.py), so both hooks agree on what a status means.
+from problems_md import parse_entries as parse_problems  # noqa: E402
+from problems_md import validate_entry  # noqa: E402
 
 
 def find_problems_md(cwd: Path) -> Path | None:
@@ -116,62 +99,6 @@ def find_problems_md(cwd: Path) -> Path | None:
         if path.exists() and path.is_file():
             return path
     return None
-
-
-def parse_problems(content: str) -> list[dict]:
-    entries = []
-    lines = content.split("\n")
-    heading_idxs = [i for i, ln in enumerate(lines) if ln.startswith("## ")]
-    heading_idxs.append(len(lines))
-
-    for k in range(len(heading_idxs) - 1):
-        start = heading_idxs[k]
-        end = heading_idxs[k + 1]
-        heading = lines[start].lstrip("#").strip()
-
-        if not ENTRY_DATE_RE.match(heading):
-            continue
-
-        body = "\n".join(lines[start:end])
-        m = STATUS_LINE_RE.search(body)
-        status = m.group(1).strip() if m else None
-
-        entries.append({
-            "heading": heading,
-            "status": status,
-            "body": body,
-            "line": start + 1,
-        })
-
-    return entries
-
-
-def validate_entry(entry: dict) -> tuple[bool, str]:
-    status = entry["status"]
-    if status is None:
-        return (False, f"line {entry['line']} '{entry['heading'][:60]}': missing 'Status:' field")
-
-    status_norm = status.lower().replace("_", "-")
-
-    if status_norm == "open":
-        return (False,
-                f"line {entry['line']} '{entry['heading'][:60]}': STATUS: OPEN without 5-exception. "
-                f"Need one of: missing-data, missing-dep, arch-decision, scope-explosion, inaccessible-repo. "
-                f"Or fix it now and change to RESOLVED.")
-
-    if status_norm in VALID_5_EXCEPTIONS:
-        return (True, "")
-
-    if status.upper() in RESOLVED_STATES:
-        return (True, "")
-
-    if status_norm.startswith("blocked-"):
-        return (True, "")
-
-    return (False,
-            f"line {entry['line']} '{entry['heading'][:60]}': unrecognized status "
-            f"'{str(status)[:40]}'. "
-            f"Use OPEN+5-exception, RESOLVED, WORKAROUND, NOT_A_BUG, or BLOCKED-<thing>.")
 
 
 def main() -> int:
