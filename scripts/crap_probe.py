@@ -11,7 +11,10 @@ function fully covered scores exactly its CC.
 
 Coverage input: `coverage json` output (files -> executed_lines / missing_lines).
 A function in a file the coverage data does not mention is listed as not measured
-and does not count toward the exit decision.
+and does not count toward the exit decision. Coverage keys are paths relative to
+the directory coverage.py ran from: produce the JSON from the same root as the
+PATH arguments you pass. A mismatched root shows up as functions not in the
+coverage data, and the run says so (exit 2).
 
 Usage:
   python crap_probe.py PATH [PATH ...] --coverage coverage.json \
@@ -24,7 +27,10 @@ Advisory: a flagged function is reduced by splitting it (lower CC), testing it
 (higher coverage), or both. Pairs with the testing-strategy skill.
 
 Exit: 0 nothing at or above --fail-at, 3 something at or above --fail-at,
-2 not checked (no or unreadable coverage file, no Python function measured).
+2 not checked: no, unreadable or malformed coverage file; a given path that is
+missing, not Python, or does not parse; a non-finite threshold; or no Python
+function of the given paths present in the coverage data. A requested input
+that was not measured never exits 0.
 Same three-state contract as check_aggregate.py; `--self-test` carries the
 negative controls.
 """
@@ -35,6 +41,7 @@ import ast
 import contextlib
 import io
 import json
+import math
 import os
 import subprocess
 import sys
@@ -65,26 +72,38 @@ def load_coverage(path: Path) -> dict[str, tuple[set[int], set[int]]]:
         raise CoverageError(f"{path} is not a coverage.py JSON report (no 'files' object)")
     result = {}
     for name, entry in files.items():
-        try:
-            executed = set(entry.get("executed_lines", []))
-            missing = set(entry.get("missing_lines", []))
-        except (AttributeError, TypeError) as exc:
-            raise CoverageError(f"malformed coverage entry for {name}: {exc}") from exc
+        if not isinstance(entry, dict):
+            raise CoverageError(f"malformed coverage entry for {name}: not an object")
+        executed = _line_set(entry.get("executed_lines", []), name)
+        missing = _line_set(entry.get("missing_lines", []), name)
         result[_key(name)] = (executed, missing)
     return result
 
 
-def collect_files(paths) -> list[Path]:
+def _line_set(values, name: str) -> set[int]:
+    if not isinstance(values, list) or not all(
+            isinstance(v, int) and not isinstance(v, bool) for v in values):
+        raise CoverageError(f"malformed coverage entry for {name}: line lists must hold integers")
+    return set(values)
+
+
+def collect_files(paths) -> tuple[list[Path], list[str]]:
+    """Python files under the given paths, plus the given inputs that yielded none."""
     found: dict[str, Path] = {}
+    skipped: list[str] = []
     for raw in paths:
         p = Path(raw)
         if p.is_dir():
-            for f in sorted(p.rglob("*.py")):
-                if not SKIP_DIRS & set(f.parts):
-                    found.setdefault(_key(f), f)
+            new = [f for f in sorted(p.rglob("*.py")) if not SKIP_DIRS & set(f.parts)]
+            if not new:
+                skipped.append(f"{raw}: no Python files")
+            for f in new:
+                found.setdefault(_key(f), f)
         elif p.is_file() and p.suffix == ".py":
             found.setdefault(_key(p), p)
-    return list(found.values())
+        else:
+            skipped.append(f"{raw}: not an existing Python file or folder")
+    return list(found.values()), skipped
 
 
 def functions_in(tree: ast.AST) -> list[tuple[str, ast.AST]]:
@@ -205,13 +224,17 @@ def run(argv=None) -> int:
     parser.add_argument("--threshold", type=float, default=10.0, help="flag CRAP at or above this")
     parser.add_argument("--fail-at", type=float, default=30.0, help="exit 3 at or above this")
     args = parser.parse_args(argv)
+    for name, value in (("--threshold", args.threshold), ("--fail-at", args.fail_at)):
+        if not math.isfinite(value):
+            print(f"UNKNOWN: {name} must be a finite number, got {value}")
+            return 2
 
     try:
         cov = load_coverage(Path(args.coverage))
     except CoverageError as exc:
         print(f"UNKNOWN: {exc}")
         return 2
-    files = collect_files(args.paths)
+    files, skipped = collect_files(args.paths)
     if not files:
         print("UNKNOWN: no Python files under the given paths")
         return 2
@@ -221,8 +244,9 @@ def run(argv=None) -> int:
         changed, note = changed_files()
         print(f"note: {note}")
     rows, unparsed = measure(files, cov, changed)
-    for note in unparsed:
-        print(f"note: not parsed, skipped: {note}")
+    unmeasured_inputs = skipped + unparsed
+    for note in unmeasured_inputs:
+        print(f"note: not measured: {note}")
 
     measured = [r for r in rows if r["crap"] is not None]
     if not measured:
@@ -235,6 +259,9 @@ def run(argv=None) -> int:
     print(f"{len(measured)} measured, {flagged} flagged at >= {args.threshold:g}, "
           f"{at_fail} at or above --fail-at {args.fail_at:g}, "
           f"{len(rows) - len(measured)} not in coverage data")
+    if unmeasured_inputs:
+        print(f"UNKNOWN: {len(unmeasured_inputs)} given input(s) not measured; not checked")
+        return 2
     return 3 if at_fail else 0
 
 
@@ -288,7 +315,10 @@ def self_test() -> int:
 
         def quiet(argv):
             with contextlib.redirect_stdout(io.StringIO()):
-                return run(argv)
+                try:
+                    return run(argv)
+                except Exception:  # an uncaught error is a failed check, never a pass
+                    return -1
 
         def branchy_row(cov_path):
             rows, _ = measure([mod], load_coverage(Path(cov_path)), None)
@@ -311,6 +341,34 @@ def self_test() -> int:
         # Must-fail control: the naive counter gives 1 for both, so the check above would fail on it.
         results["negative control: naive counter (ignores operands/ifs) is caught"] = (
             naive_cc(bool_fn) != 3 and naive_cc(comp_fn) != 3)
+        # Exact formula values: exponent 3 vs 4 gives 6.0 vs 5.0 at CC 4, cov 0.5.
+        results["crap_score exact: CC 4, cov 0.5 gives 6.0"] = crap_score(4, 0.5) == 6.0
+        results["crap_score exact: CC 2, cov 0 gives 6.0; CC 4, cov 1 gives 4.0"] = (
+            crap_score(2, 0.0) == 6.0 and crap_score(4, 1.0) == 4.0)
+        results["crap_score exact: CC 4, cov 0 gives 20.0"] = crap_score(4, 0.0) == 20.0
+        cov_fn = ast.parse("def f():\n    a = 1\n    b = 2\n    c = 3\n").body[0]
+        # Missing lines 2,3 are inside [1,4]; 0 and 5 are outside on each side. Ends 1 and 4 count.
+        results["coverage_of: only lines inside the function, both ends counted"] = (
+            coverage_of(cov_fn, {1, 4, 9}, {2, 3, 0, 5}) == 0.5)
+        results["coverage_of: no statement lines gives 0.0"] = (
+            coverage_of(cov_fn, set(), set()) == 0.0 and coverage_of(cov_fn, {9}, {8}) == 0.0)
+        bad_lines = Path(tmp) / "bad-lines.json"
+        bad_lines.write_text(json.dumps({"files": {str(mod): {
+            "executed_lines": ["a"], "missing_lines": []}}}), encoding="utf-8")
+        results["malformed coverage (non-integer lines): exit 2"] = quiet(
+            [str(mod), "--coverage", str(bad_lines)]) == 2
+        results["coverage file that is not a report: exit 2"] = quiet(
+            [str(mod), "--coverage", str(mod)]) == 2
+        broken = folder / "broken.py"
+        broken.write_text("def oops(:\n", encoding="utf-8")
+        results["given path that does not parse: exit 2"] = quiet(
+            [str(broken), str(mod), "--coverage", full]) == 2
+        results["given path that does not exist: exit 2"] = quiet(
+            [str(folder / "ghost.py"), str(mod), "--coverage", full]) == 2
+        results["non-finite --fail-at (nan): exit 2"] = quiet(
+            [str(mod), "--coverage", full, "--fail-at", "nan"]) == 2
+        results["non-finite --threshold (inf): exit 2"] = quiet(
+            [str(mod), "--coverage", full, "--threshold", "inf"]) == 2
     for name, ok in results.items():
         print(f"{'PASS' if ok else 'FAIL'}  {name}")
     return 0 if all(results.values()) else 1
