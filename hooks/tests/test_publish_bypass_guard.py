@@ -1,0 +1,258 @@
+"""publish-bypass-guard: every route that publishes past the pre-push leak scan blocks; ordinary work passes.
+
+Hermetic: a temporary global git config (GIT_CONFIG_GLOBAL) points core.hooksPath at a temporary
+hooks folder whose pre-push calls the scan, and repo visibility is a fake table, so the suite
+needs no network and does not read the machine's own git config.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+HOOKS = Path(os.environ.get("HOOKS_DIR", Path(__file__).resolve().parents[1]))
+GUARD_PATH = HOOKS / "publish-bypass-guard.py"
+_SPEC = importlib.util.spec_from_file_location("pbg", GUARD_PATH)
+pbg = importlib.util.module_from_spec(_SPEC)
+sys.modules["pbg"] = pbg  # dataclasses resolve annotations through sys.modules
+_SPEC.loader.exec_module(pbg)
+
+VISIBILITY = {"acme/alpha": "PUBLIC", "acme/beta": "PUBLIC", "acme/gamma": "PUBLIC",
+              "acme/secret": "PRIVATE"}
+SCAN_HOOK = '#!/bin/sh\nexec python "$HOME/.claude/claude-code-config/hooks/pre-push-public-repo-scan.py" "$@"\n'
+CHAIN_HOOK = '#!/bin/sh\nexec "$(git config --global --get core.hooksPath)/pre-push" "$@"\n'
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+class Fixture:
+    root: Path
+    env: dict[str, str]
+
+    @classmethod
+    def build(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        cls.root = root
+        global_hooks = root / "global-hooks"
+        global_hooks.mkdir()
+        (global_hooks / "pre-push").write_text(SCAN_HOOK, encoding="utf-8")
+        gitconfig = root / "gitconfig"
+        gitconfig.write_text(f"[core]\n\thooksPath = {global_hooks.as_posix()}\n", encoding="utf-8")
+        cls.saved = {k: os.environ.get(k) for k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
+        os.environ["GIT_CONFIG_GLOBAL"] = str(gitconfig)
+        os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
+
+        def repo(name: str, slug: str, local_hooks: str | None = None) -> Path:
+            path = root / name
+            path.mkdir()
+            _git("init", "-q", cwd=path)
+            _git("remote", "add", "origin", f"https://github.com/{slug}.git", cwd=path)
+            if local_hooks is not None:
+                _git("config", "core.hooksPath", ".githooks", cwd=path)
+                (path / ".githooks").mkdir()
+                if local_hooks:
+                    (path / ".githooks" / "pre-push").write_text(local_hooks, encoding="utf-8")
+            return path
+
+        cls.normal = repo("alpha", "acme/alpha")
+        cls.unscanned = repo("beta", "acme/beta", "")
+        cls.chained = repo("gamma", "acme/gamma", CHAIN_HOOK)
+        cls.private = repo("secret", "acme/secret", "")
+        pbg.repo_visibility = VISIBILITY.get
+
+    @classmethod
+    def teardown(cls) -> None:
+        for key, value in cls.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        cls.tmp.cleanup()
+
+
+def setUpModule() -> None:
+    Fixture.build()
+
+
+def tearDownModule() -> None:
+    Fixture.teardown()
+
+
+def routes(command: str, cwd: Path | None = None) -> set[str]:
+    return {f.route for f in pbg.evaluate(command, str(cwd or Fixture.normal))}
+
+
+class MustBlock(unittest.TestCase):
+    def check(self, command: str, route: str, cwd: Path | None = None) -> None:
+        self.assertIn(route, routes(command, cwd), command)
+
+    def test_push_no_verify(self) -> None:
+        self.check("git push --no-verify origin main", "push-no-verify")
+        self.check("git push --no-verif", "push-no-verify")
+        self.check("& git.exe push --no-verify", "push-no-verify")
+        self.check("bash -c 'git push --no-verify'", "push-no-verify")
+        self.check("out=$(git push --no-verify)", "push-no-verify")
+        self.check("ssh host1 'cd /srv/x && git push --no-verify'", "push-no-verify")
+        self.check("Start-Process git -ArgumentList 'push --no-verify'", "push-no-verify")
+        self.check('git -c alias.pp="push --no-verify" pp', "push-no-verify")
+
+    def test_hookspath_override(self) -> None:
+        self.check("git -c core.hooksPath=/dev/null push", "hookspath-override")
+        self.check("git -c core.hookspath=x status", "hookspath-override")
+        self.check("git --config-env=core.hooksPath=EMPTY push", "hookspath-override")
+
+    def test_git_config_env(self) -> None:
+        self.check("GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='x'\" git push", "git-config-env")
+        self.check("GIT_EXTERNAL_DIFF=x git push origin main", "git-config-env")
+        self.check("env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=x git push",
+                   "git-config-env")
+        self.check("$env:GIT_CONFIG_GLOBAL='nul'; git push", "git-config-env")
+        self.check("export GIT_CONFIG_GLOBAL=/dev/null && git push", "git-config-env")
+
+    def test_send_pack(self) -> None:
+        self.check("git send-pack https://github.com/acme/alpha.git main", "send-pack")
+
+    def test_local_hooks_without_scan(self) -> None:
+        self.check(f'cd "{Fixture.unscanned}" && git push', "local-hooks")
+        self.check(f'git -C "{Fixture.unscanned}" push origin main', "local-hooks")
+        self.check("git push", "local-hooks", cwd=Fixture.unscanned)
+        found = [f for f in pbg.evaluate("git push", str(Fixture.unscanned)) if f.route == "local-hooks"]
+        self.assertIn(str(Fixture.unscanned.name), found[0].detail)
+        self.assertIn("config --unset core.hooksPath", found[0].fix)
+
+    def test_unknown_repo(self) -> None:
+        self.check("cd $REPO && git push", "unknown-repo")
+
+    def test_visibility_and_gist(self) -> None:
+        self.check("gh repo edit acme/alpha --visibility public --accept-visibility-change-consequences",
+                   "repo-public")
+        self.check("gh repo edit --visibility=public", "repo-public")
+        self.check("gh repo create newthing --public --source=. --push", "repo-public")
+        self.check("gh gist create notes.txt --public", "gist-public")
+        self.check("gh gist create notes.txt -p", "gist-public")
+        self.check("gh gist edit abc123 --add secrets.txt", "gist-public")
+
+    def test_api_writes(self) -> None:
+        self.check("gh api -X PUT repos/acme/alpha/contents/a.txt -f message=m -f content=eA==",
+                   "api-write")
+        self.check("gh api repos/acme/alpha/git/blobs -f content=x", "api-write")
+        self.check("gh api --method=PATCH /repos/{owner}/{repo}/git/refs/heads/main -F sha=abc",
+                   "api-write")
+        self.check("gh api graphql -f query='mutation { createCommitOnBranch(input: {}) { commit { oid } } }'",
+                   "api-write")
+        self.check("gh api -X PATCH repos/acme/alpha -f visibility=public", "repo-public")
+
+    def test_release_on_public_or_unknown(self) -> None:
+        self.check("gh release create v1.0 dist.zip", "release-public")
+        self.check("gh release upload v1.0 dist.zip -R acme/unknown", "release-public")
+
+
+class MustPass(unittest.TestCase):
+    def check(self, command: str, cwd: Path | None = None) -> None:
+        self.assertEqual(set(), routes(command, cwd), command)
+
+    def test_plain_push_from_normal_repo(self) -> None:
+        self.check("git push")
+        self.check("git push -u origin feat/x")
+        self.check(f'git -C "{Fixture.normal}" push origin main')
+
+    def test_dry_run_is_not_a_hook_skip(self) -> None:
+        self.check("git push -n origin main")
+
+    def test_text_mentioning_routes(self) -> None:
+        self.check("echo git push --no-verify")
+        self.check("echo 'gh repo edit --visibility public'")
+        self.check('grep -n -- "--no-verify" hooks/publish-bypass-guard.py')
+        self.check("Write-Output 'git push --no-verify'")
+        self.check('git commit -m "never use git push --no-verify"')
+        self.check("# git push --no-verify\ngit status")
+
+    def test_local_hooks_that_chain_or_private_target(self) -> None:
+        self.check("git push", cwd=Fixture.chained)
+        self.check("git push", cwd=Fixture.private)
+
+    def test_safe_gh(self) -> None:
+        self.check("gh release create v1 -R acme/secret")
+        self.check("gh api repos/acme/alpha/contents/a.txt")
+        self.check("gh repo create newthing --private --source=. --push")
+        self.check("gh gist create notes.txt")
+        self.check("gh repo edit acme/alpha --visibility private")
+        self.check("gh pr create --title t --body 'run git push --no-verify? no'")
+
+    def test_other_git(self) -> None:
+        self.check("git status && git log --oneline -3 && git fetch origin")
+
+
+class Approval(unittest.TestCase):
+    def blocked(self, command: str, prompt: str | None, cwd: Path | None = None) -> set[str]:
+        findings = pbg.evaluate(command, str(cwd or Fixture.normal))
+        self.assertTrue(findings, command)
+        return {f.route for f in pbg.unapproved(findings, prompt)}
+
+    def test_named_action_unblocks(self) -> None:
+        self.assertEqual(set(), self.blocked("git push --no-verify", "разрешаю git push --no-verify в alpha"))
+        self.assertEqual(set(), self.blocked("gh repo edit acme/alpha --visibility public",
+                                             "ok, make acme/alpha public"))
+
+    def test_approval_covers_only_the_named_action(self) -> None:
+        prompt = "разрешаю git push --no-verify в alpha"
+        self.assertEqual({"repo-public"}, self.blocked("gh repo edit acme/alpha --visibility public", prompt))
+        self.assertEqual({"push-no-verify"}, self.blocked("git push --no-verify", prompt, Fixture.chained))
+        self.assertEqual({"hookspath-override"}, self.blocked("git -c core.hooksPath=x push", prompt))
+
+    def test_negation_question_or_absence_do_not_approve(self) -> None:
+        for prompt in (None, "", "не делай git push --no-verify в alpha",
+                       "можно git push --no-verify в alpha?", "git push --no-verify в alpha"):
+            self.assertEqual({"push-no-verify"}, self.blocked("git push --no-verify", prompt), prompt)
+
+
+class EndToEnd(unittest.TestCase):
+    """The hook as the harness runs it: stdin event, stdout decision, transcript as approval."""
+
+    def run_hook(self, command: str, prompt: str | None, tool: str = "Bash") -> dict | None:
+        home = Fixture.root / "home"
+        home.mkdir(exist_ok=True)
+        event = {"tool_name": tool, "tool_input": {"command": command}, "cwd": str(Fixture.normal),
+                 "hook_event_name": "PreToolUse", "session_id": "test"}
+        if prompt is not None:
+            transcript = Fixture.root / "transcript.jsonl"
+            transcript.write_text(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                              "message": {"role": "user", "content": prompt}},
+                                             ensure_ascii=False) + "\n", encoding="utf-8")
+            event["transcript_path"] = str(transcript)
+        env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+        result = subprocess.run([sys.executable, "-B", str(GUARD_PATH)], input=json.dumps(event),
+                                capture_output=True, text=True, encoding="utf-8", env=env,
+                                timeout=120, check=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        return json.loads(result.stdout) if result.stdout.strip() else None
+
+    def test_block_then_owner_approval(self) -> None:
+        verdict = self.run_hook("git push --no-verify", None)
+        self.assertEqual("block", (verdict or {}).get("decision"))
+        self.assertIn("push-no-verify", verdict["reason"])
+        self.assertIsNone(self.run_hook("git push --no-verify", "да, разрешаю git push --no-verify в alpha"))
+        audit = Fixture.root / "home" / ".claude" / "logs" / "publish-approvals.jsonl"
+        self.assertIn("push-no-verify", audit.read_text(encoding="utf-8"))
+
+    def test_plain_push_and_powershell(self) -> None:
+        self.assertIsNone(self.run_hook("git push", None))
+        verdict = self.run_hook("$env:GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='x'\"; git push", None,
+                                tool="PowerShell")
+        self.assertEqual("block", (verdict or {}).get("decision"))
+
+
+if __name__ == "__main__":
+    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+    outcome = unittest.TextTestRunner(verbosity=2).run(suite)
+    if outcome.wasSuccessful():
+        print(f"all {outcome.testsRun} checks correct")
+    sys.exit(0 if outcome.wasSuccessful() else 1)
