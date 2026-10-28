@@ -52,19 +52,38 @@ SIGNALS: list[tuple[str, list[str]]] = [
             r"[^.?!\n]{0,120}\b(staging|smoke|обычн\w* тест|стейдж\w*|быстр\w* тест)\b",
         ],
     ),
-    (
-        "explicit-feedback",
-        [
-            r"\b(too (strict|restrictive|much|heavy)|overkill|over[- ]engineer\w*|"
-            r"blocks? (the )?(staging|smoke)|false positive|false-positive)\b",
-            r"\b(слишком (строг\w*|жестк\w*|зажат\w*|много|тяжел\w*)|"
-            # bare "перегруж" is not here: it also describes a slow computer (2026-10-07
-            # false positive); harness overload is caught by declared-overload, which
-            # requires a harness/test-system subject in the same sentence.
-            r"избыточн\w*|ложн\w* срабатыван\w*|блокир\w* smoke)\b",
-        ],
-    ),
 ]
+
+# Feedback words count only in a sentence that names one of our gates or test
+# profiles: the same words describe a product under test ("no false positives on
+# the buttons", 2026-10-28) or a report ("overkill for a two-line change"). A hook
+# is not a subject here: a hook's false positive is not a profile overload.
+# Bare "перегруж" is not a feedback word: it also describes a slow computer
+# (2026-10-07); harness overload is caught by declared-overload.
+_FEEDBACK = (
+    r"(?:too (?:strict|restrictive|much|heavy)|overkill|over[- ]engineer\w*|"
+    r"blocks? (?:the )?(?:staging|smoke)|false[- ]positives?|"
+    r"слишком (?:строг\w*|жестк\w*|зажат\w*|много|тяжел\w*)|"
+    r"избыточн\w*|ложн\w* срабатыван\w*|блокир\w* smoke)"
+)
+_SUBJECT = (
+    r"(?:harness|test (?:system|suite|profile)|gate|smoke|staging|"
+    r"харнесс\w*|гейт\w*|обвязк\w*|смоук\w*|стейдж\w*|тестов\w* контур\w*|"
+    r"систем\w* тест\w*|профил\w* тест\w*)"
+)
+_SENTENCE = r"[^.?!\n]{0,120}"
+SIGNALS.append((
+    "explicit-feedback",
+    [
+        rf"\b{_SUBJECT}\b{_SENTENCE}\b{_FEEDBACK}\b",
+        rf"\b{_FEEDBACK}\b{_SENTENCE}\b{_SUBJECT}\b",
+    ],
+))
+# "no false positives", "ложных срабатываний не было" report their absence.
+NEGATED_FEEDBACK = re.compile(
+    rf"\b(?:no|without|zero|нет|без|ни одного)\s+(?:\w+\s+)?{_FEEDBACK}"
+    rf"|{_FEEDBACK}[^.?!\n]{{0,40}}\b(?:не было|не нашл\w*|не найден\w*)\b"
+)
 
 # Quoted text is a mention, not a statement: a UI title «слишком много попыток»,
 # a screen name or a `file_name` must not read as overload. A stray mark must not
@@ -137,6 +156,7 @@ def detect(message: str) -> list[str]:
         return []
     # ё folds to е so "жёсткий" meets the same pattern as "жесткий".
     prose = _blank_quotes(lowered).replace("ё", "е")
+    prose = NEGATED_FEEDBACK.sub(lambda m: _NOT_SENTENCE_MARK.sub(" ", m.group()), prose)
     hits: list[str] = []
     for name, patterns in SIGNALS:
         if any(re.search(pattern, prose, re.IGNORECASE) for pattern in patterns):

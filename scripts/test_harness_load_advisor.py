@@ -166,6 +166,34 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             self.assertEqual(payload and payload.get("decision"), "block", output)
             self.assertIn("declared-overload", payload["reason"])
 
+    def test_feedback_words_about_a_product_under_test_are_silent(self) -> None:
+        # 2026-10-28 false positive: a report on a checker's sandbox run ("no false
+        # positives on the buttons") blocked Stop; no gate or profile of ours had run.
+        for text in (
+            "Ложных срабатываний про кнопки не было. Проверка доказывает связи в исходниках.",
+            "No false positives on the buttons; the click smoke test turns red on a planted throw.",
+            "Crossweft дал 2 ложных срабатывания на боте, оба помечены в карте.",
+            "Это ложное срабатывание хука, а не перегрузка.",
+            "The report is overkill for a two-line change.",
+        ):
+            with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-product-") as raw:
+                root = Path(raw)
+                payload, output = run_hook(root, text)
+                self.assertIsNone(payload, output)
+                self.assertFalse((root / "feedback" / "events.jsonl").exists())
+
+    def test_feedback_words_about_our_gates_still_block(self) -> None:
+        for text in (
+            "Гейт слишком строгий для обычного smoke.",
+            "The staging gate is overkill: it waits for a VM run.",
+            "Тестовый контур даёт ложные срабатывания и не пускает стейдж.",
+            "A false positive in the harness keeps failing the smoke.",
+            "Smoke-профиль избыточный: в нём подпись релиза.",
+        ):
+            with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-gate-") as raw:
+                payload, output = run_hook(Path(raw), text)
+                self.assertEqual(payload and payload.get("decision"), "block", output)
+
     def test_staging_policy_cannot_embed_release_only_command(self) -> None:
         with tempfile.TemporaryDirectory(prefix="harness-policy-") as raw:
             root = Path(raw)
