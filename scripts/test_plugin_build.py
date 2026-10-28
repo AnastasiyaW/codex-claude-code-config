@@ -61,6 +61,21 @@ class PluginBuildTests(unittest.TestCase):
                     self.assertTrue(hook["args"][0].startswith("${CLAUDE_PLUGIN_ROOT}/hooks/"))
                     self.assertTrue((REPO / "hooks" / hook["args"][0].rsplit("/", 1)[1]).is_file())
 
+    def test_plugin_extras_registered_with_extras_event(self) -> None:
+        hooks = json.loads(MODULE.TARGET.read_text(encoding="utf-8"))["hooks"]
+        for script in MODULE.PLUGIN_EXTRAS:
+            groups = [g for g in hooks["PreToolUse"] if any(h["args"][0].endswith("/" + script) for h in g["hooks"])]
+            self.assertEqual([g.get("matcher") for g in groups], ["Bash|PowerShell"], script)
+
+    def test_unknown_plugin_extra_is_refused(self) -> None:
+        original = MODULE.PLUGIN_EXTRAS
+        MODULE.PLUGIN_EXTRAS = original + ["no-such-hook.py"]
+        try:
+            with self.assertRaises(SystemExit):
+                MODULE.selection()
+        finally:
+            MODULE.PLUGIN_EXTRAS = original
+
     def test_rules_context_self_test(self) -> None:
         result = subprocess.run([sys.executable, str(REPO / "hooks" / "plugin-rules-context.py"), "--self-test"],
                                 capture_output=True, text=True)
