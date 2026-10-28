@@ -3,7 +3,7 @@
 
 ## 2026-08-29 - PUBLIC PUSH BLOCKED: THE SEMANTIC LEG OF THE PRE-PUSH SCAN CANNOT RUN
 
-**Status**: missing-dep
+**Status**: RESOLVED 2026-10-28 - waiting commit 89aef8c is in origin/main; the semantic leg runs again (Agent B rotates registered logins on quota), e.g. the push of PR #31 printed "Agent A passed, invoking Agent B ... on 1 chunk(s)" and "both agents passed".
 
 `git push` to `AnastasiyaW/codex-claude-code-config` is refused, and refused correctly:
 
@@ -62,7 +62,7 @@ land a structural exclusion with a behavioural test.
 
 ## 2026-09-24 - PUBLIC PUSH BLOCKED AGAIN: SEMANTIC SCAN CLI OUT OF WEEKLY QUOTA
 
-**Status**: missing-dep
+**Status**: RESOLVED 2026-10-28 - waiting commit b892835 is in origin/main; both scan legs ran on every public push today (PRs #23-#31).
 
 Same gate as 2026-08-29, different cause. The first attempt was stopped by Agent A on a real
 private host name in a self-test string; that commit was never pushed and was amended to a
@@ -128,7 +128,7 @@ paths), never in arbitrary ones.
 
 ## 2026-09-30 15:58 - PUBLIC PUSH BLOCKED: SEMANTIC SCAN CLI OUT OF WEEKLY QUOTA (b10aeb3)
 
-**Status**: missing-dep
+**Status**: RESOLVED 2026-10-28 - waiting commit b10aeb3 is in origin/main; both scan legs ran on every public push today (PRs #23-#31).
 
 Same gate and cause as 2026-09-24. Refused twice, the second time captured by machine in
 `.agent/user-tasks/REQ-5B886CC0BC3A/push-refusal.log`:
