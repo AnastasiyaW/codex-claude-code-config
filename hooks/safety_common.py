@@ -576,12 +576,10 @@ _COMPOUND_OR_EXEC = {"{", "}", "if", "then", "else", "elif", "fi", "do", "done",
 _CHANGES_DIRECTORY = {"cd", "pushd", "popd", "set-location"}
 # echo/printf options that still print; `printf -v NAME` assigns instead (review 2026-10-28).
 _PRINT_OPTIONS = {"-n", "-e", "-E", "-ne", "-en", "--"}
-_GIT_HOOK_NAMES = {"applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit",
-                   "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit",
-                   "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update",
-                   "proc-receive", "post-receive", "post-update", "reference-transaction",
-                   "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate",
-                   "fsmonitor-watchman", "post-index-change"}
+# Targets are an allowlist (review of e73a804): a denylist of hook, profile and rc
+# names let settings.json hooks, systemd units, cron files and fish config through.
+# Relative, no dot-directory except the leading .claude/tmp/, inert extension only.
+_INERT_EXTENSIONS = {"txt", "md", "log", "msg", "csv"}
 _NOT_BASH_QUOTING = re.compile("[`‘’‚‛“”„]")
 _GH_FILE_INERT = {"pr", "issue", "release", "repo"}
 _MESSAGE_FILE_FLAGS = {"-F", "--file", "--body-file", "--notes-file"}
@@ -749,17 +747,15 @@ def _harmless_redirect(op: str, target: str) -> bool:
 
 
 def _plain_file_target(path: str) -> bool:
-    """A file no shell, git hook or profile will run by itself."""
-    if not _PLAIN_TARGET.fullmatch(path):
+    """A relative text file that no shell, hook, scheduler or settings loader runs."""
+    if not _PLAIN_TARGET.fullmatch(path) or path[:1] in "/\\" or ":" in path:
         return False
-    parts = [part for part in re.split(r"[\\/]+", path.lower()) if part]
-    if not parts or parts[-1].startswith("."):
+    lowered = path.lower().replace("\\", "/").removeprefix(".claude/tmp/")
+    parts = lowered.split("/")
+    if any(not part or part.startswith(".") for part in parts):
         return False
-    if any(part in (".git", ".husky") or "hook" in part for part in parts):
-        return False
-    if parts[-1].rsplit(".", 1)[0] in _GIT_HOOK_NAMES:
-        return False
-    return "profile" not in parts[-1] and not parts[-1].endswith("rc")
+    stem, _, extension = parts[-1].rpartition(".")
+    return bool(stem) and extension in _INERT_EXTENSIONS
 
 
 def _cannot_run_a_file(values: list[str]) -> bool:
@@ -819,7 +815,12 @@ def _mask_message_data(command: str) -> str:
             continue
         if _is_message_command(values):
             if all(_harmless_redirect(op, target["value"]) for op, target in segment["redirects"]):
-                spans += [run for word in segment["words"][1:] for run in word["runs"]]
+                # A quoted `-d` is still an option, and a `--body-file` value names
+                # a file the command reads: neither is message text (review of e73a804).
+                spans += [run for position, word in enumerate(segment["words"]) if position
+                          and not word["value"].startswith("-")
+                          and values[position - 1] not in _MESSAGE_FILE_FLAGS
+                          for run in word["runs"]]
             continue
         if values[0].lower() not in _PRINTERS or any(
                 value.startswith("-") and value not in _PRINT_OPTIONS for value in values):

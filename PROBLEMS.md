@@ -164,7 +164,11 @@ outside a Bash tool event (PowerShell quotes and escapes differ). The per-line p
 stops masking when typographic quotes or backticks appear: `git commit -m 'msg’ ; Remove-Item ..`
 was a PowerShell bypass on origin/main (found by the automated security review). Independent
 review round 2 found `{ ..; git tag -l --format='P'; } | sh`, `printf -v GIT_EDITOR`, and a hook
-written after `cd .git/hooks`; all three are must-block cases now.
+written after `cd .git/hooks`; all three are must-block cases now. Review of e73a804 found the
+print target was a denylist: printf into `.claude/settings*.json` hooks, a systemd unit, cron
+files and fish config was masked. `_plain_file_target` is now an allowlist (relative path, no
+dot-directory except a leading `.claude/tmp/`, extension txt/md/log/msg/csv); the six commands
+are must-block cases (red at e73a804, green after; mutation probe 56 of 56 killed).
 `agent_policy_gates.commit_invocations` now sees commits inside `bash/sh -c`, `powershell -c`
 and git aliases (`!` aliases included). Evidence: `hooks/tests/test_command_text_is_data.py`
 (202 cases, 12 red on main, all green after; registered in `run_guard_regressions.py`),
@@ -237,6 +241,30 @@ executes, so the mask must keep it). Workaround: `git commit -F <file>`.
 Same class in human-confirmation-guard: a commit message containing the word
 `rmdir` was blocked as a deletion (commit e923e33 had to go through -F).
 Found by session 71b3da3f while committing 8a36515.
+
+## 2026-10-28 14:00 - message masking hides git options and secret reads (pre-existing on main)
+
+**Status**: arch-decision
+
+Reported by the independent review of PR #38; measured with `executable_text` on origin/main
+and on the PR head (2026-10-28):
+- `git commit "--no-verify" -m x` -> `git commit   -m x` on both. The per-line mask
+  (`_PRINTS_OR_SEARCHES` includes `git commit`) blanks every quoted argument, options included.
+- `gh issue comment 1 --body-file "<secret path>"` -> the path is blanked on main by the
+  per-line mask; the PR's whole-command pass keeps `--body-file` values, the per-line one does not.
+- `gh pr create --body "$(cat id_rsa)"` -> kept visible on both (substitution). Whether the
+  publish guard treats it as a secret read is a separate question for that guard.
+- `git commit -m '...' > x.sh; sh x.sh` -> kept visible on both (the redirect stops masking).
+  Listed for completeness, not reproduced as a gap.
+- `git tag "-d" v1` was a regression of PR #38 itself and is fixed there (quoted options are
+  no longer masked by the whole-command pass).
+Direction: in the per-line mask, too, blank only message values, never a quoted word that
+starts with `-` and never a `--*-file` / `-F` value. Every command guard shares the helper,
+so this needs its own review.
+
+**Recheck**: add `git commit "--no-verify"` and `gh issue comment --body-file "<path>"` as
+must-stay-visible rows to `test_command_text_is_data.py`, then rerun `run_guard_regressions.py`
+and the mutation probe.
 
 ## 2026-10-28 09:30 - handoff Closure Audit and PROBLEMS.md are prose that machines parse
 
