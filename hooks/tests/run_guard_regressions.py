@@ -25,6 +25,7 @@ TESTS = [
     "test_guard_evasions_round6.py",
     "test_guard_evasions_round7.py",
     "test_safety_common_scope.py",
+    "test_command_text_is_data.py",
     "test_transfer_guard_scope.py",
     "test_delivery_guard_scope.py",
     "test_article_voice_gate_scope.py",

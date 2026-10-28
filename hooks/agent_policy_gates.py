@@ -354,6 +354,46 @@ GIT_GLOBAL_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--ex
 COMMIT_VALUE_LONG = {"--message", "--file", "--author", "--date", "--reuse-message", "--reedit-message",
                      "--fixup", "--squash", "--template", "--cleanup", "--trailer", "--pathspec-from-file"}
 COMMIT_VALUE_SHORT = set("mFCct")
+# A shell handed the commit as a string still commits (PROBLEMS.md 2026-09-26 14:40).
+INNER_SHELLS = {"bash", "sh", "zsh", "dash"}
+# git never lets an alias shadow a built-in, so these need no alias lookup.
+GIT_BUILTINS = {"add", "status", "log", "diff", "push", "pull", "fetch", "checkout", "switch", "branch",
+                "show", "rev-parse", "config", "worktree", "stash", "merge", "rebase", "reset", "tag",
+                "clone", "init", "remote", "commit-tree", "ls-files", "restore", "rm", "mv",
+                "cherry-pick", "blame", "grep", "revert"}
+
+
+def _git_alias(repo: Path | None, name: str) -> str | None:
+    """The definition of `alias.<name>` as git would read it in `repo`, or None."""
+    if repo is None or name in GIT_BUILTINS or not re.fullmatch(r"[\w.-]+", name):
+        return None
+    try:
+        result = subprocess.run(["git", "-C", str(repo), "config", "--get", f"alias.{name}"],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _inner_payload(seg: list[str]) -> str | None:
+    """`bash [-x|--norc|-o opt] -c '<cmd>'` / `powershell -Command <cmd>`: the command string, else None."""
+    name = Path(seg[0]).name.lower().removesuffix(".exe") if seg else ""
+    if name in INNER_SHELLS:
+        k, has_c = 1, False
+        while k < len(seg) and seg[k][:1] in "-+" and len(seg[k]) > 1:
+            if seg[k] in {"-o", "+o", "-O", "+O"}:
+                k += 1                      # the option name is the next token
+            elif not seg[k].startswith("--") and "c" in seg[k][1:]:
+                has_c = True                # -c, -ce, -xc
+            k += 1
+        return seg[k] if has_c and k < len(seg) else None
+    if name in {"powershell", "pwsh"}:
+        for k, tok in enumerate(seg[1:], start=1):
+            if tok.lower() in {"-c", "-command"}:
+                return " ".join(seg[k + 1:]) or None
+    return None
 # Total time the checks may take; the hook entry's own timeout in settings.json is above it.
 COMMIT_CHECK_BUDGET = 240
 
@@ -467,6 +507,11 @@ def commit_invocations(command: str, cwd: Path) -> list[tuple[Path | None, bool]
         if seg and seg[0].lower() in {"cd", "set-location", "pushd"} and len(seg) > 1:
             here = _step(here, seg[1], assigned)
             continue
+        payload = _inner_payload(seg)
+        if payload is not None:
+            inner = commit_invocations(payload, here if here is not None else cwd)
+            found += inner if here is not None else [(None, worktree) for _, worktree in inner]
+            continue
         if not seg or Path(seg[0]).name.lower() not in {"git", "git.exe"}:
             continue
         target, i = here, 1
@@ -478,9 +523,20 @@ def commit_invocations(command: str, cwd: Path) -> list[tuple[Path | None, bool]
                 i += 2
             else:
                 i += 1
-        if i >= len(seg) or seg[i] != "commit":
+        if i >= len(seg):
             continue
         args = seg[i + 1:]
+        if seg[i] != "commit":
+            alias = _git_alias(target, seg[i])
+            if alias is None:
+                continue
+            if alias.startswith("!"):
+                found += commit_invocations(" ".join([alias[1:], *args]), target)
+                continue
+            words = alias.split()
+            if words[:1] != ["commit"]:
+                continue
+            args = words[1:] + args
         if "--dry-run" in args:
             continue
         worktree, j = False, 0

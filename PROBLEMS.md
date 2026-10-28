@@ -151,7 +151,29 @@ of REQ-5B886CC0BC3A.
 
 ## 2026-09-26 14:40 - human-confirmation-guard: deletes hidden in wrappers pass; quoted words false-block
 
-**Status**: arch-decision
+**Status**: RESOLVED 2026-10-28 (branch `fix/command-text-is-data`). Re-measured first: of the
+group-1 wrappers only `iex "ri ..."` still passed (subshell, group, if, xargs, find -exec, env,
+nohup, busybox, `\rm`, timeout, nice, bash/sh/powershell -c, unlink, inline python, and the
+SAFE-pattern paths already blocked). `remote_command` now unwraps `iex`/`Invoke-Expression`.
+Group 2: `safety_common._mask_message_data` reads the whole command with quote rules and blanks
+quoted arguments of `git [-C ..] commit|tag` and `gh pr|issue|release create|comment|edit`
+(multi-line included), and of echo/printf whose one output is a plain file nothing else in the
+command can run; it masks nothing on `$(`, backticks, `${`, here-docs, `$'..'` or `\"`, on a
+pipe, a compound command (`{ }`, if/while/for, `exec`) or typographic quotes, and nothing at all
+outside a Bash tool event (PowerShell quotes and escapes differ). The per-line print mask also
+stops masking when typographic quotes or backticks appear: `git commit -m 'msg’ ; Remove-Item ..`
+was a PowerShell bypass on origin/main (found by the automated security review). Independent
+review round 2 found `{ ..; git tag -l --format='P'; } | sh`, `printf -v GIT_EDITOR`, and a hook
+written after `cd .git/hooks`; all three are must-block cases now.
+`agent_policy_gates.commit_invocations` now sees commits inside `bash/sh -c`, `powershell -c`
+and git aliases (`!` aliases included). Evidence: `hooks/tests/test_command_text_is_data.py`
+(202 cases, 12 red on main, all green after; registered in `run_guard_regressions.py`),
+`test_agent_policy_commit_gate.py::test_commit_inside_a_shell_string_or_alias_is_seen`
+(red before, green after), `human-confirmation-guard.py --self-test` PASS, mutation probe on
+the nine new helpers: 238 of 238 killed. Remaining by design: a destructive word inside the quoted
+argument of any OTHER command, or a commit message with `\"`, `$(` or a here-doc, still blocks.
+
+Original status: arch-decision
 
 Found by the independent review of `031ff27` (temp files deletable without consent). Both
 behaviours are identical at the previous HEAD; `031ff27` neither opened nor closed them.
@@ -198,7 +220,14 @@ above is the middle path between them; the three probe rows are now refused.
 
 ## 2026-10-28 09:30 - transfer-contract-guard reads a git commit message as a transfer command
 
-**Status**: arch-decision
+**Status**: RESOLVED 2026-10-28 (branch `fix/command-text-is-data`). Root cause measured: the
+message mask already existed for single-line `git commit -m`, but `executable_text` works line
+by line, so a multi-line message, `git -C dir commit`, `git tag -m` and `printf ... > file`
+were never masked. Fixed once in `safety_common._mask_message_data` (see the 2026-09-26 14:40
+entry); a substitution inside the message keeps the whole command visible. Evidence:
+`hooks/tests/test_command_text_is_data.py` DATA cases (measured commands) and TRANSFER cases.
+
+Original status: arch-decision
 
 `git commit -m "... Copy-Item/robocopy ..."` is blocked as a transfer: the quoted
 message is data, but `safety_common.executable_text` masks quoted arguments only

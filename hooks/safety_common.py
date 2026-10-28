@@ -462,7 +462,8 @@ def _scan_segments(line: str, start_depth: int = 0) -> tuple[list[str], list[int
 
 
 def _mask_printed_arguments(line: str, start_depth: int = 0,
-                            command_consumers: list[str] | None = None) -> tuple[str, int]:
+                            command_consumers: list[str] | None = None,
+                            readable: bool = True) -> tuple[str, int]:
     """Blank the quoted arguments of printing commands - only when provably safe.
 
     Masking happens when every one of these holds:
@@ -534,7 +535,7 @@ def _mask_printed_arguments(line: str, start_depth: int = 0,
                     cursor += 2
             segments_safe.append(safe)
     for position, index in enumerate(range(0, len(parts), 2)):
-        if not segments_safe[position]:
+        if not readable or not segments_safe[position]:
             continue
         if not _PRINTS_OR_SEARCHES.match(parts[index]):
             continue
@@ -543,6 +544,301 @@ def _mask_printed_arguments(line: str, start_depth: int = 0,
             parts[index],
         )
     return "".join(parts), end_depth
+
+
+# Message text is data (PROBLEMS.md 2026-10-28 09:30 and 2026-09-26 14:40). The
+# per-line mask cannot see a quoted run that spans lines, so every multi-line
+# commit message was read as commands, and a print redirected to a file never
+# qualified. This pass reads the WHOLE command with bash quote rules and blanks
+# two shapes only: the quoted arguments of a message command, and the quoted
+# arguments of echo/printf whose one output is a plain file that nothing else in
+# the command can run. It masks nothing at all when it cannot read the command
+# for certain: a substitution or backtick outside single quotes, a here-doc,
+# `$'...'`, or a backslash before a quote (bash and PowerShell end that string
+# at different places, so the masked run could be live PowerShell).
+_GIT_GLOBAL_WITH_VALUE = {"-C", "--git-dir", "--work-tree", "--namespace"}
+# `-c`, `--exec-path` and `--config-env` are absent on purpose: they can run code.
+_GIT_GLOBAL_FLAGS = {"--no-pager", "-P", "--no-replace-objects", "--literal-pathspecs",
+                     "--no-optional-locks"}
+_PRINTERS = {"echo", "printf", "write-output"}
+# What may share a command with a masked print: nothing here can run a file.
+_FILE_INERT = {"git", "gh", "cd", "pushd", "popd", "set-location", "echo", "printf",
+               "write-output", "ls", "dir", "pwd", "true", "mkdir"}
+# `add` is absent: a configured clean filter reads every added file, and `git add -A`
+# never names the file it picks up.
+_GIT_FILE_INERT = {"commit", "tag", "push", "status", "log", "diff", "show", "fetch",
+                   "branch", "switch", "rev-parse"}
+# Words that open a compound command or rebind stdout for later commands: a
+# message inside `{ ...; } | sh` or after `exec > x.sh` is output that runs
+# (review 2026-10-28: `{ true; git tag -l --format='P'; } | sh` ran P).
+_COMPOUND_OR_EXEC = {"{", "}", "if", "then", "else", "elif", "fi", "do", "done", "while", "until",
+                     "for", "case", "esac", "select", "coproc", "!", "[[", "time", "exec"}
+_CHANGES_DIRECTORY = {"cd", "pushd", "popd", "set-location"}
+# echo/printf options that still print; `printf -v NAME` assigns instead (review 2026-10-28).
+_PRINT_OPTIONS = {"-n", "-e", "-E", "-ne", "-en", "--"}
+_GIT_HOOK_NAMES = {"applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit",
+                   "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit",
+                   "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update",
+                   "proc-receive", "post-receive", "post-update", "reference-transaction",
+                   "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate",
+                   "fsmonitor-watchman", "post-index-change"}
+_NOT_BASH_QUOTING = re.compile("[`‘’‚‛“”„]")
+_GH_FILE_INERT = {"pr", "issue", "release", "repo"}
+_MESSAGE_FILE_FLAGS = {"-F", "--file", "--body-file", "--notes-file"}
+# A name defined in the same command could turn `git` or `printf` into anything.
+_REBINDS_A_NAME = {"alias", "set-alias", "new-alias", "sal", "nal", "function", "filter"}
+_PLAIN_TARGET = re.compile(r"[\w.:/\\+-]+")
+
+
+def _shell_words(command: str) -> list[dict] | None:
+    """Segments of words read with bash quote rules, or None when unsure.
+
+    A segment is {"words", "redirects", "depth", "sep"}; a word is {"value"
+    (quotes removed), "runs" (spans of its quoted parts)}; a redirect is
+    (operator, word).
+    """
+    segments: list[dict] = []
+    words: list[dict] = []
+    redirects: list[tuple[str, dict]] = []
+    state = {"word": None, "op": None, "depth": 0, "seg_depth": 0}
+
+    def word() -> dict:
+        if state["word"] is None:
+            state["word"] = {"value": "", "runs": []}
+        return state["word"]
+
+    def end_word() -> None:
+        current = state["word"]
+        if current is None:
+            return
+        if state["op"] is not None:
+            redirects.append((state["op"], current))
+            state["op"] = None
+        else:
+            words.append(current)
+        state["word"] = None
+
+    def end_segment(sep: str) -> bool:
+        end_word()
+        if state["op"] is not None:
+            return False
+        segments.append({"words": list(words), "redirects": list(redirects),
+                         "depth": state["seg_depth"], "sep": sep})
+        words.clear()
+        redirects.clear()
+        return True
+
+    index, size = 0, len(command)
+    while index < size:
+        char = command[index]
+        following = command[index + 1:index + 2]
+        if char == "\\":
+            if following == "\n":
+                index += 2
+                continue
+            if not following or following in "'\"":
+                return None
+            word()["value"] += following
+            index += 2
+        elif char == "'":
+            if "'" not in command[index + 1:]:
+                return None
+            close = command.index("'", index + 1)
+            current = word()
+            current["value"] += command[index + 1:close]
+            current["runs"].append((index, close + 1))
+            index = close + 1
+        elif char == '"':
+            close = index + 1
+            while close < size and command[close] != '"':
+                if command[close] == "\\":
+                    if command[close + 1:close + 2] == '"':
+                        return None
+                    close += 2
+                    continue
+                if command[close] == "`" or (command[close] == "$"
+                                             and command[close + 1:close + 2] in ("(", "{", "[")):
+                    return None
+                close += 1
+            if close >= size:
+                return None
+            current = word()
+            current["value"] += command[index + 1:close]
+            current["runs"].append((index, close + 1))
+            index = close + 1
+        elif char == "`" or (char == "$" and following in ("(", "{", "[", "'")):
+            return None
+        elif char in "<>":
+            # `<<`, `<(`, `>(` need no test here: the second `<` or the `(`
+            # arrives while an operator still waits for its word, which aborts.
+            op = char
+            index += 1
+            if char == ">" and command[index:index + 1] in (">", "|", "&"):
+                op += command[index]
+                index += 1
+            prefix = state["word"]
+            if prefix is not None and not prefix["runs"] and re.fullmatch(r"\d*|&", prefix["value"]):
+                op = prefix["value"] + op
+                state["word"] = None
+            else:
+                end_word()
+            if state["op"] is not None:
+                return None
+            state["op"] = op
+        elif char in "&|;\n":
+            if char == "&" and following == ">":
+                end_word()
+                word()["value"] = "&"
+                index += 1
+                continue
+            sep = command[index:index + 2] if following == char and char in "&|" else char
+            if not end_segment(sep):
+                return None
+            state["seg_depth"] = state["depth"]
+            index += len(sep)
+        elif char in "()":
+            if not end_segment(char):
+                return None
+            state["depth"] += 1 if char == "(" else -1
+            if state["depth"] < 0:
+                return None
+            state["seg_depth"] = state["depth"]
+            index += 1
+        elif char == "#" and state["word"] is None:
+            index = command.index("\n", index) if "\n" in command[index:] else size
+        elif char in " \t\r":
+            end_word()
+            index += 1
+        else:
+            word()["value"] += char
+            index += 1
+    if not end_segment("") or state["depth"] != 0:
+        return None
+    return segments
+
+
+def _git_subcommand(values: list[str]) -> str | None:
+    """The subcommand of `git [safe globals] <sub>`; None for anything else."""
+    if not values or values[0].lower() not in ("git", "git.exe"):
+        return None
+    position = 1
+    while position < len(values) and values[position].startswith("-"):
+        option = values[position]
+        if option.split("=", 1)[0] in _GIT_GLOBAL_WITH_VALUE:
+            position += 1 if "=" in option else 2
+        elif option in _GIT_GLOBAL_FLAGS:
+            position += 1
+        else:
+            return None
+    return values[position] if position < len(values) else None
+
+
+def _is_message_command(values: list[str]) -> bool:
+    """git commit/tag, or gh pr|issue|release create|comment|edit."""
+    if _git_subcommand(values) in ("commit", "tag"):
+        return True
+    return (len(values) >= 3 and values[0].lower() in ("gh", "gh.exe")
+            and values[1] in ("pr", "issue", "release")
+            and values[2] in ("create", "comment", "edit"))
+
+
+def _harmless_redirect(op: str, target: str) -> bool:
+    """Input, a merge into stdout/stderr, or a discard: no bytes can reach a file."""
+    return (op.endswith("<") or (op.endswith(">&") and target in ("1", "2"))
+            or target.lower() in ("/dev/null", "$null", "nul"))
+
+
+def _plain_file_target(path: str) -> bool:
+    """A file no shell, git hook or profile will run by itself."""
+    if not _PLAIN_TARGET.fullmatch(path):
+        return False
+    parts = [part for part in re.split(r"[\\/]+", path.lower()) if part]
+    if not parts or parts[-1].startswith("."):
+        return False
+    if any(part in (".git", ".husky") or "hook" in part for part in parts):
+        return False
+    if parts[-1].rsplit(".", 1)[0] in _GIT_HOOK_NAMES:
+        return False
+    return "profile" not in parts[-1] and not parts[-1].endswith("rc")
+
+
+def _cannot_run_a_file(values: list[str]) -> bool:
+    if not values:
+        return True
+    name = values[0].lower()
+    if name in ("git", "git.exe"):
+        return _git_subcommand(values) in _GIT_FILE_INERT
+    if name in ("gh", "gh.exe"):
+        return len(values) > 1 and values[1] in _GH_FILE_INERT
+    return name in _FILE_INERT
+
+
+def _print_target(segment: dict) -> str | None:
+    """The one plain file a top-level echo/printf writes to, else None."""
+    outputs = [(op, target) for op, target in segment["redirects"]
+               if not _harmless_redirect(op, target["value"])]
+    if len(outputs) != 1 or outputs[0][0] not in (">", ">>", "1>", "1>>"):
+        return None
+    target = outputs[0][1]["value"]
+    return target if _plain_file_target(target) else None
+
+
+def _mentions(segment: dict, name: str) -> bool:
+    """Does this segment name the file anywhere except as a message-file flag value?"""
+    values = [word["value"] for word in segment["words"]]
+    message = _is_message_command(values)
+    for position, value in enumerate(values):
+        if name not in value.lower():
+            continue
+        flag = values[position - 1] if position else ""
+        if message and (flag in _MESSAGE_FILE_FLAGS
+                        or value.split("=", 1)[0] in _MESSAGE_FILE_FLAGS):
+            continue
+        return True
+    return any(name in target["value"].lower() for _, target in segment["redirects"])
+
+
+def _mask_message_data(command: str) -> str:
+    """Blank quoted message arguments and printed file contents; see the block above."""
+    # Bash quote rules only hold for the Bash tool. PowerShell also quotes with
+    # typographic quotes and escapes with a backtick, so there a span that looks
+    # quoted here can be live code: mask nothing (security review 2026-10-28).
+    if _CURRENT_EVENT.get("tool_name") != "Bash" or _NOT_BASH_QUOTING.search(command):
+        return command
+    segments = _shell_words(command)
+    if segments is None:
+        return command
+    first_words = [segment["words"][0]["value"].lower() for segment in segments if segment["words"]]
+    if (any(word in _REBINDS_A_NAME or word in _COMPOUND_OR_EXEC for word in first_words)
+            or any(segment["sep"] == "|" for segment in segments)):
+        return command
+    spans: list[tuple[int, int]] = []
+    for number, segment in enumerate(segments):
+        values = [word["value"] for word in segment["words"]]
+        if not values or segment["depth"]:
+            continue
+        if _is_message_command(values):
+            if all(_harmless_redirect(op, target["value"]) for op, target in segment["redirects"]):
+                spans += [run for word in segment["words"][1:] for run in word["runs"]]
+            continue
+        if values[0].lower() not in _PRINTERS or any(
+                value.startswith("-") and value not in _PRINT_OPTIONS for value in values):
+            continue
+        # A relative target after a cd names a file this check cannot place.
+        if any(earlier["words"] and earlier["words"][0]["value"].lower() in _CHANGES_DIRECTORY
+               for earlier in segments[:number]):
+            continue
+        target = _print_target(segment)
+        if target is None:
+            continue
+        name = re.split(r"[\\/]+", target.lower())[-1]
+        others = [other for index, other in enumerate(segments) if index != number]
+        if all(_cannot_run_a_file([word["value"] for word in other["words"]])
+               and not _mentions(other, name) for other in others):
+            spans += [run for word in segment["words"][1:] for run in word["runs"]]
+    for start, end in sorted(spans, reverse=True):
+        command = command[:start] + " " + command[end:]
+    return command
 
 
 def executable_text(command: str) -> str:
@@ -559,6 +855,8 @@ def executable_text(command: str) -> str:
     """
     if not command:
         return ""
+    original = command
+    command = _mask_message_data(command)
     # Join logical lines first: a line ending in `\` or `|` continues, and the
     # consumer that decides everything sits on the NEXT line. Measured: both
     # `echo 'rm -rf x' |\n  bash` and the backslash form ran while the guard saw
@@ -574,8 +872,11 @@ def executable_text(command: str) -> str:
     # A function definition anywhere in the command can rebind a trusted name,
     # so nothing in it may be masked.
     if _DEFINES_A_FUNCTION.search(command):
-        return command
+        return original
     consumers = _all_pipe_consumers(command)
+    # Typographic quotes and backticks are quotes or escapes to PowerShell, so a
+    # run that bash rules call quoted may be live code there: mask no quotes.
+    readable = not _NOT_BASH_QUOTING.search(command)
     kept: list[str] = []
     depth = 0
     index = 0
@@ -584,7 +885,7 @@ def executable_text(command: str) -> str:
         index += 1
         if _COMMENT_LINE.match(line):
             continue
-        masked, depth = _mask_printed_arguments(line, depth, consumers)
+        masked, depth = _mask_printed_arguments(line, depth, consumers, readable)
         kept.append(masked)
         opening = _HEREDOC_START.search(line)
         if not opening:
@@ -615,7 +916,7 @@ def executable_text(command: str) -> str:
             for body_line in body:
                 if _COMMENT_LINE.match(body_line):
                     continue
-                kept.append(_mask_printed_arguments(body_line, depth, consumers)[0])
+                kept.append(_mask_printed_arguments(body_line, depth, consumers, readable)[0])
         # Either way the body is skipped by the loop, so it can no longer thread
         # depth: a `}` inside a here-doc body is a byte of data to the real shell,
         # but it was decrementing the guard's brace depth and could make a later
