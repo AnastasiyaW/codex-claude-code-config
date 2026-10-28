@@ -65,27 +65,35 @@ _FEEDBACK = (
     r"(?:too (?:strict|restrictive|much|heavy)|overkill|over[- ]engineer\w*|"
     r"blocks? (?:the )?(?:staging|smoke)|false[- ]positives?|"
     r"слишком (?:строг\w*|жестк\w*|зажат\w*|много|тяжел\w*)|"
-    r"избыточн\w*|ложн\w* срабатыван\w*|блокир\w* smoke)"
+    r"избыточ\w*|ложн\w* срабатыван\w*|блокир\w* smoke)"
 )
 # Bare smoke/staging is a place a product is tested ("false positives on staging"),
-# not a subject: only a smoke/staging test, gate, profile or run counts.
+# not a subject: only a smoke/staging test, gate, profile or run counts. A bare
+# validator is usually a product's input validator, so it is not a subject either.
 _STAGE = r"(?:smoke|staging|смоук\w*|стейдж\w*)"
 _SUBJECT = (
-    r"(?:harness(?:es)?|test (?:systems?|suites?|profiles?)|gates?|validators?|"
+    r"(?:harness(?:es)?|test (?:systems?|suites?|profiles?)|gates?|"
     rf"{_STAGE}[- ]?(?:tests?|gates?|profiles?|suites?|runs?|тест\w*|гейт\w*|профил\w*|"
     r"прогон\w*|набор\w*|провер\w*)|"
     r"(?:staging|стейдж\w*)[- ](?:smoke|смоук\w*)|"
     rf"(?:тестов\w*|test) профил\w*|профил\w* (?:тест\w*|{_STAGE})|"
-    r"харнесс\w*|гейт\w*|валидатор\w*|обвязк\w*|тестов\w* контур\w*|систем\w* тест\w*)"
+    r"харнесс\w*|гейт\w*|обвязк\w*|тестов\w* контур\w*|систем\w* тест\w*)"
 )
-# simplification: one clause of at most 40 characters stands for "the feedback
-# describes the subject"; "the gate caught 3 false positives in the classifier"
-# still reads as a complaint. A parser of who-does-what is the upgrade path.
-_CLAUSE = r"[^.?!\n,;:—–]{0,40}"
+# simplification: one clause of at most 40 characters, with no report verb in it,
+# stands for "the feedback describes the subject": "the gate found that the parser
+# is too strict" is a product finding. A long complaint ("the staging gate we added
+# last week is way too strict") is missed; a parser of who-does-what is the upgrade.
+_REPORT_VERB = (
+    r"(?:found|finds|shows?|showed|shown|reports?|reported|flag(?:s|ged)?|caught|catches|"
+    r"нашел|нашла|нашли|находит|показ\w*|выявил\w*|обнаружил\w*|поймал\w*)"
+)
+_CLAUSE = rf"(?:(?!\b{_REPORT_VERB}\b)[^.?!\n,;:—–]){{0,40}}"
+# A dash right after the subject is the Russian copula ("Гейт — слишком строгий").
+_COPULA = r"(?:[ \t]*[—–][ \t]*)?"
 SIGNALS.append((
     "explicit-feedback",
     [
-        rf"\b{_SUBJECT}\b{_CLAUSE}\b{_FEEDBACK}\b",
+        rf"\b{_SUBJECT}\b{_COPULA}{_CLAUSE}\b{_FEEDBACK}\b",
         rf"\b{_FEEDBACK}\b{_CLAUSE}\b{_SUBJECT}\b",
     ],
 ))

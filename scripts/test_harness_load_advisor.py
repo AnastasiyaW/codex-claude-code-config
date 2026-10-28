@@ -192,12 +192,18 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             "The spam filter is too strict, I fixed it and the gate is green.",
             "Гейт прошёл: ложных срабатываний у детектора нет.",
             "Gate green, no more false positives.",
-            "The gate reports zero real-world false positives.",
-            "The gate run is clean, false positives: 0.",
-            "The gate output shows false positives — none.",
+            "The gate has zero real-world false positives.",
+            "The gate has false positives: 0.",
+            "The gate has false positives — none.",
             "The gate gives no false positives.",
-            "The gate shows no more false positives.",
+            "The gate gives no more false positives.",
             "Ложных срабатываний у гейта нет.",
+            # a product's validator, and a gate reporting a product finding
+            "In the product, the input validators are too strict for phone numbers.",
+            "Валидатор формы был слишком строгим к телефонам.",
+            "The smoke test found that the parser is too strict with dates.",
+            "The staging run shows the spam filter has too many false positives.",
+            "Гейт нашёл ложные срабатывания детектора лиц.",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-product-") as raw:
                 root = Path(raw)
@@ -231,7 +237,8 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             "The staging smoke is too strict.",
             "Тестовый профиль слишком строгий.",
             "Профиль смоука слишком строгий.",
-            "The validators are too strict for this branch.",
+            "Харнесс избыточен для такой правки.",
+            "Гейт — слишком строгий.",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-gate-") as raw:
                 payload, output = run_hook(Path(raw), text)
