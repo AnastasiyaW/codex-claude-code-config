@@ -4,6 +4,19 @@ Changelog for codex-claude-code-config. Newest first.
 
 ---
 
+## 2026-10-28 (plugin ships publish-bypass-guard)
+
+- The `harness` plugin now also registers `hooks/publish-bypass-guard.py`
+  (PreToolUse, Bash and PowerShell). `scripts/plugin_build.py` takes it from
+  `EXTRAS` through a `PLUGIN_EXTRAS` list, so event and matcher keep one home.
+- `docs/team-plugin.md` says what the guard does on a machine without the global
+  pre-push scan (private pushes pass, public ones are blocked) and why
+  `install_hooks.py --git-hooks` must not run on another machine yet: the wrapper
+  needs `~/.claude/scripts/pre_push_claude_attribution.py`, which is not in this
+  repository, and on Windows finds Python only in uv's folder.
+
+---
+
 ## 2026-10-28 (plugin fixes reported from a teammate install)
 
 - Skills pointed at paths that exist only on the author's machine. Fixed:

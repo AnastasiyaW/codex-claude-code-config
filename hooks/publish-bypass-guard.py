@@ -126,6 +126,9 @@ ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 PRINTERS = {"echo", "printf", "write-output", "write-host", "grep", "egrep", "fgrep", "rg", "ag",
             "findstr", "select-string", "sls", "cat", "type", "less", "more", "head", "tail", "wc"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+# Their code arguments are re-read as text so a literal `git push ...` inside is still judged, but
+# a code line is not a shell command: unknown-shape does not apply there (live false block 2026-10-28).
+INTERPRETERS = {"python", "python3", "py", "node", "ruby", "perl", "php", "deno", "bun"}
 PWSH = {"powershell", "pwsh"}
 CD = {"cd", "set-location", "sl", "chdir", "pushd", "push-location"}
 KEYWORDS = {"(", "{", "!", "then", "do", "else", "elif", "if", "while", "until", "&", ".",
@@ -196,6 +199,7 @@ class Cmd:
     raw: str
     fed: bool = False        # arguments also arrive on stdin (xargs)
     shell: str = "bash"
+    in_code: bool = False    # read out of an interpreter's code argument (python -c "..."), not shell
 
 
 # ---------------------------------------------------------------- command reading
@@ -206,8 +210,94 @@ def _unquote(token: str) -> str:
     return token
 
 
+REDIRECT = re.compile(r"\d*(?:&>>?|>>?&?|<<?<?|<>)")
+
+
+def _target_end(segment: str, start: int) -> int:
+    """End of the redirection target word that starts at `start` (quotes respected)."""
+    quote = None
+    end = start
+    while end < len(segment):
+        ch = segment[end]
+        if quote:
+            quote = None if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch.isspace() or ch in "<>":
+            break
+        end += 1
+    return end
+
+
+def _strip_redirections(segment: str) -> str:
+    """Cut unquoted `>file`, `2>&1`, `<in` from the raw text before it is split into words.
+
+    A redirection stuck to a word (`push>out.log`) hid the subcommand (review 2026-10-28). The cut
+    runs before quote removal, so a quoted `">"` stays an argument; a target starting with `-` is
+    kept, because after bash backslash removal `\\>` reaches here bare and must not eat a flag such
+    as `--no-verify`."""
+    out: list[str] = []
+    quote = None
+    i = 0
+    while i < len(segment):
+        ch = segment[i]
+        if quote:
+            quote = None if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "<>":
+            digits = len(out)
+            while digits and out[digits - 1].isdigit():
+                digits -= 1
+            if digits == 0 or out[digits - 1].isspace():
+                del out[digits:]  # `2>`: the fd number belongs to the operator
+            end = REDIRECT.match(segment, i).end()  # starts with < or >, which the pattern matches
+            if segment[i:end].endswith("&"):
+                while end < len(segment) and (segment[end].isdigit() or segment[end] == "-"):
+                    end += 1
+            else:
+                start = end
+                while start < len(segment) and segment[start] in " \t":
+                    start += 1
+                if not segment.startswith("-", start):
+                    end = _target_end(segment, start)
+            out.append(" ")
+            i = end
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _join_quoted_newlines(text: str) -> str:
+    """A newline inside a closed pair of quotes (a multi-line `-m "..."`) is part of one argument.
+    Splitting there made the message's second line a command and lost the real command after it
+    (review 2026-10-28: `git commit -m "a\\nb" && git push --no-verify` read as unknown-shape only).
+    Runs on the raw bash text. Fails closed instead of modelling more shell grammar (security
+    review 2026-10-28): any here-doc, `#` (comments: `# don't` ... `# won't`), `$'` or backslash
+    (escaped quotes) anywhere keeps every line, so a quote that is not a quote never swallows a
+    real command. The price is the old split, which can only over-block."""
+    if "<<" in text or "#" in text or "$'" in text or "\\" in text:
+        return text
+    out = list(text)
+    quote = None
+    newlines: list[int] = []
+    for index, ch in enumerate(text):
+        if quote:
+            if ch == quote:
+                for at in newlines:
+                    out[at] = " "
+                quote, newlines = None, []
+            elif ch == "\n":
+                newlines.append(index)
+        elif ch in "'\"":
+            quote = ch
+    return "".join(out)
+
+
 def tokenize(segment: str) -> list[str]:
     """Split one segment, keeping backslashes (Windows paths) and quoted runs together."""
+    segment = _strip_redirections(segment)
     try:
         lexer = shlex.shlex(segment, posix=True)
         lexer.whitespace_split = True
@@ -391,7 +481,8 @@ def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int =
     if depth > 6 or not text:
         return
     current = cwd
-    for line in executable_text(normalise(text, shell)).splitlines():
+    joined = _join_quoted_newlines(text) if shell == "bash" else text
+    for line in executable_text(normalise(joined, shell)).splitlines():
         for segment in _split_segments(line)[0::2]:
             if not segment.strip():
                 continue
@@ -494,10 +585,13 @@ def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int =
                         break
                 continue
             is_remote = remote or name in ("ssh", "plink")
+            code = name in INTERPRETERS
             for token in argv[1:]:
                 if re.search(r"\s", token):
-                    yield from iter_commands(token, None if is_remote else current, is_remote,
-                                             depth + 1, "bash" if is_remote else shell)
+                    for inner in iter_commands(token, None if is_remote else current, is_remote,
+                                               depth + 1, "bash" if is_remote else shell):
+                        inner.in_code = inner.in_code or code
+                        yield inner
 
 
 # ---------------------------------------------------------------- git / gh probes
@@ -1039,6 +1133,49 @@ def judge_http(cmd: Cmd, findings: list[Finding]) -> None:
                                 "commit and `git push` instead", [(urls[0].lower(),)]))
 
 
+# Names that contain `git` or `push` as a word but are not a push: the repo's `.git/` folder, the
+# `git-hooks` folder, `pre-push` hook files and a `--push` flag. Only these exact names are cut;
+# everything else keeps the broad word test below (git-push, git.cmd, push>file all still match).
+BENIGN_NAMES = re.compile(r"\.git(?=[\\/])|(?<![\w.-])-?-?git-hooks(?![\w-])|(?<![\w.])pre-push(?:-chain\.sh)?(?![\w-])"
+                          r"|(?<![\w-])--push(?![\w-])")
+
+
+def _without_code_argument(cmd: Cmd) -> str:
+    """An interpreter's arguments without its code (`-c CODE`, `-e CODE`): the code is judged
+    separately as `in_code` commands, its words are not this command's arguments."""
+    kept, skip = [], False
+    for word in cmd.argv[1:]:
+        if skip:
+            skip = False
+        elif word in ("-c", "-e", "--eval", "-p", "--print"):
+            skip = True
+        else:
+            kept.append(word)
+    return " ".join(kept).lower()
+
+
+def _list_git_push(cmd: Cmd) -> bool:
+    """Code that builds the command as a list, `['git', ..., 'push', ...]`, never reaches the shell
+    re-read, so it is judged here (review 2026-10-28: `subprocess.run(['git','push',...])` and the
+    `-c core.hooksPath=` form passed). `git stash push` stays allowed."""
+    codes = [word for at, word in enumerate(cmd.argv[1:], 1)
+             if cmd.argv[at - 1] in ("-c", "-e", "--eval", "-p", "--print")]
+    for code in codes:
+        items = [item.lower() for item in re.findall(r"['\"]([^'\"]*)['\"]", code)]
+        gits = [at for at, item in enumerate(items) if re.split(r"[\\/]", item)[-1] in ("git", "git.exe")]
+        for start in gits:
+            rest = items[start + 1:]
+            if "push" in rest and "stash" not in rest[:rest.index("push")]:
+                return True
+    return False
+
+
+def _git_push_words(raw_low: str) -> bool:
+    """Review 2026-10-28: `sed .../git-hooks/pre-push` read as a git push behind an unknown command."""
+    text = BENIGN_NAMES.sub(" ", raw_low)
+    return bool(re.search(r"\bgit\b", text) and re.search(r"\bpush\b", text))
+
+
 def judge(cmd: Cmd, text_env: dict[str, str], findings: list[Finding], depth: int = 0) -> None:
     raw_low = cmd.raw.lower()
     if cmd.name == "<undecodable-encodedcommand>":
@@ -1055,8 +1192,9 @@ def judge(cmd: Cmd, text_env: dict[str, str], findings: list[Finding], depth: in
         judge_gh(cmd, findings, text_env, depth)
     elif cmd.name in HTTP_CLIENTS:
         judge_http(cmd, findings)
-    elif cmd.name not in PRINTERS and cmd.name not in KNOWN_SHAPES \
-            and re.search(r"\bgit\b", raw_low) and re.search(r"\bpush\b", raw_low):
+    elif cmd.name not in PRINTERS and cmd.name not in KNOWN_SHAPES and not cmd.in_code \
+            and (_git_push_words(_without_code_argument(cmd) if cmd.name in INTERPRETERS else raw_low)
+                 or (cmd.name in INTERPRETERS and _list_git_push(cmd))):
         findings.append(Finding("unknown-shape", f"`{cmd.raw.strip()}` reads as a git push behind "
                                 f"`{cmd.name}`, which this guard does not understand",
                                 "run git push directly", [(cmd.raw.strip().lower(),)]))

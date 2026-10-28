@@ -11,7 +11,8 @@ Codex users keep a clone and run one update command.
 | Skills | `skills/<name>/` and every category in `.claude-plugin/plugin.json` `"skills"` | `/harness:<skill>` or by description |
 | Agents | `agents/*.md` | `harness:<agent>` |
 | Workflows | `workflows/*.js` | `/harness:<workflow>` |
-| Hooks | `hooks/hooks.json`, generated from `SAFE_DEFAULTS` in `scripts/install_hooks.py` | registered at session start |
+| Hooks | `hooks/hooks.json`, generated from `SAFE_DEFAULTS` plus the `PLUGIN_EXTRAS` entries of `EXTRAS` in `scripts/install_hooks.py` | registered at session start |
+| Tools | `scripts/` (for example `mutation_probe.py`, `crap_probe.py`, `failure_mine.py`, `harness_improvement_pilot.py`) | run by path under the plugin root |
 | Rules | `rules/*.md` | `hooks/plugin-rules-context.py` injects an index at session start; the agent reads a rule file when its topic applies |
 
 A plugin cannot ship `CLAUDE.md` or `rules/` as context (Claude Code docs,
@@ -27,7 +28,28 @@ and the guards fail open (Claude Code reports a hook error and carries on):
 - Windows: if `python` opens the Microsoft Store, install Python from python.org with
   "Add to PATH" and turn off the `python.exe` app execution alias.
 
-After a change to `SAFE_DEFAULTS` or to `skills/` categories run:
+### publish-bypass-guard on a teammate's machine
+
+The plugin ships `hooks/publish-bypass-guard.py` (PreToolUse, Bash and PowerShell; see
+[publish-bypass-guard.md](publish-bypass-guard.md)). It finds its own helpers
+(`pre-push-chain.sh`, `human-confirmation-guard.py`) next to itself, so it works from
+the plugin cache. Its approval log is `~/.claude/logs/publish-approvals.jsonl`.
+
+It allows a push only through the global pre-push leak scan, or to a repository that
+`gh` confirms PRIVATE or INTERNAL. On a machine without that scan:
+
+- a push to a private repository passes (needs `gh auth login`, so visibility can be read);
+- a push to a public repository, or one whose visibility is unknown, is blocked.
+
+The global wrapper `scripts/git-hooks/pre-push` is not yet portable: it requires
+`~/.claude/scripts/pre_push_claude_attribution.py`, which is not in this repository,
+and on Windows looks for Python only in uv's interpreter folder; it also expects the
+scanner in a clone at `~/.claude/claude-code-config`. Installed on another
+machine it blocks every push, private ones included, so do not run
+`install_hooks.py --git-hooks` there until the wrapper is fixed. Public pushes from such a
+machine go through the owner.
+
+After a change to `SAFE_DEFAULTS`, `PLUGIN_EXTRAS` or `skills/` categories run:
 
 ```bash
 python scripts/plugin_build.py          # regenerate hooks/hooks.json

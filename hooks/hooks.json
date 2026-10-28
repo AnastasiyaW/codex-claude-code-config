@@ -102,6 +102,13 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/dependency-provenance-guard.py"
             ]
+          },
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/publish-bypass-guard.py"
+            ]
           }
         ]
       },

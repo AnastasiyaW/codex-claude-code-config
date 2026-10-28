@@ -286,6 +286,129 @@ class ThirdReview(unittest.TestCase):
         self.check("env -C ../beta git push", "local-hooks")
         self.check("mywrap --flag git push", "unknown-shape")
 
+    def test_1b_hook_file_names_are_not_a_push(self) -> None:
+        # Review 2026-10-28: `\bgit\b` + `\bpush\b` read hook paths as a push behind an unknown command.
+        for command in ("sed -n 1,5p scripts/git-hooks/pre-push", "ls -la .git/hooks/pre-push",
+                        "chmod +x .git/hooks/pre-push", "diff scripts/git-hooks/pre-push hooks/pre-push-chain.sh",
+                        "code scripts/git-hooks/pre-push",
+                        "python scripts/install_hooks.py --git-hooks --dry-run --push"):
+            self.assertNotIn("unknown-shape", routes(command), command)
+        for command in ("mywrap /usr/bin/git push", 'mywrap "git" "push"', "mywrap git.exe push",
+                        # second review: shapes a word-split rule let through
+                        "mywrap git push>out.log", "mywrap git push<input.txt", "mywrap git.cmd push origin main",
+                        "mywrap /usr/lib/git-core/git-push origin main", "git-push origin main",
+                        "mywrap [git] push", "mywrap git! push", "mywrap git push@{u}",
+                        "mywrap git push .git/hooks/pre-push"):
+            self.check(command, "unknown-shape")
+        self.check(r"mywrap C:\Git\cmd\git.exe push origin main", "unknown-shape", shell="powershell")
+
+    def test_1c_redirection_stuck_to_push(self) -> None:
+        # Review 2026-10-28 (pre-existing): `git push>out.log` hid the subcommand from the parser.
+        for command in ("git push>out.log", "git push >out.log", "git push > out.log", "git push 2>&1",
+                        "timeout 60 git push>out.log", "winpty git push>out.log", "git push origin main>out.log"):
+            self.check(command, "local-hooks", cwd=Fixture.unscanned)
+        # Only the redirect target leaves the argument list; a flag after it is still seen.
+        for command in ("git push > out.log --no-verify", "git push >out.log --no-verify",
+                        "git push 2>&1 --no-verify",
+                        # third review: a quoted `>` is an argument, not a redirection
+                        'git push -o ">" --no-verify origin main', 'git push --push-option=">" --no-verify',
+                        'git push --push-option "a>" --no-verify', "git push -o \\> --no-verify"):
+            self.check(command, "push-no-verify", cwd=Fixture.private)
+        self.check('git -c "x.y=>" -c core.hooksPath=/dev/null push origin main', "hookspath-override")
+        self.check("git -c x.y=\\> -c core.hooksPath=/dev/null push origin main", "hookspath-override")
+
+    def test_1e_interpreter_code_is_not_shell(self) -> None:
+        # Live false block 2026-10-28: Python code in `python -c "..."` was re-read as shell, a line
+        # of it became an unknown command, and the module path in it holds `git` and `push`.
+        code = ("import importlib.util as u; s = u.spec_from_file_location('m', '../hooks/pre-push-public-repo-scan.py'); "
+                "m = u.module_from_spec(s); s.loader.exec_module(m); "
+                "print('mismatch:', [p for p in m.files('.git') if 'push' in p]); "
+                "print('policy problems:', m.private_policy_problems('..'))")
+        command = f'cd guard && python -I -c "{code}"; python test_x.py 2>&1 | tail -1; cd .. && git push -q origin main'
+        self.assertNotIn("unknown-shape", routes(command, Fixture.private), command)
+        self.assertEqual(routes(command, Fixture.private), set(), command)
+        # A literal git command inside the code is still judged as git.
+        self.check('python -c "import os; os.system(\'git push --no-verify\')"', "push-no-verify", cwd=Fixture.private)
+        # An interpreter that runs a wrapper with push words in its plain arguments is still unknown.
+        self.check("python wrapper.py git push", "unknown-shape")
+        self.check("python git push", "unknown-shape")
+        self.check('node -e "x()" git push', "unknown-shape")
+
+    def test_1f_stash_push_and_code_mentioning_push(self) -> None:
+        # Second live false block 2026-10-28: `git stash push` and Python code that names git and push.
+        for command in ('git stash push -m "msg"', "git stash push -- file",
+                        "cd . && python -I -c \"import subprocess; x = subprocess.run(['git', 'log']).stdout; "
+                        "print('git stash push saved', len(x), 'lines')\" && "
+                        'git stash push -q -m "live-folder sync" -- PROBLEMS.md hooks/a.py'):
+            self.assertEqual(routes(command, Fixture.private), set(), command)
+        self.check('python -I -c "print(1)" && git push --no-verify', "push-no-verify", cwd=Fixture.private)
+        # Review 2026-10-28: code that builds git push as a list reaches no shell re-read.
+        self.check("python -c \"import subprocess; subprocess.run(['git','push','origin','main'])\"", "unknown-shape")
+        self.check("python -c \"import subprocess; subprocess.run(['git','-c','core.hooksPath=/dev/null',"
+                   "'push','origin','main'])\"", "unknown-shape")
+        self.check("node -e \"require('child_process').execFileSync('git', ['push'])\"", "unknown-shape")
+        self.check("python -c \"import subprocess; subprocess.run(['/usr/bin/git','push'])\"", "unknown-shape")
+        self.assertEqual(routes("python -c \"import subprocess; subprocess.run(['git','stash','push','-m','wip'])\"",
+                                Fixture.private), set())
+
+    def test_1h_multiline_quoted_message(self) -> None:
+        # Live false block 2026-10-28: a commit message line naming git and push read as a command.
+        for command in ('git commit -q -m "title\n\nwhich cannot hold git or push: x." && git fetch -q origin',
+                        "git commit -q -m 'title\nsecond line about git push' && git status"):
+            self.assertEqual(routes(command, Fixture.private), set(), command)
+        self.check('git commit -m "a\nb" && git push --no-verify', "push-no-verify", cwd=Fixture.private)
+        # An unclosed quote and a here-doc keep their lines.
+        self.check("echo 'x\ngit push --no-verify", "push-no-verify", cwd=Fixture.private)
+        self.check("cat <<EOF\ndon't\nEOF\ngit push --no-verify", "push-no-verify", cwd=Fixture.private)
+        # Security review 2026-10-28: comment apostrophes and escaped quotes are not quotes.
+        self.check("# don't\ngit push --no-verify\n# won't", "push-no-verify", cwd=Fixture.private)
+        self.check('echo \\"\ngit push --no-verify\necho \\"', "push-no-verify", cwd=Fixture.private)
+        self.check("x=1 # it's\ngit push --no-verify\n# fine'", "push-no-verify", cwd=Fixture.private)
+
+    def test_1i_join_quoted_newlines_unit(self) -> None:
+        join = pbg._join_quoted_newlines
+        joined = {
+            'a "x\ny" b': 'a "x y" b',
+            "a 'x\ny'": "a 'x y'",
+            '"a\nb" "c\nd"': '"a b" "c d"',
+            '"it\'s\nfine"': '"it\'s fine"',    # an apostrophe inside double quotes is literal
+        }
+        for text, expected in joined.items():
+            self.assertEqual(join(text), expected, text)
+        unchanged = (
+            'a "x\ny',                          # never closed
+            'a "x\\\ny"',                       # backslash inside the span
+            "a 'x\\\ny'",
+            'a "x # y\nz"',                     # hash inside the span
+            'echo \\"\nb\necho \\"',            # escaped quotes are not quotes
+            "# it's\nb\n# x'",                  # comment at the start
+            "x=1 # it's\nb\n'",                 # comment after a word
+            "cat <<EOF\n'a\nb'\nEOF",           # here-doc
+            'a#"x\ny"',                         # any `#`: fail closed
+            "a;# it's\nb\n'",
+            "x $'a\\'b\nc'",                    # ANSI-C quoting
+            '"one line"',
+        )
+        for text in unchanged:
+            self.assertEqual(join(text), text, text)
+
+    def test_1g_redirection_edges(self) -> None:
+        self.assertEqual(pbg.tokenize("echo abc2>out next"), ["echo", "abc2", "next"])
+        self.assertEqual(pbg.tokenize("cmd 2>&- next"), ["cmd", "next"])
+        self.assertEqual(pbg.tokenize('cmd > "out log" next'), ["cmd", "next"])
+        self.check("2>err.log git push origin main", "local-hooks", cwd=Fixture.unscanned)
+        self.check('git push > "out log" --no-verify', "push-no-verify", cwd=Fixture.private)
+
+    def test_1d_redirection_target_is_not_a_remote(self) -> None:
+        # The redirect target must leave the argument list, or `out.log` reads as the remote and a
+        # push to a PRIVATE repo is blocked for an unresolvable target.
+        for command in ("git push > out.log", "git push 2> err.log", "git push >out.log 2>&1",
+                        "git push 2>&1", "git push origin main 2>/dev/null", "git push < in.txt",
+                        "git push origin >> push.log"):
+            self.assertEqual(routes(command, Fixture.private), set(), command)
+        for command in ("mywrap git status", "mywrap push now", "mywrap git log --oneline"):
+            self.assertNotIn("unknown-shape", routes(command), command)
+
     def test_2_push_target_changed_in_the_same_command(self) -> None:
         public = "https://github.com/acme/alpha.git"
         self.check(f"git remote set-url origin {public} && git push", "local-hooks", cwd=Fixture.private)
