@@ -18,7 +18,14 @@ A plugin cannot ship `CLAUDE.md` or `rules/` as context (Claude Code docs,
 "Add components to a plugin"). The SessionStart index replaces them.
 
 Hook commands use exec form, `python` plus `${CLAUDE_PLUGIN_ROOT}/hooks/<script>`, so
-the published file holds no user path. Requirement: `python` (3.10+) on `PATH`.
+the published file holds no user path. Requirement: the command `python` (3.10+) on
+`PATH`. Check it with `python --version` before installing. Without it no hook runs
+and the guards fail open (Claude Code reports a hook error and carries on):
+
+- macOS ships only `python3`. Install Python from python.org or Homebrew and make
+  `python` resolve, for example `ln -s "$(command -v python3)" /usr/local/bin/python`.
+- Windows: if `python` opens the Microsoft Store, install Python from python.org with
+  "Add to PATH" and turn off the `python.exe` app execution alias.
 
 After a change to `SAFE_DEFAULTS` or to `skills/` categories run:
 
@@ -77,5 +84,5 @@ schtasks /Create /SC DAILY /ST 09:00 /TN "harness-codex-update" /TR "python %USE
 On macOS or Linux, a crontab line:
 
 ```bash
-0 9 * * * python3 ~/.claude/claude-code-config/scripts/codex_update.py >> ~/.codex/harness-update.log 2>&1
+0 9 * * * python ~/.claude/claude-code-config/scripts/codex_update.py >> ~/.codex/harness-update.log 2>&1
 ```

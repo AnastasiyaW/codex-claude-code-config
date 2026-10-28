@@ -36,6 +36,22 @@ class PluginBuildTests(unittest.TestCase):
             finally:
                 MODULE.MANIFEST = original
 
+    def test_manifest_has_no_version(self) -> None:
+        self.assertNotIn("version", json.loads(MODULE.MANIFEST.read_text(encoding="utf-8")))
+
+    def test_check_fails_on_manifest_version(self) -> None:
+        manifest = json.loads(MODULE.MANIFEST.read_text(encoding="utf-8"))
+        manifest["version"] = "1.0.0"
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "plugin.json"
+            fake.write_text(json.dumps(manifest), encoding="utf-8")
+            original = MODULE.MANIFEST
+            MODULE.MANIFEST = fake
+            try:
+                self.assertEqual(MODULE.main(["--check"]), 1)
+            finally:
+                MODULE.MANIFEST = original
+
     def test_no_user_path_in_hooks_json(self) -> None:
         text = MODULE.TARGET.read_text(encoding="utf-8")
         self.assertNotIn("Users", text)

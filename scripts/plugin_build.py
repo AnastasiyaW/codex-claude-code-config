@@ -77,6 +77,10 @@ def main(argv: list[str]) -> int:
         for folder in unlisted_skill_categories():
             print(f'{folder}/ holds skills but is not in .claude-plugin/plugin.json "skills"')
             failed = True
+        if "version" in json.loads(MANIFEST.read_text(encoding="utf-8")):
+            # The manifest version overrides the marketplace entry and would freeze every install.
+            print('.claude-plugin/plugin.json sets "version"; the marketplace entry must own it')
+            failed = True
         if not failed:
             print("hooks/hooks.json matches SAFE_DEFAULTS; every skill category is listed")
         return 1 if failed else 0
