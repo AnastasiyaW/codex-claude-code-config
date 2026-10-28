@@ -27,6 +27,8 @@ TESTS = [
     "test_safety_common_scope.py",
     "test_transfer_guard_scope.py",
     "test_delivery_guard_scope.py",
+    "test_delivery_guard_notification_intent.py",
+    "test_delivery_guard_machine_messages.py",
     "test_article_voice_gate_scope.py",
     "test_powershell_coverage.py",
     "test_powershell_dynamic_execution_guard.py",

@@ -54,6 +54,6 @@ OpenScience or loading its full 250+ skill set.
 ## Adoption Boundary
 
 Do not import broad external skill collections wholesale. Use the inventory script
-`scripts/openscience_skill_inventory.py` to rank candidates, inspect the relevant
+`${CLAUDE_PLUGIN_ROOT}/scripts/openscience_skill_inventory.py` to rank candidates, inspect the relevant
 source skill manually, then promote only compact workflows or deterministic scripts
 that improve our own tests.

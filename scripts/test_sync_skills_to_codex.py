@@ -103,6 +103,33 @@ class SyncSkillsToCodexTests(unittest.TestCase):
                 self.assertEqual((target / "target-only" / "SKILL.md").read_text(encoding="utf-8"), "keep")
                 self.assertEqual(len(list(backup_root.rglob("SKILL.md"))), 1)
 
+    def test_copy_gets_real_paths_and_skips_git_ignored_files(self) -> None:
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            skill = repo / "skills" / "dev" / "demo"
+            (skill / "scripts").mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                "---\nname: demo\ndescription: d\n---\nRun ${CLAUDE_SKILL_DIR}/scripts/run.py "
+                "and ${CLAUDE_PLUGIN_ROOT}/templates/x\n", encoding="utf-8")
+            (skill / "scripts" / "run.py").write_text("print('${CLAUDE_SKILL_DIR}')\n", encoding="utf-8")
+            (skill / "private").mkdir()
+            (skill / "private" / "note.md").write_text("local only", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / ".gitignore").write_text("skills/dev/demo/private/\n", encoding="utf-8")
+
+            target_root = Path(tmp) / "target"
+            residual, errors = MODULE.sync(repo / "skills", target_root, Path(tmp) / "backups", apply=True)
+            self.assertEqual((residual, errors), ({}, []))
+            text = (target_root / "demo" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn(f"{(target_root / 'demo').as_posix()}/scripts/run.py", text)
+            self.assertIn(f"{repo.resolve().as_posix()}/templates/x", text)
+            self.assertNotIn("${CLAUDE_", text)
+            self.assertIn("${CLAUDE_SKILL_DIR}", (target_root / "demo" / "scripts" / "run.py").read_text(encoding="utf-8"))
+            self.assertFalse((target_root / "demo" / "private").exists())
+            self.assertEqual(MODULE.sync(repo / "skills", target_root, Path(tmp) / "b2", apply=False), ({}, []))
+
     def test_runtime_docs_show_explicit_three_target_command(self) -> None:
         repo_root = SCRIPT.parent.parent
         readme = (repo_root / "README.md").read_text(encoding="utf-8")

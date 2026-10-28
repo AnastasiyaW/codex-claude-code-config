@@ -1,0 +1,18 @@
+per-mutant timeout: 84 s (auto: 10 x baseline 8.3 s, min 10 s)
+  killed   line 456   return None
+  killed   line 440   and->or
+  killed   line 441   return None
+  killed   line 444   return None
+  killed   line 449   Is->IsNot
+  killed   line 450   return None
+  killed   line 452   drop not
+  killed   line 455   return None
+  killed   line 461   return None
+  killed   line 463   return None
+  killed   line 1002  or->and
+  killed   line 1004  Add->Sub
+  killed   line 1004  Add->Sub
+  killed   line 1004  Add->Sub
+  killed   line 1004  Add->Sub
+15 of 15 mutants killed, 0 survived
+exit=0

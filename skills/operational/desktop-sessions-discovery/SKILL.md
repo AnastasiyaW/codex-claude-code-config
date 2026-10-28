@@ -54,9 +54,9 @@ NB: timestamp format is inconsistent — some sessions use Unix ms (int), others
 Script: `scripts/sessions_registry.py`
 
 ```bash
-python scripts/sessions_registry.py                # generate + auto-open in default browser
-python scripts/sessions_registry.py --no-open      # generate only
-python scripts/sessions_registry.py --output /custom/path.html
+python "${CLAUDE_SKILL_DIR}/scripts/sessions_registry.py"                # generate + auto-open in default browser
+python "${CLAUDE_SKILL_DIR}/scripts/sessions_registry.py" --no-open      # generate only
+python "${CLAUDE_SKILL_DIR}/scripts/sessions_registry.py" --output /custom/path.html
 ```
 
 Produces a self-contained HTML registry with:
