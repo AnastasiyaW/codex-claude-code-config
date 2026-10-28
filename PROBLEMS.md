@@ -205,6 +205,8 @@ message is data, but `safety_common.executable_text` masks quoted arguments only
 for search/print commands. Masking commit messages there is a decision for every
 guard that shares the helper (a command substitution inside double quotes still
 executes, so the mask must keep it). Workaround: `git commit -F <file>`.
+Same class in human-confirmation-guard: a commit message containing the word
+`rmdir` was blocked as a deletion (commit e923e33 had to go through -F).
 Found by session 71b3da3f while committing 8a36515.
 
 ## 2026-10-28 09:30 - handoff Closure Audit and PROBLEMS.md are prose that machines parse
