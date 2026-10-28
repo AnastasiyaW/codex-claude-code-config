@@ -230,13 +230,23 @@ Found by session 71b3da3f while committing 8a36515.
 
 ## 2026-10-28 09:30 - handoff Closure Audit and PROBLEMS.md are prose that machines parse
 
-**Status**: arch-decision
+**Status**: RESOLVED (branch feat/handoff-json-sidecar, owner go-ahead 2026-10-28)
 
 Proposal from the mindfulmodeler review (session 71b3da3f): a small JSON sidecar
 next to each handoff (status, slug, closure-audit enums, next step, unfinished
 items with tracker links) and JSONL entries for PROBLEMS.md, so agent_roster.py
-and handoff-closure-audit-guard.py read fields instead of regexes. Touches the
-handoff hooks and the roster; needs the owner's go-ahead on the format.
+and handoff-closure-audit-guard.py read fields instead of regexes.
+
+Done: optional `X.json` next to handoff `X.md` (`hooks/handoff_sidecar.py`: schema,
+validator, `write`/`check` helper). The guard validates it on either file's write and
+still accepts prose-only handoffs; agent_roster.py matches by its `session_id` and takes
+its `project` first. PROBLEMS.md was not turned into JSONL: the gap was two hooks with
+their own parsers and status lists, so `hooks/problems_md.py` now holds the parser and
+the status values for problems-md-validator.py and the handoff guard. Accepted
+difference for the guard's ticket list: it now reads the validator's looser `Status:`
+line (unbolded, indented) and requires `## ` before the date; on 548 real PROBLEMS.md
+files x 106 dates both lists matched exactly. Tests:
+`hooks/tests/test_handoff_sidecar.py` (in run_guard_regressions.py).
 
 ## 2026-10-28 12:30 - harness-load-advisor reads a product's "false positives" as harness overload
 

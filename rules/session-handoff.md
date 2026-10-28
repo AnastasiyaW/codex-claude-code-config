@@ -229,6 +229,35 @@ Used by both modes. Structure is the same; only the storage location differs.
 - File paths are absolute
 - Do NOT include: tool call history, intermediate file reads, raw command output
 
+### Optional JSON sidecar (fields for machines)
+
+A handoff `X.md` may have a sibling `X.json` with the Closure Audit as fields, so
+tools read values instead of regexes. The prose handoff stays as it is and is still
+required; a handoff without a sidecar is accepted exactly as before. Do not write the
+JSON by hand; write it after the `.md` with the helper:
+
+```bash
+python hooks/handoff_sidecar.py write <X.md> --primary COMPLETE \
+  --acceptance "<evidence>" --related "<what was checked>" --why NONE \
+  --next "<one action>" [--unfinished "<item>" "<tracker>"]... [--status CLOSED]
+python hooks/handoff_sidecar.py check <X.md>     # 0 valid, 1 invalid, 2 no sidecar
+```
+
+Shape: `{schema_version: 1, session_id, project, status: ACTIVE|CLOSED|ABANDONED,
+closure_audit: {primary_status, acceptance_verified, related_checked,
+unfinished: [{item, tracker}], why_not_continuing}, next_step}`. Session id and project
+default to the file name and the slug folder; a flat `handoffs/X.md` needs `--project`
+and `.claude/HANDOFF.md` also needs `--session-id`. The helper refuses a missing `.md`. `handoff-closure-audit-guard.py` blocks an
+invalid sidecar (bad enum, unfinished item without a durable tracker, evasive wording, or
+a `primary_status` that contradicts the prose), whether the `.md` or the `.json` is being
+written. `agent_roster.py` matches the handoff by the sidecar's `session_id` and takes its
+`project` before the folder name; an invalid sidecar is ignored there. The helper does
+not replace a valid sidecar that names a different `session_id` (pass that id to update
+`status`); a broken sidecar can be rewritten.
+
+PROBLEMS.md stays markdown. Its status values and entry parser live in
+`hooks/problems_md.py`, shared by `problems-md-validator.py` and the handoff guard.
+
 ## Connection to Project Chronicles
 
 For long-running projects (spanning weeks/months with 3+ handoffs), handoffs alone don't tell the story of how a project evolved. **Project chronicles** solve this with a condensed timeline per project.

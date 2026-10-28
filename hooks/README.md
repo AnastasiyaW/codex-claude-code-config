@@ -69,7 +69,8 @@ for the full cross-client lifecycle, durable-state pattern, and proof boundary.
 | Readable architecture and module shape | `architecture-first` skill, `architecture-quality` skill, `module-shape-advisor.py`, `scripts/architecture_audit.py` | router / `PostToolUse` / explicit audit |
 | Harness scope and overload feedback | `harness-load-advisor.py`, `harness-feedback` skill | `Stop` / router |
 | Documentation and long-run state | `docs-staleness-guard.py`, `kb-validate-gate.py`, `feature-list-validator.py` | `SessionStart` / `Stop` |
-| Completion and handoff quality | `handoff-closure-audit-guard.py`, `precompact-handoff-guard.py`, `session-handoff-reminder.py`, `stop-phrase-guard.py` | `PreToolUse` / `PreCompact` / `Stop` |
+| Completion and handoff quality | `handoff-closure-audit-guard.py` (+ `handoff_sidecar.py`: optional `X.json` fields and `write`/`check` helper), `precompact-handoff-guard.py`, `session-handoff-reminder.py`, `stop-phrase-guard.py` | `PreToolUse` / `PreCompact` / `Stop` |
+| PROBLEMS.md status discipline | `problems-md-validator.py` (+ `problems_md.py`: the one parser and status list, shared with the handoff guard) | `Stop` |
 | Deletion proof and secret exposure | `verify-deleted-guard.py`, `api-key-leak-detector.py`, `secret-leak-guard.py` | `PostToolUse` / `PreToolUse` |
 | Session continuity | `session-handoff-check.py`, `conversation-history-capture.py` | `SessionStart` / `Stop` |
 
