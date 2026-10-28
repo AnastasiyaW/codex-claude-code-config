@@ -347,6 +347,7 @@ class ThirdReview(unittest.TestCase):
         self.check("python -c \"import subprocess; subprocess.run(['git','-c','core.hooksPath=/dev/null',"
                    "'push','origin','main'])\"", "unknown-shape")
         self.check("node -e \"require('child_process').execFileSync('git', ['push'])\"", "unknown-shape")
+        self.check("python -c \"import subprocess; subprocess.run(['/usr/bin/git','push'])\"", "unknown-shape")
         self.assertEqual(routes("python -c \"import subprocess; subprocess.run(['git','stash','push','-m','wip'])\"",
                                 Fixture.private), set())
 
