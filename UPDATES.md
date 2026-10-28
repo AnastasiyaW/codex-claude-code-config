@@ -4,6 +4,35 @@ Changelog for codex-claude-code-config. Newest first.
 
 ---
 
+## 2026-10-28 (verification tools, publish-route guard, harness-care rule)
+
+- New `hooks/publish-bypass-guard.py` (PreToolUse, Bash and PowerShell) with
+  `hooks/pre-push-chain.sh` and `docs/publish-bypass-guard.md`: blocks routes
+  that skip the pre-push leak scan or publish without it (`--no-verify`, hooks
+  path overrides, env tricks, local hooks folders without the canonical chain,
+  visibility changes to public, `gh api`/HTTP writes, gists, releases on public
+  repos) unless the owner approves that exact action. Threat model: it stops
+  mistakes, not deliberate masking; GitHub push protection is the backstop for
+  secrets. Three independent review rounds; each found bypasses, all closed
+  with tests (38 checks).
+- New `scripts/crap_probe.py`: CRAP score per Python function from `ast`
+  complexity and a coverage.py JSON report; fail-closed on missing or broken
+  input (idea from unclebob/crapper).
+- `scripts/mutation_probe.py`: arithmetic, literal and chained-comparison
+  mutants; automatic timeout max(10 s, 10x baseline); a timed-out test's whole
+  process tree is killed, so no orphan survives.
+- `scripts/harness_improvement_pilot.py`: one component per candidate, n>=3
+  runs per case with majority vote, CONFOUNDED treated as REJECT, and a lesson
+  ledger (ideas from Google Harness2).
+- New `scripts/failure_mine.py`: deterministic clusters of agent failures from
+  session transcripts as input for the pilot; output may hold private data
+  and must never be committed.
+- `rules/quality-over-tokens-independent-verify.md`: harness changes are made
+  carefully - primary sources, tests that can go red, an independent reviewer
+  before merge, public-repo protection always errs toward blocking.
+
+---
+
 ## 2026-10-28 (public pre-push scan hardening)
 
 An executed audit found pushes that reached a public repository unscanned.
