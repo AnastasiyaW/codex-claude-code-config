@@ -4,6 +4,21 @@ Changelog for claude-code-skills. Newest first.
 
 ---
 
+## 2026-10-25 (long waits and cache TTL, visual evidence patterns)
+
+- Added `rules/long-wait-cache-ttl.md` (always-on): one wait on background work
+  is at most 50 minutes, then the agent checks live progress, so the 1-hour
+  prompt cache never goes cold and a hung CI job gets noticed. Documents
+  `promptCacheTtl` / `subagentPromptCacheTtl` set to `"1h"` (the subagent
+  default is 5 minutes), with the source and the cost trade-off.
+- `docs/harness-improvement-pilot.md`: new section "Candidate:
+  evidence-backed visual workflow", taking three patterns from OpenVLHarness
+  (typed evidence with addressable artifacts, an explicit capability set with
+  degradation receipts, a run manifest) and rejecting its host-side execution
+  of model-written Python. `CLAUDE.md` points to both.
+
+---
+
 ## 2026-10-24 (output legibility, dead-code sweep)
 
 - Added `scripts/term_drift_check.py` with focused tests: a glossary-driven check

@@ -250,6 +250,10 @@ Source: github.com/google-research/harness2, arxiv 2610.14224. Weights stay fixe
 
 Adopt the method, not the auto-patcher: its executor runs with network open and the Codex sandbox disabled, and its README describes no held-out protocol. Here a change is adopted only through `scripts/harness_improvement_pilot.py` -- frozen suite of 3-5 cases plus a held-out case, one change per candidate, mechanical receipts, strict improvement, no safety or held-out regression, git rollback, fresh-context review. Live hooks, permissions and guardrails are never pilot targets. Guide: `docs/harness-improvement-pilot.md`.
 
+Visual workflows (OpenVLHarness, github.com/uclanlp/OpenVLHarness, assessed 2026-10-25): take the patterns, not the stack (schemas are our adaptation of upstream's addressable memory, run manifest and validated resume) -- typed evidence objects with addressable artifacts (frame, crop, mask, number, provenance), an explicit capability set where degradation is a receipt and never a silent fallback, and a run manifest (redacted config, versions, input digest, trajectory, resume key). Never run model-written Python on the host (upstream: "execution timeout is not a sandbox"). Details and pilot: `docs/harness-improvement-pilot.md`, section "Candidate: evidence-backed visual workflow"; start with local crop/zoom.
+
+Waiting on long background work (CI, pipelines, training): one wait is at most 50 minutes, then check live progress; the main and subagent prompt cache TTL is 1 hour (`promptCacheTtl`, `subagentPromptCacheTtl`). Rule: [`rules/long-wait-cache-ttl.md`](rules/long-wait-cache-ttl.md).
+
 ## Output Legibility -- Make Agent Output Cheap to Read (2026-10)
 
 Source: Andrej Karpathy, 2 Oct 2026. Ladder, lowest rung that makes the answer obvious: (1) text in ASD-STE100 style -> (2) diagram -> (3) interactive HTML -> (4) explainer video.

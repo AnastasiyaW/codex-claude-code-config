@@ -72,3 +72,33 @@ An accepted report is evidence for review, not deployment. Before changing an
 active skill or configuration, use the existing delivery/proof workflow,
 independent reviewer, and installation/parity checks appropriate to that
 specific boundary.
+
+## Candidate: evidence-backed visual workflow
+
+Assessed 2026-10-25 from [OpenVLHarness](https://github.com/uclanlp/OpenVLHarness).
+Take the patterns, not the stack. Use them only when a task is visual (frames,
+crops, masks, OCR, labelling). Upstream provides addressable task memory, a
+`run_manifest.json`, redacted configs and `--resume` with config validation; the
+schemas below are our adaptation, not upstream formats.
+
+- **Typed evidence, not prose.** A perception tool returns an object with an
+  addressable artifact, for example (our schema) `{"kind": "crop", "ref":
+  "artifact://<task>/crop-3.png", "source_ref": "...", "bbox": [x, y, w, h],
+  "value": ..., "provenance": {"tool": ..., "version": ...}}`. Frames, crops,
+  masks and numbers in one task point at each other by `ref`.
+- **An explicit capability set.** A disabled tool is absent from the model's
+  schema. A failure or reduced mode comes back as `{"status": "degraded",
+  "capability": ..., "reason": ...}` (our schema) and lands in the receipt.
+  Upstream counts its degradation as a fallback to raw content; we go further:
+  silently switching to another tool is not allowed.
+- **A run manifest.** Record the effective config without secrets, service and
+  model versions, the input digest, the tool-call trajectory and a resume key.
+  Resume only when the digest and versions match.
+
+Do not adopt: executing model-written Python on the host (the upstream
+[security policy](https://github.com/uclanlp/OpenVLHarness/blob/main/SECURITY.md)
+states that the "execution timeout is not a sandbox"), its GPU/router/search infrastructure, or its
+benchmark numbers as proof of value for unrelated work. Prove value with this
+pilot: baseline against the typed-evidence version on the same inputs, with a
+held-out case. Start with local crop/zoom; add OCR, grounding or depth only
+after a measured gap.
