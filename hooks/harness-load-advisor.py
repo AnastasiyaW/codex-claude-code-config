@@ -66,9 +66,13 @@ _FEEDBACK = (
     r"слишком (?:строг\w*|жестк\w*|зажат\w*|много|тяжел\w*)|"
     r"избыточн\w*|ложн\w* срабатыван\w*|блокир\w* smoke)"
 )
+# Bare smoke/staging is a place a product is tested ("false positives on staging"),
+# not a subject: only a smoke/staging gate, profile or run counts.
+_STAGE = r"(?:smoke|staging|смоук\w*|стейдж\w*)"
 _SUBJECT = (
-    r"(?:harness|test (?:system|suite|profile)|gate|smoke|staging|"
-    r"харнесс\w*|гейт\w*|обвязк\w*|смоук\w*|стейдж\w*|тестов\w* контур\w*|"
+    r"(?:harness(?:es)?|test (?:systems?|suites?|profiles?)|gates?|"
+    rf"{_STAGE}[- ]?(?:gates?|profiles?|suites?|runs?|гейт\w*|профил\w*|прогон\w*|набор\w*)|"
+    r"харнесс\w*|гейт\w*|обвязк\w*|тестов\w* контур\w*|"
     r"систем\w* тест\w*|профил\w* тест\w*)"
 )
 _SENTENCE = r"[^.?!\n]{0,120}"
@@ -79,10 +83,14 @@ SIGNALS.append((
         rf"\b{_FEEDBACK}\b{_SENTENCE}\b{_SUBJECT}\b",
     ],
 ))
-# "no false positives", "ложных срабатываний не было" report their absence.
+# A stated absence of false positives is a result, not a complaint. Only the
+# false-positive words are negated, and only within one clause on one line:
+# "без того слишком строгий" or "раньше такого не было" stay complaints.
+_FALSE_POSITIVE = r"(?:false[- ]positives?|ложн\w* срабатыван\w*)"
 NEGATED_FEEDBACK = re.compile(
-    rf"\b(?:no|without|zero|нет|без|ни одного)\s+(?:\w+\s+)?{_FEEDBACK}"
-    rf"|{_FEEDBACK}[^.?!\n]{{0,40}}\b(?:не было|не нашл\w*|не найден\w*)\b"
+    rf"\b(?:no|zero|0|нет|без|ни одного)[ \t]+(?:(?:real|реальн\w*)[ \t]+)?{_FALSE_POSITIVE}"
+    rf"|{_FALSE_POSITIVE}[^.?!\n,;:—–]{{0,40}}"
+    r"\b(?:не было|не нашл\w*|не найден\w*|не обнаружен\w*|отсутству\w*)\b"
 )
 
 # Quoted text is a mention, not a statement: a UI title «слишком много попыток»,

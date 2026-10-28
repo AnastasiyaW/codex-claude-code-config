@@ -175,6 +175,16 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             "Crossweft дал 2 ложных срабатывания на боте, оба помечены в карте.",
             "Это ложное срабатывание хука, а не перегрузка.",
             "The report is overkill for a two-line change.",
+            # a product tested on staging: smoke/staging alone is a place, not a subject
+            "Модель даёт ложные срабатывания на стейдже, 3 из 100.",
+            "Классификатор на staging выдал 2 false positives.",
+            "The smoke detector gives false positives.",
+            "Smoke test passed; the UI has too much padding.",
+            # stated absence, with one of our gates in the sentence
+            "The smoke gate passed, 0 false positives.",
+            "Ложных срабатываний у гейта на стейдже не было.",
+            "Ложные срабатывания гейта отсутствуют.",
+            "Ложных срабатываний гейта не обнаружено.",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-product-") as raw:
                 root = Path(raw)
@@ -189,6 +199,19 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             "Тестовый контур даёт ложные срабатывания и не пускает стейдж.",
             "A false positive in the harness keeps failing the smoke.",
             "Smoke-профиль избыточный: в нём подпись релиза.",
+            "The harness raises false positives on every smoke.",
+            "The gates are overkill.",
+            "Harnesses are too strict here.",
+            # a negation elsewhere in the sentence must not hide the complaint
+            "Гейт слишком строгий, раньше такого не было.",
+            "Гейт избыточный, смысла в нём не было.",
+            "гейт и без того слишком строгий",
+            "The gate is without doubt overkill.",
+            "Retry?\nno\ntoo strict gate",
+            "Гейт даёт ложные срабатывания, раньше такого не было.",
+            "У гейта без конца ложные срабатывания.",
+            "Retry?\nno\nfalse positives from the gate",
+            "Гейт избыточный и смысла в нём не было.",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-gate-") as raw:
                 payload, output = run_hook(Path(raw), text)
