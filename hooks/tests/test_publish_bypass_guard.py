@@ -343,6 +343,47 @@ class ThirdReview(unittest.TestCase):
             self.assertEqual(routes(command, Fixture.private), set(), command)
         self.check('python -I -c "print(1)" && git push --no-verify', "push-no-verify", cwd=Fixture.private)
 
+    def test_1h_multiline_quoted_message(self) -> None:
+        # Live false block 2026-10-28: a commit message line naming git and push read as a command.
+        for command in ('git commit -q -m "title\n\nwhich cannot hold git or push: x." && git fetch -q origin',
+                        "git commit -q -m 'title\nsecond line about git push' && git status"):
+            self.assertEqual(routes(command, Fixture.private), set(), command)
+        self.check('git commit -m "a\nb" && git push --no-verify', "push-no-verify", cwd=Fixture.private)
+        # An unclosed quote and a here-doc keep their lines.
+        self.check("echo 'x\ngit push --no-verify", "push-no-verify", cwd=Fixture.private)
+        self.check("cat <<EOF\ndon't\nEOF\ngit push --no-verify", "push-no-verify", cwd=Fixture.private)
+        # Security review 2026-10-28: comment apostrophes and escaped quotes are not quotes.
+        self.check("# don't\ngit push --no-verify\n# won't", "push-no-verify", cwd=Fixture.private)
+        self.check('echo \\"\ngit push --no-verify\necho \\"', "push-no-verify", cwd=Fixture.private)
+        self.check("x=1 # it's\ngit push --no-verify\n# fine'", "push-no-verify", cwd=Fixture.private)
+
+    def test_1i_join_quoted_newlines_unit(self) -> None:
+        join = pbg._join_quoted_newlines
+        joined = {
+            'a "x\ny" b': 'a "x y" b',
+            "a 'x\ny'": "a 'x y'",
+            '"a\nb" "c\nd"': '"a b" "c d"',
+            '"it\'s\nfine"': '"it\'s fine"',    # an apostrophe inside double quotes is literal
+        }
+        for text, expected in joined.items():
+            self.assertEqual(join(text), expected, text)
+        unchanged = (
+            'a "x\ny',                          # never closed
+            'a "x\\\ny"',                       # backslash inside the span
+            "a 'x\\\ny'",
+            'a "x # y\nz"',                     # hash inside the span
+            'echo \\"\nb\necho \\"',            # escaped quotes are not quotes
+            "# it's\nb\n# x'",                  # comment at the start
+            "x=1 # it's\nb\n'",                 # comment after a word
+            "cat <<EOF\n'a\nb'\nEOF",           # here-doc
+            'a#"x\ny"',                         # any `#`: fail closed
+            "a;# it's\nb\n'",
+            "x $'a\\'b\nc'",                    # ANSI-C quoting
+            '"one line"',
+        )
+        for text in unchanged:
+            self.assertEqual(join(text), text, text)
+
     def test_1g_redirection_edges(self) -> None:
         self.assertEqual(pbg.tokenize("echo abc2>out next"), ["echo", "abc2", "next"])
         self.assertEqual(pbg.tokenize("cmd 2>&- next"), ["cmd", "next"])

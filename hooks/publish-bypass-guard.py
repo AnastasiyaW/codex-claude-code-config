@@ -269,6 +269,32 @@ def _strip_redirections(segment: str) -> str:
     return "".join(out)
 
 
+def _join_quoted_newlines(text: str) -> str:
+    """A newline inside a closed pair of quotes (a multi-line `-m "..."`) is part of one argument.
+    Splitting there made the message's second line a command and lost the real command after it
+    (review 2026-10-28: `git commit -m "a\\nb" && git push --no-verify` read as unknown-shape only).
+    Runs on the raw bash text. Fails closed instead of modelling more shell grammar (security
+    review 2026-10-28): any here-doc, `#` (comments: `# don't` ... `# won't`), `$'` or backslash
+    (escaped quotes) anywhere keeps every line, so a quote that is not a quote never swallows a
+    real command. The price is the old split, which can only over-block."""
+    if "<<" in text or "#" in text or "$'" in text or "\\" in text:
+        return text
+    out = list(text)
+    quote = None
+    newlines: list[int] = []
+    for index, ch in enumerate(text):
+        if quote:
+            if ch == quote:
+                for at in newlines:
+                    out[at] = " "
+                quote, newlines = None, []
+            elif ch == "\n":
+                newlines.append(index)
+        elif ch in "'\"":
+            quote = ch
+    return "".join(out)
+
+
 def tokenize(segment: str) -> list[str]:
     """Split one segment, keeping backslashes (Windows paths) and quoted runs together."""
     segment = _strip_redirections(segment)
@@ -455,7 +481,8 @@ def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int =
     if depth > 6 or not text:
         return
     current = cwd
-    for line in executable_text(normalise(text, shell)).splitlines():
+    joined = _join_quoted_newlines(text) if shell == "bash" else text
+    for line in executable_text(normalise(joined, shell)).splitlines():
         for segment in _split_segments(line)[0::2]:
             if not segment.strip():
                 continue
