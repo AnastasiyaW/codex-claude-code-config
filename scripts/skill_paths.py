@@ -48,29 +48,31 @@ def broken_references(root: Path = REPO_ROOT) -> list[str]:
     shipped = {folder.name for folder in folders}
     problems = []
     for folder in folders:
-        text = (folder / "SKILL.md").read_text(encoding="utf-8", errors="replace")
-        where = (folder / "SKILL.md").relative_to(root).as_posix()
-        for match in SKILL_DIR.finditer(text):
-            if not _placeholder(match.group(1)) and not (folder / _clean(match.group(1))).exists():
-                problems.append(f"{where}: ${{CLAUDE_SKILL_DIR}}/{match.group(1)} does not exist")
-        for match in PLUGIN_ROOT.finditer(text):
-            if not _placeholder(match.group(1)) and not (root / _clean(match.group(1))).exists():
-                problems.append(f"{where}: ${{CLAUDE_PLUGIN_ROOT}}/{match.group(1)} does not exist in the plugin")
-        for match in USER_COPY.finditer(text):
-            if match.group(1) in shipped:
-                problems.append(f"{where}: {match.group(0)} exists only where a local copy is "
-                                "installed; use ${CLAUDE_SKILL_DIR}")
-        for match in USER_ABSOLUTE.finditer(text):
-            problems.append(f"{where}: {match.group(0)} is one user's home; use ${{CLAUDE_SKILL_DIR}} or ~")
-        for match in RELATIVE.finditer(text):
-            if not _placeholder(match.group(1)) and not (folder / _clean(match.group(1))).exists():
-                problems.append(f"{where}: {match.group(1)} does not exist in the skill folder")
-        for match in RUN_RELATIVE.finditer(text):
-            # A script the plugin does not ship is the user's own (e.g. copied from kb-skeleton): fine.
-            if not ((folder / match.group(1)).exists() or (root / match.group(1)).exists()):
-                continue
-            problems.append(f"{where}: `{match.group(0)}` runs from the user's project; name the file through "
-                            "${CLAUDE_SKILL_DIR} or ${CLAUDE_PLUGIN_ROOT}")
+        for doc in sorted(folder.rglob("*.md")):
+            text = doc.read_text(encoding="utf-8", errors="replace")
+            where = doc.relative_to(root).as_posix()
+            main_doc = doc.name == "SKILL.md" and doc.parent == folder
+            for match in SKILL_DIR.finditer(text):
+                if not _placeholder(match.group(1)) and not (folder / _clean(match.group(1))).exists():
+                    problems.append(f"{where}: ${{CLAUDE_SKILL_DIR}}/{match.group(1)} does not exist")
+            for match in PLUGIN_ROOT.finditer(text):
+                if not _placeholder(match.group(1)) and not (root / _clean(match.group(1))).exists():
+                    problems.append(f"{where}: ${{CLAUDE_PLUGIN_ROOT}}/{match.group(1)} does not exist in the plugin")
+            for match in USER_COPY.finditer(text):
+                if match.group(1) in shipped:
+                    problems.append(f"{where}: {match.group(0)} exists only where a local copy is "
+                                    "installed; use ${CLAUDE_SKILL_DIR}")
+            for match in USER_ABSOLUTE.finditer(text):
+                problems.append(f"{where}: {match.group(0)} is one user's home; use ${{CLAUDE_SKILL_DIR}} or ~")
+            for match in RELATIVE.finditer(text) if main_doc else ():
+                if not _placeholder(match.group(1)) and not (folder / _clean(match.group(1))).exists():
+                    problems.append(f"{where}: {match.group(1)} does not exist in the skill folder")
+            for match in RUN_RELATIVE.finditer(text) if main_doc else ():
+                # A script the plugin does not ship is the user's own (e.g. copied from kb-skeleton): fine.
+                if not ((folder / match.group(1)).exists() or (root / match.group(1)).exists()):
+                    continue
+                problems.append(f"{where}: `{match.group(0)}` runs from the user's project; name the file through "
+                                "${CLAUDE_SKILL_DIR} or ${CLAUDE_PLUGIN_ROOT}")
     return list(dict.fromkeys(problems))
 
 

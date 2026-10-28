@@ -111,7 +111,7 @@
 - `agent-evals.md` — grading questions overlap; evals = pre-launch, observability = post-launch
 - `agent-tool-design.md` — `risk_class` field in trace per tool call
 - `agent-budgets.md` — cost/latency fields в trace = budget enforcement
-- `~/.claude/skills/agents-best-practices/references/security-evals-observability.md` — full source
+- `${CLAUDE_PLUGIN_ROOT}/skills/agents-best-practices/references/security-observability.md` — full source
 - principle 02 (Proof Loop) — trace = durable artifact для verifier
 - principle 16 (Project Chronicles) — incident summary в chronicle когда incident response завершён
 

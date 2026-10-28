@@ -78,7 +78,7 @@ When in doubt: **Endesga 32**. It's the modern indie default for sprites, and it
 ### Browse the catalog
 
 ```bash
-python ${CLAUDE_PLUGIN_ROOT}/.../scripts/palette.py --list
+python "${CLAUDE_SKILL_DIR}/scripts/palette.py" --list
 python scripts/palette.py --show endesga-32  # preview as image
 ```
 

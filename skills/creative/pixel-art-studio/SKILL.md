@@ -135,14 +135,14 @@ For **animation**, use the multi-frame extended schema (`frames` array — see W
 ### Step 5 — Render PNG
 
 ```bash
-python ${CLAUDE_PLUGIN_ROOT}/skills/creative/pixel-art-studio/scripts/render.py \
+python "${CLAUDE_SKILL_DIR}/scripts/render.py" \
   sprite.json -o sprite.png
 ```
 
 ### Step 6 — Quality check
 
 ```bash
-python ${CLAUDE_PLUGIN_ROOT}/skills/creative/pixel-art-studio/scripts/quality_check.py sprite.png
+python "${CLAUDE_SKILL_DIR}/scripts/quality_check.py" sprite.png
 ```
 
 Output is JSON. **Score ≥ 80** = ship. Score 60-80 = fix issues listed. Score < 60 = redesign.

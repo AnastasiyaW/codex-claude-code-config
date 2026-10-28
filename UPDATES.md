@@ -19,8 +19,10 @@ Changelog for codex-claude-code-config. Newest first.
   `${CLAUDE_SKILL_DIR}/`, `${CLAUDE_PLUGIN_ROOT}/` and relative `references/`,
   `scripts/`, `assets/`, `templates/` path in a shipped SKILL.md must exist;
   a user-local skill copy (`~`, `$HOME`, `%USERPROFILE%`), one user's home folder,
-  and `python scripts/x.py` for a script the plugin ships are refused. It found
-  32 broken references.
+  and `python scripts/x.py` for a script the plugin ships are refused. Variable
+  paths and user-local paths are checked in every `.md` of a skill, relative ones
+  in SKILL.md. It found 38 broken references, all fixed (including
+  `agent-harness-design` references to a split `agents-best-practices` file).
 - `sync_skills_to_codex.py` writes real paths for `${CLAUDE_SKILL_DIR}` and
   `${CLAUDE_PLUGIN_ROOT}` into the copied `.md` files (Codex substitutes neither,
   and user-level Claude skills do not get the plugin root), and, like

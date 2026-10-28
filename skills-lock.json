@@ -1,12 +1,12 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-10-28T13:16:50+00:00",
+  "generated_at": "2026-10-28T13:35:08+00:00",
   "skill_count": 59,
-  "aggregate_hash": "sha256:88f04ffbcf76ac1d23d7a07cffd9e086ec45d2183a2762ea8a5b384105bad431",
+  "aggregate_hash": "sha256:3aeb325a9d05d75cbe5d0ffc23bcafb4340b308a875529f49227303eeb63f085",
   "skills": {
     "agent-harness-design": {
-      "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
-      "size_bytes": 102569,
+      "content_hash": "sha256:35fa835bbe2a1451c89874d7db0f6e82f5695c84590efa967103e83c76b91b2d",
+      "size_bytes": 102606,
       "file_count": 12,
       "files": [
         "SKILL.md",
@@ -173,8 +173,8 @@
       ]
     },
     "creative/pixel-art-studio": {
-      "content_hash": "sha256:86cd9dda9f4e6bd365884421969185ab7c2d4a2cde52b0253cef264d971e73a5",
-      "size_bytes": 257880,
+      "content_hash": "sha256:18590f4783bdd51426c2b84015ac5d5300d23471ad8f1df98e457f490a94865a",
+      "size_bytes": 257810,
       "file_count": 47,
       "files": [
         "SKILL.md",
@@ -331,8 +331,8 @@
       ]
     },
     "development/distill-feedback": {
-      "content_hash": "sha256:c636177053bfa24d35440d85be17831c0e517d1037da7f9d19eb78f7695f886d",
-      "size_bytes": 14654,
+      "content_hash": "sha256:6405d693394e635b5d1569d9a464a65a20f7ea0827dbd98e8aede4ad99fd31fc",
+      "size_bytes": 14658,
       "file_count": 2,
       "files": [
         "SKILL.md",
@@ -439,8 +439,8 @@
       ]
     },
     "development/workflow-orchestration": {
-      "content_hash": "sha256:fd58d5e9d39d87b4cb4a9363c52d33eec2727739c1dbbe55779f91c4b3254fe7",
-      "size_bytes": 72637,
+      "content_hash": "sha256:23996f757d8e47b86ce4f03cb55958895f3cee7dced53ab81ef253549fcd011d",
+      "size_bytes": 72649,
       "file_count": 7,
       "files": [
         "SKILL.md",
