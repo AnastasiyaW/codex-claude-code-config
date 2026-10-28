@@ -206,6 +206,32 @@ def _unquote(token: str) -> str:
     return token
 
 
+REDIRECT = re.compile(r"\d*(?:&>>?|>>?&?|<<?<?|<>)")
+
+
+def _drop_redirections(tokens: list[str]) -> list[str]:
+    """Remove `>file`, `2>&1`, `<in` and the like. A redirection stuck to a word (`push>out.log`)
+    otherwise hides the word from the parser: review 2026-10-28 got `git push>out.log` past the
+    guard. A ref name cannot contain `<` or `>`, so cutting there never changes a push target."""
+    kept: list[str] = []
+    skip_target = False
+    for token in tokens:
+        if skip_target:
+            skip_target = False
+            continue
+        cut = min((i for i in (token.find("<"), token.find(">")) if i >= 0), default=-1)
+        if cut < 0:
+            kept.append(token)
+            continue
+        head, tail = token[:cut], token[cut:]
+        op = REDIRECT.match(tail).group(0)  # tail starts with < or >, which the pattern always matches
+        if head and not head.isdigit():
+            kept.append(head)
+        if len(tail) == len(op) and not op.endswith("&"):
+            skip_target = True  # `> out.log`: the next token is the target
+    return kept
+
+
 def tokenize(segment: str) -> list[str]:
     """Split one segment, keeping backslashes (Windows paths) and quoted runs together."""
     try:
@@ -213,9 +239,9 @@ def tokenize(segment: str) -> list[str]:
         lexer.whitespace_split = True
         lexer.commenters = ""
         lexer.escape = ""  # keep C:\path intact; quotes still group `alias.x="push --no-verify"`
-        return list(lexer)
+        return _drop_redirections(list(lexer))
     except ValueError:
-        return [_unquote(t) for t in segment.split()]
+        return _drop_redirections([_unquote(t) for t in segment.split()])
 
 
 def _substitutions(text: str) -> list[str]:
@@ -1039,16 +1065,17 @@ def judge_http(cmd: Cmd, findings: list[Finding]) -> None:
                                 "commit and `git push` instead", [(urls[0].lower(),)]))
 
 
-_WORD_SPLIT = re.compile(r"[\s'\"`;|&(),{}=]+")
+# Names that contain `git` or `push` as a word but are not a push: the repo's `.git/` folder, the
+# `git-hooks` folder, `pre-push` hook files and a `--push` flag. Only these exact names are cut;
+# everything else keeps the broad word test below (git-push, git.cmd, push>file all still match).
+BENIGN_NAMES = re.compile(r"\.git(?=[\\/])|(?<![\w.-])-?-?git-hooks(?![\w-])|(?<![\w.])pre-push(?:-chain\.sh)?(?![\w-])"
+                          r"|(?<![\w-])--push(?![\w-])")
 
 
 def _git_push_words(raw_low: str) -> bool:
-    """`git` and `push` each as a whole word: a git binary (`git`, `/usr/bin/git`, `git.exe`) and the
-    bare word `push`. File names such as `.git/hooks/pre-push` or `scripts/git-hooks/pre-push` and
-    flags such as `--push` are not a push; a word-boundary regex read them as one."""
-    words = [w for w in _WORD_SPLIT.split(raw_low) if w]
-    has_git = any(re.split(r"[\\/]", w)[-1] in ("git", "git.exe") for w in words)
-    return has_git and "push" in words
+    """Review 2026-10-28: `sed .../git-hooks/pre-push` read as a git push behind an unknown command."""
+    text = BENIGN_NAMES.sub(" ", raw_low)
+    return bool(re.search(r"\bgit\b", text) and re.search(r"\bpush\b", text))
 
 
 def judge(cmd: Cmd, text_env: dict[str, str], findings: list[Finding], depth: int = 0) -> None:

@@ -293,9 +293,34 @@ class ThirdReview(unittest.TestCase):
                         "code scripts/git-hooks/pre-push",
                         "python scripts/install_hooks.py --git-hooks --dry-run --push"):
             self.assertNotIn("unknown-shape", routes(command), command)
-        for command in ("mywrap /usr/bin/git push", 'mywrap "git" "push"', "mywrap git.exe push"):
+        for command in ("mywrap /usr/bin/git push", 'mywrap "git" "push"', "mywrap git.exe push",
+                        # second review: shapes a word-split rule let through
+                        "mywrap git push>out.log", "mywrap git push<input.txt", "mywrap git.cmd push origin main",
+                        "mywrap /usr/lib/git-core/git-push origin main", "git-push origin main",
+                        "mywrap [git] push", "mywrap git! push", "mywrap git push@{u}",
+                        "mywrap git push .git/hooks/pre-push"):
             self.check(command, "unknown-shape")
         self.check(r"mywrap C:\Git\cmd\git.exe push origin main", "unknown-shape", shell="powershell")
+
+    def test_1c_redirection_stuck_to_push(self) -> None:
+        # Review 2026-10-28 (pre-existing): `git push>out.log` hid the subcommand from the parser.
+        for command in ("git push>out.log", "git push >out.log", "git push > out.log", "git push 2>&1",
+                        "timeout 60 git push>out.log", "winpty git push>out.log", "git push origin main>out.log"):
+            self.check(command, "local-hooks", cwd=Fixture.unscanned)
+        # Only the redirect target leaves the argument list; a flag after it is still seen.
+        for command in ("git push > out.log --no-verify", "git push >out.log --no-verify",
+                        "git push 2>&1 --no-verify"):
+            self.check(command, "push-no-verify", cwd=Fixture.private)
+
+    def test_1d_redirection_target_is_not_a_remote(self) -> None:
+        # The redirect target must leave the argument list, or `out.log` reads as the remote and a
+        # push to a PRIVATE repo is blocked for an unresolvable target.
+        for command in ("git push > out.log", "git push 2> err.log", "git push >out.log 2>&1",
+                        "git push 2>&1", "git push origin main 2>/dev/null", "git push < in.txt",
+                        "git push origin >> push.log"):
+            self.assertEqual(routes(command, Fixture.private), set(), command)
+        for command in ("mywrap git status", "mywrap push now", "mywrap git log --oneline"):
+            self.assertNotIn("unknown-shape", routes(command), command)
 
     def test_2_push_target_changed_in_the_same_command(self) -> None:
         public = "https://github.com/acme/alpha.git"
