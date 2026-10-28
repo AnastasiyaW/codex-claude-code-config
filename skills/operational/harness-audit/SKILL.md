@@ -151,7 +151,7 @@ Keep the entire output under 50 lines. The user is scanning for next steps, not 
 
 - **Principle 27** (feature-tracking) — full framework explanation
 - **Principle 01** (harness-design) — Generator-Evaluator pattern, source of "subsystems" thinking
-- **Templates** `templates/long-run-project/` — drop-in files for fixing State + Verification gaps
+- **Templates** `${CLAUDE_PLUGIN_ROOT}/templates/long-run-project/` — drop-in files for fixing State + Verification gaps
 - **Rule** `rules/long-run-harness.md` — convention this audit checks against
 
 ---

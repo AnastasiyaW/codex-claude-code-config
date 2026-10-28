@@ -40,20 +40,34 @@ def heading(text: str) -> tuple[str, bool]:
     return "", conditional
 
 
-def build_index(root: Path) -> str:
+def user_rules_dir() -> Path:
+    base = os.environ.get("CLAUDE_CONFIG_DIR")
+    return (Path(base) if base else Path.home() / ".claude") / "rules"
+
+
+def build_index(root: Path, user_rules: Path | None = None) -> str:
+    """Rules the user already has under the same name in their own rules folder are loaded by
+    Claude Code itself; listing them again only duplicates context (Vikunja #1251: 30 of 37)."""
     rules_dir = root / "rules"
+    own = {p.name.lower() for p in user_rules.glob("*.md")} if user_rules and user_rules.is_dir() else set()
     lines = [
         "Team harness rules (plugin `harness`). Claude Code does not load plugin rules on its own, "
         "so this is the index. When a topic below applies to the task, read that file before acting. "
         "Rules marked (topic) apply only to matching files or tasks.",
         f"Rules folder: {rules_dir.as_posix()}/",
     ]
+    skipped = []
     for path in sorted(rules_dir.glob("*.md")):
         if path.name.lower() == "readme.md":
+            continue
+        if path.name.lower() in own:
+            skipped.append(path.name)
             continue
         title, conditional = heading(path.read_text(encoding="utf-8", errors="replace"))
         mark = " (topic)" if conditional else ""
         lines.append(f"- {path.name}{mark}: {title or path.stem}")
+    if skipped:
+        lines.append(f"Not listed, already in your own rules folder {user_rules.as_posix()}/: " + ", ".join(skipped))
     text = "\n".join(lines)
     if len(text) > LIMIT:
         text = text[:LIMIT].rsplit("\n", 1)[0] + "\n- (index cut at the hook output limit; list the rules folder for the rest)"
@@ -75,6 +89,12 @@ def self_test() -> int:
             "marks conditional rule": "b.md (topic): Topic rule" in index,
             "skips README": "readme" not in index,
         }
+        own = root / "own-rules"
+        own.mkdir()
+        (own / "A.md").write_text("# mine\n", encoding="utf-8")
+        deduped = build_index(root, own)
+        checks["skips a rule the user already has"] = "- a.md" not in deduped and "b.md (topic)" in deduped
+        checks["names the skipped rule"] = "already in your own rules folder" in deduped and "a.md" in deduped
         (root / "rules" / "c.md").write_text("# " + "x" * (LIMIT * 2) + "\n", encoding="utf-8")
         checks["respects limit"] = len(build_index(root)) < LIMIT + 200
     failed = [name for name, ok in checks.items() if not ok]
@@ -89,7 +109,7 @@ def main(argv: list[str]) -> int:
     if not (root / "rules").is_dir():
         print(f"plugin-rules-context: no rules folder at {root}", file=sys.stderr)
         return 0
-    payload = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": build_index(root)}}
+    payload = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": build_index(root, user_rules_dir())}}
     sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps(payload, ensure_ascii=False))
     return 0

@@ -28,7 +28,7 @@ separate explicit user request and supported memory-update channel.
 
 ### 1. Extract the queue (deterministic)
 ```bash
-python ~/.claude/skills/distill-feedback/scripts/extract_feedback_queue.py --limit 8
+python ${CLAUDE_SKILL_DIR}/scripts/extract_feedback_queue.py --limit 8
 ```
 Returns JSON: `{pending, sessions:[{session_id, cwd, ts, user_turns:[...]}]}`. `--limit` bounds
 the LLM pass (billing: distillation is opt-in, not every-session). If `pending` is 0, stop — nothing
@@ -83,7 +83,7 @@ completion. A missing/unreadable transcript is not processed; locate the canonic
 private chat archive by session id and inspect the recovered transcript before closing it.
 Only ids actually reconciled in this pass go into the following command:
 ```bash
-python ~/.claude/skills/distill-feedback/scripts/extract_feedback_queue.py --mark-processed <session_id> ...
+python ${CLAUDE_SKILL_DIR}/scripts/extract_feedback_queue.py --mark-processed <session_id> ...
 ```
 Appends to `processed.jsonl` (append-only; the queue is never rewritten). The SessionStart nudge
 count drops accordingly.

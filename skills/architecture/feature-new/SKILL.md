@@ -61,7 +61,7 @@ invariants and global principles.
    suggestion to run `/layer-new <layer>` first.
 3. Confirm `docs/layers/<layer>/features/_FEATURE-TEMPLATE.md`
    exists. If not, copy from
-   `<claude-code-skills-checkout>/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/features/_FEATURE-TEMPLATE.md`.
+   `${CLAUDE_PLUGIN_ROOT}/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/features/_FEATURE-TEMPLATE.md`.
 
 ### Step 2 -- Discover and reserve the project-native ID
 
@@ -196,7 +196,7 @@ Suggested next steps:
 
 ## Blueprints (files this skill writes from)
 
-- `templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/features/_FEATURE-TEMPLATE.md` -- the source template
+- `${CLAUDE_PLUGIN_ROOT}/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/features/_FEATURE-TEMPLATE.md` -- the source template
 
 ## Status lifecycle
 
@@ -232,7 +232,7 @@ not-started --> in-progress --> done
 
 Four states: `not-started`, `in-progress`, `blocked`, `done`. `done` is
 **one-way** (no rollback; regression becomes a new feature) per
-[principle 27](https://github.com/AnastasiyaW/claude-code-config/blob/main/principles/27-feature-tracking.md).
+[principle 27](https://github.com/AnastasiyaW/codex-claude-code-config/blob/main/principles/27-feature-tracking.md).
 
 ### Mapping between the two
 
@@ -279,7 +279,7 @@ are manual and follow that project's coordination rule.
 | "Layer does not exist" | `docs/layers/<layer>/` missing | Run `/layer-new <layer>` first |
 | ID reservation conflict | Another request owns that logical ID | Re-inventory project state and use the next native candidate; never overwrite or delete the durable reservation |
 | `feature_list.json` parse/schema error | Registry is invalid or uses an unknown convention | Preserve the narrative and do not write the registry; report the exact parser/schema failure and use a project-native adapter when its fields are established |
-| Template missing on this machine | Different host / fresh clone | Pull from public repo: `gh api repos/AnastasiyaW/claude-code-config/contents/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/features/_FEATURE-TEMPLATE.md` |
+| Template missing on this machine | Different host / fresh clone | Pull from public repo: `gh api repos/AnastasiyaW/codex-claude-code-config/contents/templates/kb-skeleton/docs/layers/_LAYER-TEMPLATE/features/_FEATURE-TEMPLATE.md` |
 | Cyrillic in title shows as `?????` | File written without explicit utf-8 | Re-write the file with `encoding="utf-8"`; see `~/.claude/rules/api-utf8-posting.md` |
 
 ## Implementation note

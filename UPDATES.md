@@ -4,6 +4,25 @@ Changelog for codex-claude-code-config. Newest first.
 
 ---
 
+## 2026-10-28 (plugin fixes reported from a teammate install)
+
+- Skills pointed at paths that exist only on the author's machine. Fixed:
+  `ui-ux-pro-max` and `distill-feedback` now run their scripts from
+  `${CLAUDE_SKILL_DIR}`; `harness-design` points to the paper and repository
+  instead of a reference file that is private material; `ml-research-lab`, `feature-new`,
+  `layer-new` and `harness-audit` name repository files through
+  `${CLAUDE_PLUGIN_ROOT}`; `pixel-art-storyboard` names its real templates.
+- New `scripts/skill_paths.py`, run by `plugin_build.py --check` and CI: every
+  `${CLAUDE_SKILL_DIR}/`, `${CLAUDE_PLUGIN_ROOT}/` and relative `references/`,
+  `scripts/`, `assets/`, `templates/` path in a shipped SKILL.md must exist, and
+  `~/.claude/skills/<shipped skill>/<file>` is refused. It found 21 broken references.
+- `hooks/plugin-rules-context.py` no longer lists rules the user already has
+  under the same name in their own rules folder; it names them in one line.
+- `hooks/session-handoff-check.py` prints UTF-8, so a handoff with characters
+  outside the console codepage no longer crashes it on Windows.
+
+---
+
 ## 2026-10-28 (team distribution: Claude Code plugin and one-command Codex update)
 
 - The repo is now a valid Claude Code plugin named `harness` (the old name

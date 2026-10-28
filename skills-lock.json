@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-10-24T11:08:17+00:00",
+  "generated_at": "2026-10-28T13:03:43+00:00",
   "skill_count": 59,
-  "aggregate_hash": "sha256:d832b0734deb4eccf19ce433defd9dc9c10f362d58a5a4eddec3cb6ef5674cca",
+  "aggregate_hash": "sha256:6d701ec32cea1515b87c7da5fd30753fdb2ed866b8a9dcc2e156db42e7494ad6",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:3730cf976de88521b94e6afd1ac0156b21593cc543785be5a1eef3988704efd4",
@@ -92,8 +92,8 @@
       ]
     },
     "ai-ml/ml-research-lab": {
-      "content_hash": "sha256:a8c2b5db7d46ee21285b1cae962b29f88c375c3434126801e81fa655e0e91f8a",
-      "size_bytes": 3173,
+      "content_hash": "sha256:bfa5352b83f49d181876a14f68746ff28d97ce6b9af1a419203d32cca3801909",
+      "size_bytes": 3195,
       "file_count": 1,
       "files": [
         "SKILL.md"
@@ -121,8 +121,8 @@
       ]
     },
     "architecture/feature-new": {
-      "content_hash": "sha256:3a75899495142c39117507a81b4e6acf7addda4be74edd9dd14cb350536dcc44",
-      "size_bytes": 17538,
+      "content_hash": "sha256:18bcbd7c20b42fc7aee6e2f4cd287aafd9de626580d8aed1228e272b5ca17842",
+      "size_bytes": 17564,
       "file_count": 2,
       "files": [
         "SKILL.md",
@@ -130,16 +130,17 @@
       ]
     },
     "architecture/harness-design": {
-      "content_hash": "sha256:caa2a24df06bf7a5d039e82585148ecd040074c8adeed0520b3bf88fbd4ad201",
-      "size_bytes": 14347,
-      "file_count": 1,
+      "content_hash": "sha256:ee18ef913abaf12e5671a1ea25f97dce8fb71233c867fc460f9fcbb75ac01719",
+      "size_bytes": 19433,
+      "file_count": 2,
       "files": [
-        "SKILL.md"
+        "SKILL.md",
+        "references/proof-loop-research.md"
       ]
     },
     "architecture/layer-new": {
-      "content_hash": "sha256:227fb53d7cd587e379a8d61d8e2d5155e815b76943156e6f9447456a09c7b3e1",
-      "size_bytes": 7300,
+      "content_hash": "sha256:699840b1f190e01011e7fd9868df05ccf1f5c1f43ddf82918afb55d2959d5a52",
+      "size_bytes": 7338,
       "file_count": 1,
       "files": [
         "SKILL.md"
@@ -155,8 +156,8 @@
       ]
     },
     "creative/pixel-art-storyboard": {
-      "content_hash": "sha256:e77b55712f96bf2ae175515c3a08acc6f3435bcb318a9fa906cbe594b79285b5",
-      "size_bytes": 146949,
+      "content_hash": "sha256:f23a2628127b81984fce038379ecb06251e3d713327682e4014b5bb6a8020c23",
+      "size_bytes": 147001,
       "file_count": 11,
       "files": [
         "SKILL.md",
@@ -331,8 +332,8 @@
       ]
     },
     "development/distill-feedback": {
-      "content_hash": "sha256:e385d8edc5ad531286a74fee4121d7930989c5674680c289bfdb99ac48ae7311",
-      "size_bytes": 14682,
+      "content_hash": "sha256:c636177053bfa24d35440d85be17831c0e517d1037da7f9d19eb78f7695f886d",
+      "size_bytes": 14654,
       "file_count": 2,
       "files": [
         "SKILL.md",
@@ -359,8 +360,8 @@
       ]
     },
     "development/refactoring-safely": {
-      "content_hash": "sha256:3dac868ba51ff2d79a049f13a984b8782077a7a43b969c2b43ac71cba76c64aa",
-      "size_bytes": 111054,
+      "content_hash": "sha256:80cc8ebf07db80bf4f07c2a2fbd34ca27fbf8aac43f910c1f2b7fdee2045257b",
+      "size_bytes": 111920,
       "file_count": 9,
       "files": [
         "SKILL.md",
@@ -415,8 +416,8 @@
       ]
     },
     "development/testing-strategy": {
-      "content_hash": "sha256:a7f366d4a5adfefffe83fa0fad680fa5e9f8004b6304b0375ca9d70f9092fff1",
-      "size_bytes": 8067,
+      "content_hash": "sha256:def999ef49d41a1e6bda7c23906e74c07f5480aa8a78ab196a8cdbd145a5e220",
+      "size_bytes": 8970,
       "file_count": 1,
       "files": [
         "SKILL.md"
@@ -485,8 +486,8 @@
       ]
     },
     "frontend/ui-ux-pro-max": {
-      "content_hash": "sha256:2edc6c158ae5740e65020485e0ddde988ab71a70baec31748fc32d168181577c",
-      "size_bytes": 476937,
+      "content_hash": "sha256:272bf40588100571a9756856b0e51f895559971136a191773f1056f61f63f804",
+      "size_bytes": 476596,
       "file_count": 31,
       "files": [
         "SKILL.md",
@@ -595,8 +596,8 @@
       ]
     },
     "operational/harness-audit": {
-      "content_hash": "sha256:1ec3501b570b9a13b8ee686e103acd9c44454b3fc5b850586e0082927b78ebde",
-      "size_bytes": 24495,
+      "content_hash": "sha256:ab1ef36a549126a9163eb641ce831461839f122f215c6cfaed0859e6c34f9d21",
+      "size_bytes": 24517,
       "file_count": 3,
       "files": [
         "SKILL.md",
