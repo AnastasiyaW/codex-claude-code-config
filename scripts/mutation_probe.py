@@ -23,10 +23,13 @@ The test command runs with cwd = the private copy of TARGET's folder; with
 --dir-env the copy's path is also exported in that variable for tests that
 locate the code through it. Without --timeout the per-mutant limit is
 max(10 s, 10 x the baseline run time), the mutator's rule; the chosen limit is printed.
+A test that outlives its limit is killed together with its whole process tree
+(taskkill /T on Windows, process group on POSIX) and the mutant counts as killed.
 
 Exit: 0 every mutant killed, 3 a mutant survived, 2 not checked (baseline test
-already red, no mutation site found, bad arguments). Same three-state contract
-as check_aggregate.py; `--self-test` carries the negative control.
+already red, no mutation site found, bad arguments, private copy could not be
+created or removed). Same three-state contract as check_aggregate.py;
+`--self-test` carries the negative controls.
 """
 from __future__ import annotations
 
@@ -36,6 +39,7 @@ import copy
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -56,6 +60,7 @@ ARITH_FLIP = {
 }
 MIN_TIMEOUT = 10
 BASELINE_TIMEOUT = 600  # cap for the baseline run when --timeout is not given
+TIMED_OUT = 124
 
 
 def _flip_label(before: type, after: type) -> str:
@@ -146,12 +151,34 @@ def _timeout_for(baseline_seconds: float, explicit: int | None) -> int:
     return max(MIN_TIMEOUT, math.ceil(10 * baseline_seconds))
 
 
-def _run(test: str, cwd: Path, env: dict, timeout: int) -> int:
+def _spawn(test: str, cwd: Path, env: dict) -> subprocess.Popen:
+    """Start the test command as the leader of its own process group, so a timeout can reach its children."""
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if os.name == "nt":
+        return subprocess.Popen(test, shell=True, cwd=cwd, env=env,
+                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, **quiet)
+    return subprocess.Popen(test, shell=True, cwd=cwd, env=env, start_new_session=True, **quiet)
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the shell and everything it started. Killing only the shell leaves the python child running."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        return
     try:
-        return subprocess.run(test, shell=True, cwd=cwd, env=env, timeout=timeout,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _run(test: str, cwd: Path, env: dict, timeout: int) -> int:
+    proc = _spawn(test, cwd, env)
+    try:
+        return proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        return 124
+        _kill_tree(proc)
+        proc.wait()
+        return TIMED_OUT
 
 
 def probe(target: Path, functions: set[str], test: str, dir_env: str | None, timeout: int | None,
@@ -162,29 +189,39 @@ def probe(target: Path, functions: set[str], test: str, dir_env: str | None, tim
     if not sites:
         print(f"UNKNOWN: no mutation site in {sorted(functions)} of {target}")
         return 2
-    with tempfile.TemporaryDirectory(prefix="mutation-probe-", dir=work_root) as tmp:
-        work = Path(tmp) / target.parent.name
-        shutil.copytree(target.parent, work, ignore=shutil.ignore_patterns("__pycache__", ".git"))
-        copy_target = work / target.name
-        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-        if dir_env:
-            env[dir_env] = str(work)
-        started = time.monotonic()
-        baseline_red = _run(test, work, env, timeout if timeout is not None else BASELINE_TIMEOUT) != 0
-        baseline = time.monotonic() - started
-        if baseline_red:
-            print("UNKNOWN: baseline test is already red; mutants would prove nothing")
-            return 2
-        limit = _timeout_for(baseline, timeout)
-        origin = "--timeout" if timeout is not None else f"auto: 10 x baseline {baseline:.1f} s, min {MIN_TIMEOUT} s"
-        print(f"per-mutant timeout: {limit} s ({origin})")
-        survivors = 0
-        for index, op_index, label, line in sites:
-            copy_target.write_text(_mutate(tree, index, op_index), encoding="utf-8")
-            killed = _run(test, work, env, limit) != 0
-            survivors += not killed
-            print(f"  {'killed  ' if killed else 'SURVIVED'} line {line:<5} {label}")
-        copy_target.write_text(source, encoding="utf-8")
+    try:
+        with tempfile.TemporaryDirectory(prefix="mutation-probe-", dir=work_root) as tmp:
+            return _check_copy(target, tree, source, sites, Path(tmp), test, dir_env, timeout)
+    except OSError as exc:
+        # Cleanup can fail while a leftover process still holds the copy (Windows: WinError 32).
+        print(f"UNKNOWN: private copy could not be created or removed ({exc}); result not trusted")
+        return 2
+
+
+def _check_copy(target: Path, tree: ast.Module, source: str, sites: list, tmp: Path, test: str,
+                dir_env: str | None, timeout: int | None) -> int:
+    work = tmp / target.parent.name
+    shutil.copytree(target.parent, work, ignore=shutil.ignore_patterns("__pycache__", ".git"))
+    copy_target = work / target.name
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    if dir_env:
+        env[dir_env] = str(work)
+    started = time.monotonic()
+    baseline_red = _run(test, work, env, timeout if timeout is not None else BASELINE_TIMEOUT) != 0
+    baseline = time.monotonic() - started
+    if baseline_red:
+        print("UNKNOWN: baseline test is already red; mutants would prove nothing")
+        return 2
+    limit = _timeout_for(baseline, timeout)
+    origin = "--timeout" if timeout is not None else f"auto: 10 x baseline {baseline:.1f} s, min {MIN_TIMEOUT} s"
+    print(f"per-mutant timeout: {limit} s ({origin})")
+    survivors = 0
+    for index, op_index, label, line in sites:
+        copy_target.write_text(_mutate(tree, index, op_index), encoding="utf-8")
+        killed = _run(test, work, env, limit) != 0
+        survivors += not killed
+        print(f"  {'killed  ' if killed else 'SURVIVED'} line {line:<5} {label}")
+    copy_target.write_text(source, encoding="utf-8")
     print(f"{len(sites) - survivors} of {len(sites)} mutants killed, {survivors} survived")
     return 3 if survivors else 0
 
@@ -205,15 +242,73 @@ def is_eligible(age, banned):
     if banned and age < 150:
         allowed = False
     return allowed
+
+def may_enter(banned):
+    return not banned
+
+def is_free(banned, minor):
+    if banned or minor:
+        return False
+    return True
+
+def halves(n):
+    return n // 2
 '''
-SELF_TEST_FUNCTIONS = {"is_adult", "months_to_adult", "is_eligible"}
-SELF_TEST_IMPORT = "import sys; sys.path.insert(0, '.'); from m import is_adult as f, months_to_adult as g, is_eligible as h; "
+SELF_TEST_FUNCTIONS = {"is_adult", "months_to_adult", "is_eligible", "may_enter", "is_free", "halves"}
+SELF_TEST_IMPORT = ("import sys; sys.path.insert(0, '.'); from m import is_adult as f, months_to_adult as g, "
+                    "is_eligible as h, may_enter as k, is_free as u, halves as p; ")
 STRONG_TEST = (SELF_TEST_IMPORT +
                "assert f(18) is True and f(17) is False and f(149) is True and f(150) is False and f(30) is True "
                "and g(18) == 0 and g(20) == 0 and g(10) == 97 "
-               "and h(20, False) is True and h(20, True) is False and h(150, True) is True")
+               "and h(20, False) is True and h(20, True) is False and h(150, True) is True "
+               "and k(False) is True and k(True) is False "
+               "and u(False, False) is True and u(True, False) is False and u(False, True) is False "
+               "and p(5) == 2 and p(4) == 2")
 # The null-return case: passes whatever the functions return, so every mutant must survive.
-WEAK_TEST = SELF_TEST_IMPORT + "f(30); g(30); h(30, False)"
+WEAK_TEST = SELF_TEST_IMPORT + "f(30); g(30); h(30, False); k(False); u(False, False); p(5)"
+
+# Infinite-loop case: the 1->0 mutant of `i += 1` never ends. Every run appends its pid to
+# MUTATION_PROBE_PIDFILE so the self-test can check that no test process outlives the probe.
+LOOP_CODE = '''
+def count_to(n):
+    i = 0
+    while i < n:
+        i += 1
+    return i
+'''
+LOOP_TEST = ("import os; open(os.environ['MUTATION_PROBE_PIDFILE'], 'a').write(str(os.getpid()) + ' '); "
+             "import sys; sys.path.insert(0, '.'); from m import count_to as f; assert f(0) == 0 and f(3) == 3")
+PIDFILE_ENV = "MUTATION_PROBE_PIDFILE"
+
+
+def _alive(pid: int) -> bool:
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in out.split()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+_REAL_TEMPDIR = tempfile.TemporaryDirectory
+
+
+class _StuckDirectory:
+    """Stands in for TemporaryDirectory when the copy cannot be removed (as on a locked Windows file)."""
+
+    def __init__(self, **kwargs):
+        self._inner = _REAL_TEMPDIR(**kwargs)
+
+    def __enter__(self):
+        return self._inner.__enter__()
+
+    def __exit__(self, *exc):
+        self._inner.__exit__(*exc)
+        raise PermissionError(13, "held by another process")
 
 
 def self_test() -> int:
@@ -227,20 +322,47 @@ def self_test() -> int:
         chain_ops = sorted(op for _, op, label, _ in
                            _sites(ast.parse("def f(a, b, c):\n    return a < b <= c\n"), {"f"})
                            if label in ("Lt->GtE", "LtE->Gt"))
+
+        loop_dir = Path(tmp) / "loop"
+        loop_dir.mkdir()
+        (loop_dir / "m.py").write_text(LOOP_CODE, encoding="utf-8")
+        loop_work = Path(tmp) / "loop-work"
+        loop_work.mkdir()
+        pidfile = Path(tmp) / "pids.txt"
+        os.environ[PIDFILE_ENV] = str(pidfile)
+        try:
+            loop_rc = probe(loop_dir / "m.py", {"count_to"}, f'{py} "{LOOP_TEST}"', None, 2, str(loop_work))
+        finally:
+            del os.environ[PIDFILE_ENV]
+        loop_pids = [int(p) for p in pidfile.read_text().split()] if pidfile.exists() else []
+        left_over = [pid for pid in loop_pids if _alive(pid)]
+
+        tempfile.TemporaryDirectory = _StuckDirectory
+        try:
+            stuck_rc = probe(target, SELF_TEST_FUNCTIONS, f'{py} "{STRONG_TEST}"', None, 30)
+        finally:
+            tempfile.TemporaryDirectory = _REAL_TEMPDIR
+
         results = {
             "strong test kills all (explicit timeout)":
                 probe(target, SELF_TEST_FUNCTIONS, f'{py} "{STRONG_TEST}"', None, 30) == 0,
             "strong test kills all (automatic timeout)":
                 probe(target, SELF_TEST_FUNCTIONS, f'{py} "{STRONG_TEST}"', None, None) == 0,
-            "arithmetic and literal mutants exist in the sample":
-                {"Add->Sub", "Sub->Add", "Mult->Div", "0->1", "1->0", "True->False"} <= sample_labels,
+            "arithmetic, literal, drop-not, or->and, // mutants exist in the sample":
+                {"Add->Sub", "Sub->Add", "Mult->Div", "0->1", "1->0", "True->False",
+                 "drop not", "or->and", "FloorDiv->Mult"} <= sample_labels,
             "chained comparison: each operator is its own site": chain_ops == [0, 1],
             "timeout rule: max(10 s, 10 x baseline) unless given":
                 _timeout_for(0.2, None) == 10 and _timeout_for(3.0, None) == 30 and _timeout_for(3.0, 7) == 7,
             "weak test leaves survivors (negative control)":
                 probe(target, SELF_TEST_FUNCTIONS, f'{py} "{WEAK_TEST}"', None, 30) == 3,
-            "red baseline is UNKNOWN, not green": probe(target, SELF_TEST_FUNCTIONS, f'{py} "raise SystemExit(1)"', None, 30) == 2,
+            "red baseline is UNKNOWN, not green":
+                probe(target, SELF_TEST_FUNCTIONS, f'{py} "raise SystemExit(1)"', None, 30) == 2,
             "missing function is UNKNOWN": probe(target, {"nope"}, f'{py} "pass"', None, 30) == 2,
+            "infinite-loop mutant is killed by timeout (exit 0 or 3, never 1)": loop_rc in (0, 3),
+            "no test process survives the timeout (checked by pid)": bool(loop_pids) and not left_over,
+            "work dir is removed after the infinite-loop run": not any(loop_work.iterdir()),
+            "cleanup failure is UNKNOWN (exit 2), not a traceback": stuck_rc == 2,
         }
     for name, ok in results.items():
         print(f"{'PASS' if ok else 'FAIL'}  {name}")
