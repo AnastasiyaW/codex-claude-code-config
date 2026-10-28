@@ -234,6 +234,9 @@ LOCAL_COPY_TOOLS = {"cp", "copy", "copy-item", "cpi", "xcopy", "robocopy"}
 _COPY_ITEM_VALUE_PARAMS = ("-path", "-literalpath", "-destination", "-filter", "-include", "-exclude")
 _REMOTE_TOKEN = re.compile(r"^(?:\\\\|//)|^[^-/\\:][^/\\:]+:|^-(?:to|from)session", re.IGNORECASE)
 _UNPROVABLE = re.compile(r"[$%`*?]")
+# Anywhere in any argument: a command substitution runs its own command (even in a
+# source position), and a PowerShell provider path or UNC can sit mid-token.
+_EMBEDDED_REMOTE = re.compile(r"\$\(|`|<\(|::|\\\\|(?<!^)//")
 _DRIVE_TEMP = re.compile(r"^[a-z]:/(?:temp|tmp)/[^/]")
 
 
@@ -254,13 +257,31 @@ def _temp_roots() -> list[str]:
     return sorted({_norm_path(r).rstrip("/") for r in raw if r})
 
 
-def _inside_temp(raw: str) -> bool:
-    path = _norm_path(raw).rstrip("/")
-    if "/../" in f"{path}/" or not (re.match(r"^[a-z]:/", path) or path.startswith("/")):
+def _on_fixed_drive(path: str) -> bool:
+    """A mapped letter (SMB share) is another machine; only local fixed disks count."""
+    drive = re.match(r"^([a-z]):/", path)
+    if not drive or os.name != "nt":
+        return True
+    import ctypes
+    return ctypes.windll.kernel32.GetDriveTypeW(f"{drive.group(1).upper()}:\\") == 3  # DRIVE_FIXED
+
+
+def _text_inside_temp(path: str) -> bool:
+    # `..` needs no text check: _inside_temp also judges the realpath.
+    if not (re.match(r"^[a-z]:/", path) or path.startswith("/")):
+        return False
+    if not _on_fixed_drive(path):
         return False
     if _DRIVE_TEMP.match(path):
         return True
     return any(path.startswith(root + "/") for root in _temp_roots())
+
+
+def _inside_temp(raw: str) -> bool:
+    # Both the written path and where it really lands: a junction or symlink
+    # under TEMP that points elsewhere must not turn into an overwrite outside.
+    path = _norm_path(raw).rstrip("/")
+    return _text_inside_temp(path) and _text_inside_temp(_norm_path(os.path.realpath(path)).rstrip("/"))
 
 
 def _copy_destination(tokens: list[str]) -> str | None:
@@ -315,7 +336,10 @@ def _local_copy_into_temp(command: str) -> bool:
                 return False
             if tokens[0].lower() == "robocopy" and re.search(r"(?:^|\s)/(?:move|mov)\b", segment, re.I):
                 return False
-            if any(_REMOTE_TOKEN.search(t) for t in tokens[1:]):
+            if any(_REMOTE_TOKEN.search(t) or _EMBEDDED_REMOTE.search(t) for t in tokens[1:]):
+                return False
+            drives = [_norm_path(t) for t in tokens[1:] if re.match(r"^(?:[a-zA-Z]:[\\/]|/[a-zA-Z]/)", t)]
+            if not all(_on_fixed_drive(d) for d in drives):
                 return False
             destination = _copy_destination(tokens)
             if not destination or _UNPROVABLE.search(destination) or not _inside_temp(destination):
