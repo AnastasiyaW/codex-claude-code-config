@@ -4,6 +4,29 @@ Changelog for codex-claude-code-config. Newest first.
 
 ---
 
+## 2026-10-28 (public pre-push scan hardening)
+
+An executed audit found pushes that reached a public repository unscanned.
+`hooks/pre-push-public-repo-scan.py` now:
+
+- scans every pushed commit on its own with its message (`git log -p --cc -a`),
+  so a key added and removed in one push, a key in a commit message, an evil merge
+  and an annotated tag message are all seen; any failing git step blocks (exit 2);
+- bounds the push by `git ls-remote` of the push URL, not local
+  `refs/remotes/*`; a remote with no refs means the whole history is scanned;
+- passes `--no-ext-diff --no-textconv` and drops `GIT_EXTERNAL_DIFF` and
+  `GIT_CONFIG_PARAMETERS`, so no diff driver can empty the text;
+- reads every changed binary blob as bytes (PNG text chunks inflated) and blocks
+  binaries that are not an image or font by extension and magic bytes;
+- reviews oversized pushes in chunks instead of truncating, and blocks above the limit;
+- adds case-insensitive private names, e-mail addresses, private and CGNAT IPv4,
+  `gh[oprsu]_` tokens, escaped Windows home paths and base64-wrapped PEM; marker
+  exemptions now match the full repo-relative path only.
+
+Fixture regression: `hooks/tests/test_pre_push_scan_hardening.py`.
+
+---
+
 ## 2026-10-28 (ideas checked against primary sources)
 
 Five external sources were re-read in full and compared item by item with this

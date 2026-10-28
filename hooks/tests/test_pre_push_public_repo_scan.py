@@ -29,7 +29,7 @@ def patched_runtime(*, remote: str, visibility: bool | None, findings, semantic)
     try:
         with (
             patch.object(MODULE, "repo_is_public", return_value=visibility),
-            patch.object(MODULE, "get_push_diff", return_value="fixture diff"),
+            patch.object(MODULE, "collect_push_material", return_value=MODULE.PushMaterial("fixture diff", [])),
             patch.object(MODULE, "agent_a_regex", return_value=findings),
             patch.object(MODULE, "agent_b_claude", return_value=semantic),
             patch.object(MODULE, "pushed_material_problems", return_value=None),
