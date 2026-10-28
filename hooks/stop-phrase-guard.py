@@ -431,8 +431,10 @@ _EN_ADDRESSED = re.compile(
 # An English verb followed by Russian is a word inside Russian prose ("; open
 # вопросов нет", ": copy в worktree"); so is one followed by a count on a line
 # that already speaks Russian (", run 41 passed"), unlike "Run 3 times".
-_RUSSIAN_NEXT = re.compile(r"[ \t]*[а-яё]", re.IGNORECASE)
-_COUNT_NEXT = re.compile(r"[ \t]*\d")
+# Only what DIRECTLY follows: a masked `make` is blank, and "run `make` чтобы"
+# must not read as "run чтобы" (independent re-review, 2026-10-28).
+_RUSSIAN_NEXT = re.compile(r"[ \t]?[а-яё]", re.IGNORECASE)
+_COUNT_NEXT = re.compile(r"[ \t]?\d")
 _CYRILLIC = re.compile(r"[а-яё]", re.IGNORECASE)
 _NEWLINE = re.compile(r"\n")
 # A whitespace-free span (`owner/repo`, `claude/branch-name`, `docs/x.md`) names
@@ -1602,6 +1604,16 @@ def _self_test() -> int:
         ("control: a task box", "- [ ] Run the installer.", "Run"),
         ("control: a russian lead adverb", "Затем run the installer.", "run"),
         ("control: a russian addressee", "Тебе нужно run `npm test`.", "run"),
+        # Independent re-review 2026-10-28: a masked one-word command between
+        # the verb and Russian text hid the verb.
+        ("control: a one-word command before russian",
+         "Затем run `make` чтобы собрать релиз.", "run"),
+        ("control: the same after a report",
+         "Готово, тесты прошли. Затем run `make` чтобы собрать релиз.", "run"),
+        ("control: then before russian", "Then run `deploy.sh` на сервере.", "run"),
+        ("control: please before russian", "Please run `setup.ps1` у себя.", "run"),
+        ("control: next before russian", "Next, run `./install.sh` и перезапусти.", "run"),
+        ("control: a bare program before russian", "Then run `npm` и всё.", "run"),
     ):
         got = agent_capable_user_homework(text, [prompt], {})
         if got != want:

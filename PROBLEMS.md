@@ -117,6 +117,10 @@ fresh-context Opus review (HOLD) found a quadratic span path, the digit rule and
 phrasings; all fixed, its 70-case probe now loses only "Once that is done run the installer."
 (no clause break; accepted). Still blocked by old and new alike: "Run time: 3 seconds.", "Open
 questions: none." (a label noun at clause start). The scratch-cwd gap moved to its own entry.
+An independent re-review of 4052e3a (HOLD) found that the Russian-follows rule read past a
+masked one-word command ("Затем run `make` чтобы …", "Please run `setup.ps1` у себя."): six
+hand-offs that main blocks passed. The follow-up commit checks only what directly follows the
+verb; the six are must-block self-test cases (red on 4052e3a, green now).
 
 Found while closing REQ-EDC941FD1708 (commit `511efa3`, hyphen-in-word is not a flag). The
 report of that finished fix was itself blocked as homework. Measured with
@@ -147,6 +151,31 @@ finished report returned `'run'` from "Agent B of the pre-push scan couldn't run
 after a negated modal), and `Open`/`Запусти` from quoted test inputs inside multi-word
 backtick spans ("`Open https://…` returns `'Open'`"). The position rule above covers both;
 the negated modal also belongs among its non-imperative leads.
+
+## 2026-10-28 - STOP-GUARD: HAND-OFFS NEITHER MAIN NOR PR #40 CATCHES
+
+**Status**: arch-decision
+
+Found by the independent re-review of PR #40. Measured 2026-10-28: `agent_capable_user_homework`
+returns None for each line on origin/main and on the PR branch alike (probe
+`D:/tmp/claude/stopfp/gaps.py`):
+
+- "You can now push with `git push`." (`git push` is not a shape and "push" is not listed)
+- "Осталось только выполнить у себя `make release`." / "Нужно будет руками запустить
+  `setup.ps1`." (an infinitive after "осталось/нужно" hands work over; the listed forms
+  "выполни/запусти" do not match the infinitive "-ить")
+- "Перезапусти `nginx` и проверь." / "Сделай `npm ci` перед стартом." (Russian singular
+  imperatives outside the list; `_RU_IMPERATIVE` takes only "-ите/-йте/-ьте" because "-и/-й"
+  collide with plural nouns and adjectives)
+- "Your turn: `make release`." (a lead-in that assigns without a verb)
+- "I'll continue in the next session." (a deferral, not a command; belongs to `scan_phrases`)
+
+The choice needed: a Russian imperative/infinitive grammar that does not reopen the noun
+collisions, or a short list of hand-off lead-ins. Not fixed in PR #40, whose scope is false
+positives.
+
+**Recheck**: each line above as a must-block self-test case, with the report controls of PR
+#40 staying silent.
 
 ## 2026-09-30 - STOP-GUARD: EVIDENCE-BOUND ORDER NOT FOUND FROM A SCRATCH CWD
 
@@ -253,3 +282,19 @@ next to each handoff (status, slug, closure-audit enums, next step, unfinished
 items with tracker links) and JSONL entries for PROBLEMS.md, so agent_roster.py
 and handoff-closure-audit-guard.py read fields instead of regexes. Touches the
 handoff hooks and the roster; needs the owner's go-ahead on the format.
+
+## 2026-10-28 12:30 - harness-load-advisor reads a product's "false positives" as harness overload
+
+**Status**: RESOLVED 2026-10-28 (PR AnastasiyaW/codex-claude-code-config#32, merge 3564cba;
+live hook hash 4ef2a06 equals origin/main; 38 tests OK, 26/26 mutants killed, reviewer PROCEED
+on f61883f). Remaining known misses: a complaint whose feedback word is more than 40 characters
+from the subject; "the gate flags/reports false positives".
+
+The `explicit-feedback` signal matches `ложн\w* срабатыван\w*` / `false positive` anywhere in
+the final reply, and `_profile()` labels it `staging-smoke` when "smoke" appears anywhere (here
+the file name `click_smoke.py`). A report on a Crossweft sandbox run ("ложных срабатываний про
+кнопки не было", the click test `click_smoke.py`) blocked Stop three times although no gate or
+profile of ours ran in that session. Fix direction: require a harness/gate subject in the same
+sentence for `explicit-feedback` (as `declared-overload` does) and skip negated forms ("не было
+ложных срабатываний"). A public-repo hook change needs a red/green test and an independent
+reviewer, so it is not patched in passing.
