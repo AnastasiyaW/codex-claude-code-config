@@ -1154,6 +1154,22 @@ def _without_code_argument(cmd: Cmd) -> str:
     return " ".join(kept).lower()
 
 
+def _list_git_push(cmd: Cmd) -> bool:
+    """Code that builds the command as a list, `['git', ..., 'push', ...]`, never reaches the shell
+    re-read, so it is judged here (review 2026-10-28: `subprocess.run(['git','push',...])` and the
+    `-c core.hooksPath=` form passed). `git stash push` stays allowed."""
+    codes = [word for at, word in enumerate(cmd.argv[1:], 1)
+             if cmd.argv[at - 1] in ("-c", "-e", "--eval", "-p", "--print")]
+    for code in codes:
+        items = [item.lower() for item in re.findall(r"['\"]([^'\"]*)['\"]", code)]
+        gits = [at for at, item in enumerate(items) if re.split(r"[\\/]", item)[-1] in ("git", "git.exe")]
+        for start in gits:
+            rest = items[start + 1:]
+            if "push" in rest and "stash" not in rest[:rest.index("push")]:
+                return True
+    return False
+
+
 def _git_push_words(raw_low: str) -> bool:
     """Review 2026-10-28: `sed .../git-hooks/pre-push` read as a git push behind an unknown command."""
     text = BENIGN_NAMES.sub(" ", raw_low)
@@ -1177,7 +1193,8 @@ def judge(cmd: Cmd, text_env: dict[str, str], findings: list[Finding], depth: in
     elif cmd.name in HTTP_CLIENTS:
         judge_http(cmd, findings)
     elif cmd.name not in PRINTERS and cmd.name not in KNOWN_SHAPES and not cmd.in_code \
-            and _git_push_words(_without_code_argument(cmd) if cmd.name in INTERPRETERS else raw_low):
+            and (_git_push_words(_without_code_argument(cmd) if cmd.name in INTERPRETERS else raw_low)
+                 or (cmd.name in INTERPRETERS and _list_git_push(cmd))):
         findings.append(Finding("unknown-shape", f"`{cmd.raw.strip()}` reads as a git push behind "
                                 f"`{cmd.name}`, which this guard does not understand",
                                 "run git push directly", [(cmd.raw.strip().lower(),)]))

@@ -342,6 +342,13 @@ class ThirdReview(unittest.TestCase):
                         'git stash push -q -m "live-folder sync" -- PROBLEMS.md hooks/a.py'):
             self.assertEqual(routes(command, Fixture.private), set(), command)
         self.check('python -I -c "print(1)" && git push --no-verify', "push-no-verify", cwd=Fixture.private)
+        # Review 2026-10-28: code that builds git push as a list reaches no shell re-read.
+        self.check("python -c \"import subprocess; subprocess.run(['git','push','origin','main'])\"", "unknown-shape")
+        self.check("python -c \"import subprocess; subprocess.run(['git','-c','core.hooksPath=/dev/null',"
+                   "'push','origin','main'])\"", "unknown-shape")
+        self.check("node -e \"require('child_process').execFileSync('git', ['push'])\"", "unknown-shape")
+        self.assertEqual(routes("python -c \"import subprocess; subprocess.run(['git','stash','push','-m','wip'])\"",
+                                Fixture.private), set())
 
     def test_1h_multiline_quoted_message(self) -> None:
         # Live false block 2026-10-28: a commit message line naming git and push read as a command.
