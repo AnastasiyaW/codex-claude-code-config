@@ -21,13 +21,15 @@ is a report. Each candidate gets:
 | Not reached | Production profiling/telemetry, not only static search |
 | Not referenced | Call sites, including indirect use: enums, wrappers, aliases, schemas, dynamically built names, other services |
 | Flag state | The live flag/experiment config, not SDK fallbacks or local overrides |
-| History | git log and open/overlapping PRs touching the same code |
+| History | git log, open/overlapping PRs touching the same code, and the decision trail (tracker issues, chat threads) |
 | Owner | The team or person who reviews the removal |
 | Value | Measured cost (CPU, CI time, image size) used for ranking |
 
-The guide reports false negatives from static analysis alone. Our reading:
-reflection and dynamically built names are the usual cause. Cheaper models miss indirect dependencies, such as a flag read through
-another flag. If a candidate lacks production evidence, it stays a candidate.
+The guide reports false negatives from static analysis alone and names the blind
+spots: reflection and the indirect uses listed above. Cheaper models miss indirect
+dependencies, such as a flag read through another flag. If a candidate lacks
+production evidence, it stays a candidate. A broad audit report is a candidate
+list, not approval: each item merges only as its own reviewed PR.
 
 ## 2. Never delete these on the agent's word
 
@@ -43,6 +45,11 @@ another flag. If a candidate lacks production evidence, it stays a candidate.
 - Feed reviewer comments back into the next round's prompt.
 - Grow scope gradually: one directory, then one project, then the codebase.
 - Rank by measured cost (CPU, CI time), so the team reviews the biggest wins first.
+- Pilot before scaling: run one small scope on two model/effort tiers and compare
+  findings per cost. In the guide the cheaper tier found 92% of the findings at about
+  14% of the cost; what it missed (flag-on-flag dependencies) became a prompt fix.
+- Before the first merge, record the baseline image size and median/p90 CI time.
+  Re-measure after each workstream and report the realised saving, not the estimate.
 
 ## 4. Prompt shape (paraphrased)
 
@@ -53,6 +60,10 @@ another flag. If a candidate lacks production evidence, it stays a candidate.
    ignore SDK fallbacks and local overrides; read-only.
 5. **Output:** a report with evidence, owners, call sites and cost — or one draft
    PR per cleanup.
+6. **Coverage:** audit every flag/experiment inventory, not only items labelled
+   stale; include fully shipped flags; resolve every production-referenced constant
+   rather than stopping at a cautious shortlist; use telemetry/profiles to find
+   expensive checks that never change the outcome.
 
 A short prompt that worked for the strongest model was too vague for a weaker
 one. Review the prompts when the model changes.

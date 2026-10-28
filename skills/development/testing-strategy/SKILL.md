@@ -98,6 +98,13 @@ context must produce the final verdict. For a safe structural refactor use
 - Do not use retries, sleeps, snapshots, or `skip/xfail` to make red tests look
   green. A flaky test needs a cause, a bounded quarantine reason, or a fix.
 - Do not claim release readiness from a fast suite alone.
+- Null-return check: if the test would still pass when every function under
+  test returned nothing (`None`, empty, default), it asserts nothing; delete or
+  rewrite it. Cheapest negative control for a new test: stub the unit to return
+  nothing and confirm the test goes red. Source: https://github.com/unclebob/ub-mode
+  ("Test Behavior, Not Implementation"). Second probe from the same source
+  (pstack test-behavior): change the internals without changing behaviour; a test
+  that fails is pinned to implementation, rewrite it against the public result.
 - Do not treat a new external blocker as a failed upstream candidate. Verify the
   stage that changed; promote the same sealed input when the prerequisite arrives.
 
@@ -111,6 +118,10 @@ context must produce the final verdict. For a safe structural refactor use
   journeys, not duplicate every branch already tested below.
 - Mutation testing is a periodic test-quality audit, not a per-edit gate. On
   Windows, verify the tool's runtime requirements before adding it to CI.
+  For one Python function or a hook fix, use our own probe:
+  `python ~/.claude/claude-code-config/scripts/mutation_probe.py FILE.py --function NAME --test "CMD" [--dir-env VAR] [--work-root DIR]`
+  (exit 0 all killed, 3 survivor, 2 not checked). A survivor means a missing
+  test case or dead code: add the case or delete the code, then rerun.
 - Agent trajectories need task-outcome checks and tool-call checks, not only
   final-text similarity.
 - A VM harness is an execution environment, not a release profile. Reuse the

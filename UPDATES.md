@@ -4,6 +4,34 @@ Changelog for codex-claude-code-config. Newest first.
 
 ---
 
+## 2026-10-28 (ideas checked against primary sources)
+
+Five external sources were re-read in full and compared item by item with this
+config: unclebob/ub-mode and the pstack original it reduces, Google Harness²,
+OpenVLHarness, the OpenAI dead-code maintenance guide, and nine autoresearch
+frameworks. Only ideas that were missing here were taken; code was rewritten,
+not vendored.
+
+- `rules/finish-the-task.md`: **attack the premise** - after two failed fixes on
+  one assumption, write it in one sentence, test it with one observation that
+  would differ if it were false, and only then remove it.
+- `rules/no-guessing.md`: **explain the number** - decide the deciding result and
+  the noise floor before a run; report repeats, spread and the limiting resource.
+  Spread larger than the effect is UNKNOWN.
+- `rules/learn-from-corrections.md`: the cheapest component that fixes a failure
+  class (tool fallback, script, skill, hook, prose); a one-session failure is noise.
+- `CLAUDE.md`: **build the lever** (one unit by hand, then the tool that matches
+  it); autoresearch anatomy (loop, state, verdict); three new autoresearch key
+  rules: evaluator out of the agent's reach, journal every attempt including
+  discards, fixed budget with noise floor and pivot on plateau.
+- `testing-strategy`: the null-return check, the implementation-pinning probe,
+  and a pointer to `scripts/mutation_probe.py`.
+- `refactoring-safely/references/dead-code-sweep.md`: audit coverage clauses,
+  a two-tier model pilot, before/after measurement of image size and CI time,
+  and "an audit report is a candidate list, not approval".
+
+---
+
 ## 2026-10-28 (temp backups are not transfers, mutation probe)
 
 - `transfer-contract-guard` no longer asks for a transfer contract when a
