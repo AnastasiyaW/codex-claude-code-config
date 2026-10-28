@@ -23,9 +23,11 @@ sys.modules["pbg"] = pbg  # dataclasses resolve annotations through sys.modules
 _SPEC.loader.exec_module(pbg)
 
 VISIBILITY = {"acme/alpha": "PUBLIC", "acme/beta": "PUBLIC", "acme/gamma": "PUBLIC",
-              "acme/secret": "PRIVATE"}
+              "acme/secret": "PRIVATE", "acme/delta": "PUBLIC", "acme/epsilon": "PUBLIC",
+              "acme/zeta": "PUBLIC", "acme/eta": "PUBLIC"}
 SCAN_HOOK = '#!/bin/sh\nexec python "$HOME/.claude/claude-code-config/hooks/pre-push-public-repo-scan.py" "$@"\n'
-CHAIN_HOOK = '#!/bin/sh\nexec "$(git config --global --get core.hooksPath)/pre-push" "$@"\n'
+# The canonical chain hook ships next to the guard; the tests read it from this source tree.
+CHAIN_HOOK = (Path(__file__).resolve().parents[1] / "pre-push-chain.sh").read_text(encoding="utf-8")
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -66,6 +68,16 @@ class Fixture:
         cls.unscanned = repo("beta", "acme/beta", "")
         cls.chained = repo("gamma", "acme/gamma", CHAIN_HOOK)
         cls.private = repo("secret", "acme/secret", "")
+        exit_first = CHAIN_HOOK.replace("GLOBAL_HOOKS=", "exit 0\nGLOBAL_HOOKS=", 1)
+        cls.exit_first = repo("delta", "acme/delta", exit_first)
+        cls.echo_scan = repo("epsilon", "acme/epsilon",
+                             CHAIN_HOOK + 'echo "runs pre-push-public-repo-scan.py"\n')
+        cls.old_chain = repo("zeta", "acme/zeta",
+                             '#!/bin/sh\nexec "$(git config --global --get core.hooksPath)/pre-push" "$@"\n')
+        cls.crlf_chain = repo("eta", "acme/eta", None)
+        _git("config", "core.hooksPath", ".githooks", cwd=cls.crlf_chain)
+        (cls.crlf_chain / ".githooks").mkdir()
+        (cls.crlf_chain / ".githooks" / "pre-push").write_bytes(CHAIN_HOOK.replace("\n", "\r\n").encode())
         pbg.repo_visibility = VISIBILITY.get
 
     @classmethod
@@ -86,8 +98,9 @@ def tearDownModule() -> None:
     Fixture.teardown()
 
 
-def routes(command: str, cwd: Path | None = None) -> set[str]:
-    return {f.route for f in pbg.evaluate(command, str(cwd or Fixture.normal))}
+def routes(command: str, cwd: Path | None = None, shell: str = "bash") -> set[str]:
+    extra = (shell,) if shell != "bash" else ()  # older guard revisions took no shell argument
+    return {f.route for f in pbg.evaluate(command, str(cwd or Fixture.normal), *extra)}
 
 
 class MustBlock(unittest.TestCase):
@@ -185,9 +198,82 @@ class MustBlock(unittest.TestCase):
         self.check("gh release upload v1.0 dist.zip -R acme/unknown", "release-public")
 
 
+class CoordinatorReview(unittest.TestCase):
+    """Independent re-review of e193aab (HOLD, 12 executed bypasses) and the chain-bytes review."""
+
+    def check(self, command: str, route: str, cwd: Path | None = None, shell: str = "bash") -> None:
+        self.assertIn(route, routes(command, cwd, shell), command)
+
+    def test_1_escapes_are_removed_before_tokenising(self) -> None:
+        self.check("git push --no-ve\\rify", "push-no-verify")
+        self.check("git pu\\sh --no-verify", "push-no-verify")
+        self.check("g\\it push --no-verify", "push-no-verify")
+        self.check("git push --no-ver`ify", "push-no-verify", shell="powershell")
+        self.check("gi`t pu`sh --no-verify", "push-no-verify", shell="powershell")
+
+    def test_2_git_dir_names_the_repo_judged(self) -> None:
+        git_dir = (Fixture.unscanned / ".git").as_posix()
+        self.check(f"GIT_DIR={git_dir} git push", "local-hooks")
+        self.check(f"export GIT_DIR={git_dir}; git push", "local-hooks")
+        self.check(f"$env:GIT_DIR='{git_dir}'; git push", "local-hooks", shell="powershell")
+        self.check("GIT_DIR=$X git push", "unknown-repo")
+        self.check("GIT_WORK_TREE=/no/such/tree GIT_DIR=/no/such/dir git push", "unknown-repo")
+
+    def test_3_alias_from_env_config(self) -> None:
+        self.check("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.pp GIT_CONFIG_VALUE_0=push git pp",
+                   "alias-from-env")
+        self.check("git --config-env=alias.pp=PP pp", "alias-from-env")
+        self.check("$env:GIT_CONFIG_PARAMETERS=\"'alias.pp'='push'\"; git pp", "alias-from-env",
+                   shell="powershell")
+
+    def test_4_builtins_that_run_commands(self) -> None:
+        self.check("git submodule foreach 'git push --no-verify'", "push-no-verify")
+        self.check("git bisect run git push --no-verify", "push-no-verify")
+        self.check("git rebase -x 'git push --no-verify' main", "push-no-verify")
+        self.check("git rebase --exec='git push --no-verify' main", "push-no-verify")
+        self.check("git difftool -x 'git push --no-verify'", "push-no-verify")
+
+    def test_5_chain_hook_must_be_canonical_bytes(self) -> None:
+        for repo in (Fixture.exit_first, Fixture.echo_scan, Fixture.old_chain):
+            self.check("git push", "local-hooks", cwd=repo)
+        found = [f for f in pbg.evaluate("git push", str(Fixture.exit_first)) if f.route == "local-hooks"]
+        self.assertIn("pre-push-chain.sh", found[0].fix)
+        self.assertEqual(set(), routes("git push", Fixture.crlf_chain))
+
+    def test_6_api_fields_read_unquoted(self) -> None:
+        self.check("gh api -X PATCH repos/acme/alpha -f 'visibility'='public'", "repo-public")
+        self.check('gh api -X PATCH repos/acme/alpha -F "private"=false', "repo-public")
+        self.check("gh api -X PUT repos//acme/alpha//contents/a.txt -f content=eA==", "api-write")
+
+    def test_7_http_clients_hub_gh_alias_and_secret_gists(self) -> None:
+        self.check("curl -X PUT https://api.github.com/repos/acme/alpha/contents/a -d @body.json",
+                   "http-write")
+        self.check("curl -d @b.json https://api.github.com/repos/acme/alpha/git/blobs", "http-write")
+        self.check("wget --method=PATCH https://api.github.com/repos/acme/alpha --body-data x",
+                   "http-write")
+        self.check("Invoke-RestMethod -Method Post -Uri https://uploads.github.com/repos/a/b/releases/1/assets",
+                   "http-write", shell="powershell")
+        self.check("hub api -X PUT repos/acme/alpha/contents/a -f content=x", "api-write")
+        self.check("gh alias set pubr 'repo edit --visibility public'", "alias-set")
+        self.check("gh alias set --shell np 'git push --no-verify'", "alias-set")
+        self.check("gh gist create notes.txt", "gist-public")
+
+    def test_8_variable_command_names(self) -> None:
+        self.check("g=git; $g push --no-verify", "dynamic-git")
+        self.check("$g = 'git'; & $g push origin main", "dynamic-git", shell="powershell")
+        self.check("${G} push", "dynamic-git")
+
+    def test_9_encoded_powershell(self) -> None:
+        import base64
+        payload = base64.b64encode("git push --no-verify".encode("utf-16-le")).decode()
+        self.check(f"pwsh -EncodedCommand {payload}", "push-no-verify", shell="powershell")
+        self.check(f"powershell -enc {payload}", "push-no-verify", shell="powershell")
+        self.check("pwsh -e not-base64!!", "encoded-command", shell="powershell")
+
+
 class MustPass(unittest.TestCase):
-    def check(self, command: str, cwd: Path | None = None) -> None:
-        self.assertEqual(set(), routes(command, cwd), command)
+    def check(self, command: str, cwd: Path | None = None, shell: str = "bash") -> None:
+        self.assertEqual(set(), routes(command, cwd, shell), command)
 
     def test_plain_push_from_normal_repo(self) -> None:
         self.check("git push")
@@ -207,13 +293,13 @@ class MustPass(unittest.TestCase):
 
     def test_local_hooks_that_chain_or_private_target(self) -> None:
         self.check("git push", cwd=Fixture.chained)
+        self.check("git push", cwd=Fixture.crlf_chain)
         self.check("git push", cwd=Fixture.private)
 
     def test_safe_gh(self) -> None:
         self.check("gh release create v1 -R acme/secret")
         self.check("gh api repos/acme/alpha/contents/a.txt")
         self.check("gh repo create newthing --private --source=. --push")
-        self.check("gh gist create notes.txt")
         self.check("gh repo edit acme/alpha --visibility private")
         self.check("gh pr create --title t --body 'run git push --no-verify? no'")
 
@@ -222,7 +308,13 @@ class MustPass(unittest.TestCase):
         self.check("git config --get core.hooksPath")
         self.check("git push origin HEAD:@{u}")
         self.check("git ls-files | xargs git add")
-        self.check("gh gist create --public=false f")
+        self.check("git submodule foreach 'git status'")
+        self.check("git rebase -x 'npm test' main")
+        self.check("curl https://api.github.com/repos/acme/alpha")
+        self.check("$x = 'push done'; Write-Output $x", shell="powershell")
+        self.check("cd D:/tmp && ls", None)
+        self.check("pwsh -NoProfile -Command Get-Date", shell="powershell")
+        self.check("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=x git status")
 
 
 class Approval(unittest.TestCase):

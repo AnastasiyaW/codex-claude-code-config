@@ -10,18 +10,45 @@ so every route below publishes without it:
 |--------------------|--------------------------------------------------------------------------------|
 | push-no-verify     | `git push --no-verify` (any unique abbreviation)                               |
 | hookspath-override | `git -c core.hooksPath=...`, `--config-env=core.hooksPath=...` (any subcommand) |
-| git-config-env     | `GIT_CONFIG*` / `GIT_EXTERNAL_DIFF` / `GIT_EXEC_PATH` set for a push            |
+| git-config-env     | `GIT_CONFIG*` / `GIT_EXTERNAL_DIFF` / `GIT_EXEC_PATH` / `HOME` / `USERPROFILE` /|
+|                    | `XDG_CONFIG_HOME` set for a push                                               |
+| hookspath-config   | any `git config` write of core.hooksPath                                       |
 | send-pack          | `git send-pack` (plumbing push, never runs pre-push)                           |
-| local-hooks        | push from a repo whose effective hooks folder is not the global one and has no |
-|                    | pre-push that chains to the scan, unless the push target is known PRIVATE      |
-| unknown-repo       | push whose working directory cannot be resolved (`cd $X && git push`)          |
+| local-hooks        | push from a repo whose effective hooks folder is not the global one and whose  |
+|                    | pre-push is not byte-identical (CRLF->LF) to hooks/pre-push-chain.sh or to the |
+|                    | global pre-push, unless the push target is known PRIVATE                       |
+| unknown-repo       | push whose working directory, or GIT_DIR / GIT_COMMON_DIR / GIT_WORK_TREE,     |
+|                    | cannot be resolved                                                             |
+| dynamic-git        | subcommand, push arguments or the command name from a variable, splat or xargs |
+| alias-from-env     | non-builtin git subcommand while GIT_CONFIG_COUNT/KEY/VALUE/PARAMETERS or      |
+|                    | `--config-env=alias.*` is set (the alias cannot be read)                       |
 | repo-public        | `gh repo edit --visibility public`, `gh repo create --public`                  |
-| gist-public        | `gh gist create --public|-p`, `gh gist edit --add`                             |
-| api-write          | `gh api` PUT/POST/PATCH on `repos/*/*/contents|git/*`, graphql commit mutations,|
-|                    | PATCH `repos/*/*` that sets visibility=public / private=false                  |
+| gist-public        | any `gh gist create` (a secret gist is readable by URL), `gh gist edit --add`   |
+| api-write          | `gh`/`hub api` PUT/POST/PATCH on `repos/*/*/contents|git|releases`, `gists`,    |
+|                    | graphql commit mutations; PATCH `repos/*/*` with visibility=public/private=false|
+| http-write         | curl / wget / Invoke-RestMethod / Invoke-WebRequest writing to api.github.com   |
+|                    | repos|gists or uploads.github.com                                               |
+| alias-set          | `gh alias set` whose expansion is itself a gated route                         |
+| encoded-command    | `pwsh -EncodedCommand` that does not decode (a decodable one is judged)        |
 | release-public     | `gh release create|upload` on a repo that is PUBLIC or of unknown visibility    |
 
 `git push -n` is `--dry-run` for push (it sends nothing), so it is not a hook skip and passes.
+Commands run by builtins (`git submodule foreach`, `git bisect run`, `rebase -x/--exec`,
+`difftool -x/--extcmd`) and git `!` aliases are judged as commands too. Before tokenising, a
+Bash command gets bash's backslash removal (`pu\\sh` is `push`) and a PowerShell command loses
+its backtick escapes (`--no-ver`ify`).
+
+Residual risk / threat model
+----------------------------
+This guard catches agent MISTAKES and accidental routes, not deliberate masking: text matching
+cannot win against an adversary, the same stance as human-confirmation-guard. Not covered:
+- interpreters and script files: `python -c` building the command from string pieces,
+  `bash x.sh`, `node -e`, a script written to disk and run later;
+- other publishing surfaces: issues and comments (`gh issue create`, `gh pr comment`), GitHub
+  Pages, wikis, packages/registries, non-GitHub hosts;
+- environment carried in from outside the command (a shell profile).
+The backstop for secrets is GitHub's server-side secret-scanning push protection on the public
+repos; the pre-push leak scan stays the only check for private names and PII.
 
 Commands are read as operations: the shared `executable_text` drops comments and printed
 arguments, and only a segment whose command word is `git`/`gh` (after env prefixes and
@@ -38,6 +65,7 @@ Any exception while judging a command that mentions git/gh blocks (fail closed).
 """
 from __future__ import annotations
 
+import base64
 import datetime as _dt
 import importlib.util
 import json
@@ -66,6 +94,10 @@ GIT_TIMEOUT = 15
 GH_TIMEOUT = 25
 
 MENTIONS = re.compile(r"\bgit\b|\bgh\b|\bgit\.exe\b|\bgh\.exe\b|GIT_", re.IGNORECASE)
+# Escapes, encoded PowerShell, variable command names, HTTP clients and hub can hide a route from
+# MENTIONS, so these also send the command to a full judgement.
+MAYBE = re.compile(r"\\|`|-e[nc]|\$\{?\w+\}?\s+\S|\bhub\b|github\.com|\bcurl\b|\bwget\b|"
+                   r"invoke-(?:rest|web)|\birm\b|\biwr\b", re.IGNORECASE)
 # HOME/USERPROFILE/XDG_CONFIG_HOME move the global config, so the global core.hooksPath disappears.
 PUSH_ENV = re.compile(r"^(?:GIT_CONFIG\w*|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|HOME|USERPROFILE|"
                       r"XDG_CONFIG_HOME)$", re.IGNORECASE)
@@ -76,6 +108,12 @@ TEXT_ENV = re.compile(
     r"Environment\]::SetEnvironmentVariable\(\s*['\"]" + _ENV_NAME + r"|"
     r"(?:Set-Item|New-Item|si|ni)\s+(?:-Path\s+)?['\"]?env:" + _ENV_NAME,
     re.IGNORECASE)
+REPO_VARS = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE")
+# An env statement earlier in the same command line: name and literal value.
+ENV_STATEMENT = re.compile(
+    r"(?:\$env:|\bexport\s+|\bset\s+)(\w+)\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([^\s;&|]*))",
+    re.IGNORECASE)
+ENV_CONFIG_ALIAS = re.compile(r"^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$", re.IGNORECASE)
 ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 # Commands whose arguments are data, never a command: their quoted arguments are not re-judged.
 PRINTERS = {"echo", "printf", "write-output", "write-host", "grep", "egrep", "fgrep", "rg", "ag",
@@ -132,6 +170,7 @@ class Cmd:
     remote: bool             # runs on another machine (ssh)
     raw: str
     fed: bool = False        # arguments also arrive on stdin (xargs)
+    shell: str = "bash"
 
 
 # ---------------------------------------------------------------- command reading
@@ -202,17 +241,110 @@ def _resolve_dir(base: str | None, target: str) -> str | None:
     return str(path)
 
 
-def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int = 0):
+def normalise_bash(text: str) -> str:
+    """Apply bash quote removal for backslashes: `--no-ve\\rify` and `pu\\sh` are what bash runs.
+
+    Outside quotes `\\X` is X; inside double quotes only `\\$ \\` \\" \\\\` and newline escape.
+    An escaped quote or `$` is re-emitted quoted so the tokenizer still reads it as a literal.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote == "'":
+            out.append(char)
+            if char == "'":
+                quote = None
+        elif char == "\\" and index + 1 < len(text):
+            nxt = text[index + 1]
+            if nxt == "\n":
+                index += 2
+                continue
+            if quote == '"' and nxt not in '$`"\\':
+                out.append(char)
+            elif quote == '"':
+                out.append(nxt)
+                index += 2
+                continue
+            else:
+                out.append({"'": '"\'"', '"': "'\"'", "$": "'$'", "`": "'`'"}.get(nxt, nxt))
+                index += 2
+                continue
+        else:
+            out.append(char)
+            if char in "'\"" and quote is None:
+                quote = char
+            elif char == quote:
+                quote = None
+        index += 1
+    return "".join(out)
+
+
+def normalise_powershell(text: str) -> str:
+    """Remove PowerShell backtick escapes outside single quotes: `--no-ver`ify` is `--no-verify`."""
+    out: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote == "'":
+            out.append(char)
+            if char == "'":
+                quote = None
+        elif char == "`" and index + 1 < len(text):
+            nxt = text[index + 1]
+            out.append(" " if nxt == "\n" else nxt)
+            index += 2
+            continue
+        else:
+            out.append(char)
+            if char in "'\"" and quote is None:
+                quote = char
+            elif char == quote:
+                quote = None
+        index += 1
+    return "".join(out)
+
+
+def normalise(text: str, shell: str) -> str:
+    if shell == "powershell":
+        return normalise_powershell(text)
+    if shell == "cmd":
+        return text.replace("^", "")
+    return normalise_bash(text)
+
+
+def decode_encoded_command(argv: list[str]) -> str | None:
+    """Body of `pwsh -EncodedCommand <base64 UTF-16LE>`; '' when the flag is absent, None if undecodable."""
+    for at, token in enumerate(argv[1:], start=1):
+        flag = token.lower().split(":", 1)[0]
+        if len(flag) >= 2 and flag.startswith("-e") and ("-encodedcommand".startswith(flag)
+                                                         or flag == "-ec"):
+            value = token.split(":", 1)[1] if ":" in token else (argv[at + 1] if at + 1 < len(argv)
+                                                                 else "")
+            try:
+                return base64.b64decode(value, validate=True).decode("utf-16-le")
+            except (ValueError, UnicodeDecodeError):
+                return None
+    return ""
+
+
+PS_ASSIGNMENT = re.compile(r"^\$[\w:{}]+\s*(?:[+\-*/]?=|$)")
+
+
+def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int = 0,
+                  shell: str = "bash"):
     """Every simple command the text would run, with its env prefix and working directory."""
     if depth > 6 or not text:
         return
     current = cwd
-    for line in executable_text(text).splitlines():
+    for line in executable_text(normalise(text, shell)).splitlines():
         for segment in _split_segments(line)[0::2]:
             if not segment.strip():
                 continue
             for inner in _substitutions(segment):
-                yield from iter_commands(inner, current, remote, depth + 1)
+                yield from iter_commands(inner, current, remote, depth + 1, shell)
             tokens = tokenize(segment)
             env: dict[str, str] = {}
             fed = False
@@ -253,47 +385,58 @@ def iter_commands(text: str, cwd: str | None, remote: bool = False, depth: int =
                 break
             if not tokens:
                 continue
+            if PS_ASSIGNMENT.match(tokens[0]) and (len(tokens) == 1 or "=" in tokens[0]
+                                                   or tokens[1].startswith("=")):
+                continue  # PowerShell `$x = ...` assigns; the value is data
             name = _command_name(tokens[0])
             argv = tokens
             if name in CD:
                 args = [t for t in argv[1:] if not t.startswith("-")]
                 current = _resolve_dir(current, args[0]) if args else str(Path.home())
                 continue
-            yield Cmd(name, argv, env, current, remote, segment, fed)
+            yield Cmd(name, argv, env, current, remote, segment, fed, shell)
             if name in PRINTERS:
                 continue
             if name in SHELLS and "-c" in argv:
                 at = argv.index("-c")
                 if at + 1 < len(argv):
-                    yield from iter_commands(argv[at + 1], current, remote, depth + 1)
+                    yield from iter_commands(argv[at + 1], current, remote, depth + 1, "bash")
                 continue
             if name in PWSH:
+                decoded = decode_encoded_command(argv)
+                if decoded is None:
+                    yield Cmd("<undecodable-encodedcommand>", argv, env, current, remote, segment,
+                              fed, "powershell")
+                elif decoded:
+                    yield from iter_commands(decoded, current, remote, depth + 1, "powershell")
                 for flag_at, token in enumerate(argv):
                     if token.lower() in ("-command", "-c"):
                         yield from iter_commands(" ".join(argv[flag_at + 1:]), current, remote,
-                                                 depth + 1)
+                                                 depth + 1, "powershell")
                         break
                 continue
             if name == "cmd":
                 for flag_at, token in enumerate(argv):
                     if token.lower() in ("/c", "/k"):
                         yield from iter_commands(" ".join(argv[flag_at + 1:]), current, remote,
-                                                 depth + 1)
+                                                 depth + 1, "cmd")
                         break
                 continue
             is_remote = remote or name in ("ssh", "plink")
             for token in argv[1:]:
                 if re.search(r"\s", token):
                     yield from iter_commands(token, None if is_remote else current, is_remote,
-                                             depth + 1)
+                                             depth + 1, "bash" if is_remote else shell)
 
 
 # ---------------------------------------------------------------- git / gh probes
 
-def _run(args: list[str], cwd: str | None, timeout: int = GIT_TIMEOUT) -> str | None:
+def _run(args: list[str], cwd: str | None, timeout: int = GIT_TIMEOUT,
+         env: dict[str, str] | None = None) -> str | None:
     try:
         result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
-                                errors="replace", timeout=timeout, check=False)
+                                errors="replace", timeout=timeout, check=False,
+                                env={**os.environ, **env} if env else None)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
@@ -321,19 +464,46 @@ def _norm(path: str | None) -> str:
     return os.path.normcase(os.path.normpath(os.path.expanduser(path))).rstrip("\\/")
 
 
-def _hook_chains_to_scan(path: Path) -> bool:
-    """The pre-push file exists, is a script, and (outside comments) calls the scan or the global hook."""
+CHAIN_FILE = Path(__file__).with_name("pre-push-chain.sh")
+
+
+def _global_hooks_dir() -> str | None:
+    return _run(["git", "config", "--global", "--get", "core.hooksPath"], None)
+
+
+def _global_hook_has_scan(path: Path) -> bool:
+    """The global pre-push is the canonical file in this repo; it must still name the scanner."""
     try:
-        if not path.is_file():
-            return False
         body = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
     code = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
-    code = code.replace("\\", "/").lower()
-    return bool(re.search(
-        r"pre-push-public-repo-scan|scripts/git-hooks/pre-push|"
-        r"config\s+--global\s+(?:--get\s+)?core\.hookspath", code))
+    return "pre-push-public-repo-scan" in code
+
+
+def _bytes_lf(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes().replace(b"\r\n", b"\n")
+    except OSError:
+        return None
+
+
+def _hook_chains_to_scan(path: Path, global_hooks: str | None) -> bool:
+    """A repo-local pre-push passes only when it is, byte for byte after CRLF->LF, the canonical
+    chain hook (hooks/pre-push-chain.sh) or a copy of the global pre-push itself.
+
+    Parsing the shell to decide "does it call the scan" lost to an `exit 0` line or an echo naming
+    the scan; exact bytes cannot be argued with. Any other content blocks.
+    """
+    local = _bytes_lf(path) if path.is_file() else None
+    if local is None:
+        return False
+    if local == _bytes_lf(CHAIN_FILE):
+        return True
+    if global_hooks:
+        canonical_global = _bytes_lf(Path(os.path.expanduser(global_hooks)) / "pre-push")
+        return canonical_global is not None and local == canonical_global
+    return False
 
 
 @dataclass
@@ -341,6 +511,7 @@ class Repo:
     top: str | None
     hooks: str | None
     git: list[str]
+    env: dict[str, str] | None = None
 
     def label(self) -> tuple[str, ...]:
         names = []
@@ -349,12 +520,12 @@ class Repo:
         return tuple(names)
 
 
-def open_repo(cwd: str, location: list[str]) -> Repo:
+def open_repo(cwd: str, location: list[str], env: dict[str, str] | None = None) -> Repo:
     git = ["git", "-C", cwd, *location]
-    top = _run([*git, "rev-parse", "--show-toplevel"], None) or _run([*git, "rev-parse",
-                                                                      "--absolute-git-dir"], None)
-    hooks = _run([*git, "rev-parse", "--path-format=absolute", "--git-path", "hooks"], None)
-    return Repo(top, hooks, git)
+    top = _run([*git, "rev-parse", "--show-toplevel"], None, env=env) or _run(
+        [*git, "rev-parse", "--absolute-git-dir"], None, env=env)
+    hooks = _run([*git, "rev-parse", "--path-format=absolute", "--git-path", "hooks"], None, env=env)
+    return Repo(top, hooks, git, env)
 
 
 def push_target_slug(repo: Repo, args: list[str]) -> str | None:
@@ -377,9 +548,10 @@ def push_target_slug(repo: Repo, args: list[str]) -> str | None:
         return slug_from_url(remote)
     if not remote:
         upstream = _run([*repo.git, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{push}"],
-                        None)
+                        None, env=repo.env)
         remote = upstream.split("/", 1)[0] if upstream else "origin"
-    return slug_from_url(_run([*repo.git, "remote", "get-url", "--push", remote], None))
+    return slug_from_url(_run([*repo.git, "remote", "get-url", "--push", remote], None,
+                              env=repo.env))
 
 
 def current_slug(cwd: str | None, repo_flag: str | None) -> str | None:
@@ -401,10 +573,29 @@ def _repo_needle(slug: str | None, repo: Repo | None) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names)) or ("<repository unresolved>",)
 
 
-def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int = 0) -> None:
+def _judge_text(text: str, cwd: str | None, cmd: Cmd, text_env: dict[str, str],
+                findings: list[Finding], depth: int) -> None:
+    for inner in iter_commands(text, cwd, cmd.remote, 1, "bash"):
+        judge(inner, text_env, findings, depth + 1)
+
+
+def _option_values(args: list[str], short: str, long: str) -> list[str]:
+    values = []
+    for at, token in enumerate(args):
+        if token in (short, long) and at + 1 < len(args):
+            values.append(args[at + 1])
+        elif token.startswith(long + "="):
+            values.append(token.split("=", 1)[1])
+        elif token.startswith(short) and len(token) > len(short) and not token.startswith("--"):
+            values.append(token[len(short):])
+    return values
+
+
+def judge_git(cmd: Cmd, text_env: dict[str, str], findings: list[Finding], depth: int = 0) -> None:
     argv = cmd.argv
     location: list[str] = []
     config: list[str] = []
+    config_env: list[str] = []
     index = 1
     while index < len(argv) and argv[index].startswith("-"):
         token = argv[index]
@@ -422,6 +613,7 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
             else:
                 config.append(nxt)
                 index += 2
+            config_env.append(config[-1])
         elif token in ("--git-dir", "--work-tree", "--namespace"):
             location += [token, nxt]
             index += 2
@@ -456,6 +648,32 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
             "write the push literally", [(cmd.raw.strip().lower(),)]))
         return
 
+    # Builtins that run a command of their own: judge that command too.
+    if depth < 3:
+        if sub == "submodule" and args[:1] == ["foreach"]:
+            rest = [a for a in args[1:] if a not in ("--recursive", "-q", "--quiet")]
+            _judge_text(" ".join(rest), None, cmd, text_env, findings, depth)
+        elif sub == "bisect" and args[:1] == ["run"]:
+            _judge_text(" ".join(args[1:]), cmd.cwd, cmd, text_env, findings, depth)
+        elif sub == "rebase":
+            for value in _option_values(args, "-x", "--exec"):
+                _judge_text(value, cmd.cwd, cmd, text_env, findings, depth)
+        elif sub == "difftool":
+            for value in _option_values(args, "-x", "--extcmd"):
+                _judge_text(value, cmd.cwd, cmd, text_env, findings, depth)
+
+    if sub and sub not in GIT_BUILTINS and sub not in ("push", "send-pack"):
+        env_cfg = sorted({n for n in (*cmd.env, *text_env) if ENV_CONFIG_ALIAS.match(n)}
+                         | {n for n in os.environ if ENV_CONFIG_ALIAS.match(n)})
+        alias_env = [c for c in config_env if c.split("=", 1)[0].strip().lower().startswith("alias.")]
+        if env_cfg or alias_env:
+            findings.append(Finding(
+                "alias-from-env", f"`{cmd.raw.strip()}` runs `git {sub}`, not a builtin, while git "
+                f"config comes from {', '.join(env_cfg + alias_env)}; the alias it resolves to "
+                "cannot be checked", "write the git subcommand literally",
+                [(cmd.raw.strip().lower(),)]))
+            return
+
     if sub and sub not in GIT_BUILTINS and sub not in ("push", "send-pack") and depth < 3:
         expansion = None
         for item in config:
@@ -468,9 +686,8 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
                               "--get", f"alias.{sub}"], None)
         if expansion:
             if expansion.startswith("!"):
-                for inner in iter_commands(expansion[1:] + " " + " ".join(args), cmd.cwd,
-                                           cmd.remote, 1):
-                    judge(inner, text_env, findings, depth + 1)
+                _judge_text(expansion[1:] + " " + " ".join(args), cmd.cwd, cmd, text_env,
+                            findings, depth)
                 return
             expanded = Cmd(cmd.name, ["git", *argv[1:index], *tokenize(expansion), *args],
                            cmd.env, cmd.cwd, cmd.remote, cmd.raw)
@@ -480,7 +697,7 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
     if sub not in ("push", "send-pack"):
         return
 
-    env_names = {name for name in cmd.env if PUSH_ENV.match(name)} | text_env
+    env_names = {name for name in (*cmd.env, *text_env) if PUSH_ENV.match(name)}
     for name in ("GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"):
         inherited = os.environ.get(name, "")
         if inherited and ("hookspath" in inherited.lower() or any(
@@ -495,10 +712,22 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
             [(cmd.raw.strip().lower(),)]))
     repo: Repo | None = None
     slug: str | None = None
-    if cmd.cwd and not cmd.remote and Path(cmd.cwd).is_dir():
-        repo = open_repo(cmd.cwd, location)
+    repo_env = {k: v for k, v in {**text_env, **cmd.env}.items() if k.upper() in REPO_VARS}
+    unresolvable_env = [k for k, v in repo_env.items() if not v or re.search(r"[$`%]", v)]
+    if cmd.cwd and repo_env:
+        repo_env = {k: str(Path(cmd.cwd) / local_path(v)) if not os.path.isabs(local_path(v))
+                    else local_path(v) for k, v in repo_env.items()}
+    if cmd.cwd and not cmd.remote and Path(cmd.cwd).is_dir() and not unresolvable_env:
+        repo = open_repo(cmd.cwd, location, repo_env or None)
         if repo.top:
             slug = push_target_slug(repo, args)
+    if repo_env and not cmd.remote and (unresolvable_env or repo is None or not repo.top):
+        findings.append(Finding(
+            "unknown-repo", f"`{cmd.raw.strip()}` pushes from the repository named by "
+            f"{', '.join(sorted(repo_env))}, which cannot be resolved here",
+            "push from the repository directory without GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR",
+            [(cmd.raw.strip().lower(),)]))
+        return
     needle = _repo_needle(slug, repo)
     where = (repo.top if repo and repo.top else cmd.cwd) or "an unresolved directory"
 
@@ -527,11 +756,11 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
         return
     if repo is None or not repo.top or not repo.hooks:
         return  # not a repository: git itself refuses the push
-    global_hooks = _run(["git", "config", "--global", "--get", "core.hooksPath"], None)
+    global_hooks = _global_hooks_dir()
     if global_hooks and _norm(repo.hooks) == _norm(global_hooks):
-        if _hook_chains_to_scan(Path(os.path.expanduser(global_hooks)) / "pre-push"):
+        if _global_hook_has_scan(Path(os.path.expanduser(global_hooks)) / "pre-push"):
             return
-    elif _hook_chains_to_scan(Path(repo.hooks) / "pre-push"):
+    elif _hook_chains_to_scan(Path(repo.hooks) / "pre-push", global_hooks):
         return
     visibility = repo_visibility(slug) if slug else None
     if visibility in ("PRIVATE", "INTERNAL"):
@@ -542,9 +771,9 @@ def judge_git(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int 
         f"repo {repo.top} uses hooks folder {hooks_dir} (global: {global_hooks or 'unset'}) and "
         f"its pre-push does not run the public leak scan; push target "
         f"{slug or 'unresolved'} is {visibility or 'of unknown visibility'}",
-        f"either `git -C \"{repo.top}\" config --unset core.hooksPath`, or add "
-        f"{Path(hooks_dir) / 'pre-push'} that ends with "
-        f"`exec \"{global_hooks or '<global hooksPath>'}/pre-push\" \"$@\"`",
+        f"copy {CHAIN_FILE} to {Path(hooks_dir) / 'pre-push'} unchanged (it runs the global "
+        f"pre-push and refuses the push without it), or `git -C \"{repo.top}\" config --unset "
+        "core.hooksPath`",
         [needle, ("push", "пуш")]))
 
 
@@ -581,7 +810,24 @@ def _flag_on(lowered: list[str], flag: str) -> bool:
                for a in lowered)
 
 
-def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
+FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field")
+
+
+def _api_fields(api_args: list[str]) -> list[str]:
+    """`key=value` of every -f/-F/--field/--raw-field, already unquoted by the tokenizer."""
+    values = []
+    for at, token in enumerate(api_args):
+        if token in FIELD_FLAGS and at + 1 < len(api_args):
+            values.append(api_args[at + 1])
+        elif token.startswith(("--field=", "--raw-field=")):
+            values.append(token.split("=", 1)[1])
+        elif token[:2] in ("-f", "-F") and not token.startswith("--") and len(token) > 2:
+            values.append(token[2:])
+    return [v.lower().replace(" ", "") for v in values]
+
+
+def judge_gh(cmd: Cmd, findings: list[Finding], text_env: dict[str, str] | None = None,
+             depth: int = 0) -> None:
     argv = cmd.argv
     sub = argv[1].lower() if len(argv) > 1 else ""
     verb = argv[2].lower() if len(argv) > 2 else ""
@@ -609,11 +855,25 @@ def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
         findings.append(Finding("repo-public", f"`gh repo create --public` creates {name} as a "
                                 "PUBLIC repo (with --push its content is published unscanned)",
                                 "create it with --private", [PUBLIC, (name, name.split("/")[-1])]))
-    elif sub == "gist" and verb == "create" and (_flag_on(lowered, "--public")
-                                                 or _flag_on(lowered, "-p")):
-        findings.append(Finding("gist-public", "`gh gist create --public` publishes files with no "
-                                "scan", "create a secret gist or a private repo",
-                                [("gist", "гист"), PUBLIC]))
+    elif sub == "gist" and verb == "create":
+        findings.append(Finding("gist-public", "`gh gist create` publishes files with no scan "
+                                "(a secret gist is still readable by anyone with its URL)",
+                                "keep the files in a private repo", [("gist", "гист")]))
+    elif sub == "alias" and verb == "set" and depth < 3:
+        pos = _positionals(args, {"--clobber"})
+        expansion = pos[1] if len(pos) > 1 else ""
+        nested: list[Finding] = []
+        if expansion.startswith("!") or "--shell" in lowered or "-s" in lowered:
+            for inner in iter_commands(expansion.lstrip("!"), cmd.cwd, cmd.remote, 1, "bash"):
+                judge(inner, text_env or {}, nested, depth + 1)
+        else:
+            judge_gh(Cmd("gh", ["gh", *tokenize(expansion)], cmd.env, cmd.cwd, cmd.remote, expansion),
+                     nested, text_env, depth + 1)
+        if nested:
+            findings.append(Finding("alias-set", f"`gh alias set {pos[0] if pos else ''}` defines a "
+                                    f"gated route ({', '.join(sorted({f.route for f in nested}))})",
+                                    "run the command itself so the guard can judge it",
+                                    [("alias",), (pos[0].lower() if pos else "alias",)]))
     elif sub == "gist" and verb == "edit" and ("--add" in lowered or "-a" in lowered
                                                or any(a.startswith("--add=") for a in lowered)):
         findings.append(Finding("gist-public", "`gh gist edit --add` adds files to a gist whose "
@@ -631,8 +891,10 @@ def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
                                       "--raw-field", "--input", "-q", "--jq", "-t", "--template",
                                       "--hostname", "--cache", "-p", "--preview"})
         path = pos[0] if pos else ""
-        path = re.sub(r"^https?://[^/]+/(?:api/v3/)?", "", path).lstrip("/").split("?", 1)[0]
-        text = cmd.raw.lower()
+        path = re.sub(r"^https?://[^/]+/(?:api/v3/)?", "", path).split("?", 1)[0]
+        path = re.sub(r"/{2,}", "/", path).strip("/")
+        field_values = _api_fields(api_args)
+        text = " ".join(argv).lower()
         if path.lower() == "graphql":
             if "createcommitonbranch" in text or any(a.startswith("--input") for a in api_args):
                 findings.append(Finding("api-write", "`gh api graphql` commit mutation (or a "
@@ -646,7 +908,7 @@ def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
                                         "content directly, past the pre-push scan",
                                         "commit and `git push` instead", [(path.lower(),)]))
             elif method == "PATCH" and re.fullmatch(r"repos/[^/]+/[^/]+/?", path, re.IGNORECASE) \
-                    and (re.search(r"visibility\s*=\s*public|private\s*=\s*false", text)
+                    and (any(v in ("visibility=public", "private=false") for v in field_values)
                          or any(a.startswith("--input") for a in api_args)):
                 findings.append(Finding("repo-public", f"`gh api -X PATCH {path}` can make the repo "
                                         "PUBLIC", "keep the repo private", [(path.lower(),), PUBLIC]))
@@ -662,11 +924,50 @@ def judge_gh(cmd: Cmd, findings: list[Finding]) -> None:
                                      (cmd.raw.strip().lower(),)]))
 
 
-def judge(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int = 0) -> None:
-    if cmd.name == "git":
+HTTP_CLIENTS = {"curl", "wget", "invoke-restmethod", "invoke-webrequest", "irm", "iwr"}
+GITHUB_WRITE_URL = re.compile(r"(?:api\.github\.com/+(?:repos|gists)|uploads\.github\.com)/*",
+                              re.IGNORECASE)
+WRITE_METHODS = {"PUT", "POST", "PATCH", "DELETE"}
+
+
+def judge_http(cmd: Cmd, findings: list[Finding]) -> None:
+    """curl/wget/Invoke-RestMethod writing to the GitHub API publish with no scan."""
+    argv = cmd.argv
+    urls = [a for a in argv[1:] if GITHUB_WRITE_URL.search(a)]
+    if not urls:
+        return
+    lowered = [a.lower() for a in argv[1:]]
+    method = (_opt_value(argv[1:], ("-X", "--request", "--method")) or "")
+    for at, token in enumerate(lowered):
+        if token in ("-method", "-m") and at + 1 < len(lowered):
+            method = argv[at + 2]
+    method = method.upper()
+    implied = any(a.startswith(("-d", "--data", "-f", "--form", "-t", "--upload-file", "--json",
+                                "--post-data", "--post-file", "--body-data", "--body-file",
+                                "-body", "-infile"))
+                  for a in lowered)
+    if method in WRITE_METHODS or (not method and implied):
+        findings.append(Finding("http-write", f"`{cmd.name}` sends {method or 'a body'} to "
+                                f"{urls[0]}, writing to GitHub past the pre-push scan",
+                                "commit and `git push` instead", [(urls[0].lower(),)]))
+
+
+def judge(cmd: Cmd, text_env: dict[str, str], findings: list[Finding], depth: int = 0) -> None:
+    raw_low = cmd.raw.lower()
+    if cmd.name == "<undecodable-encodedcommand>":
+        findings.append(Finding("encoded-command", "`-EncodedCommand` payload does not decode as "
+                                "base64 UTF-16LE, so it cannot be judged",
+                                "run the command as plain text", [(cmd.raw.strip().lower(),)]))
+    elif cmd.name.startswith("$") and re.search(r"\bpush\b|--no-veri|send-pack|hookspath", raw_low):
+        findings.append(Finding("dynamic-git", f"`{cmd.raw.strip()}` runs a command named by a "
+                                "variable with push arguments; it cannot be judged",
+                                "call git by name", [(cmd.raw.strip().lower(),)]))
+    elif cmd.name == "git":
         judge_git(cmd, text_env, findings, depth)
-    elif cmd.name == "gh":
-        judge_gh(cmd, findings)
+    elif cmd.name in ("gh", "hub"):
+        judge_gh(cmd, findings, text_env, depth)
+    elif cmd.name in HTTP_CLIENTS:
+        judge_http(cmd, findings)
     elif cmd.name not in PRINTERS:
         # Belt for launchers whose command is a quoted string (Start-Process git -ArgumentList '...').
         raw = cmd.raw.lower()
@@ -681,11 +982,15 @@ def judge(cmd: Cmd, text_env: set[str], findings: list[Finding], depth: int = 0)
                                     [("core.hookspath",)]))
 
 
-def evaluate(command: str, cwd: str | None) -> list[Finding]:
-    text_env = {m.group(next(i for i in range(1, 6) if m.group(i))).upper()
-                for m in TEXT_ENV.finditer(executable_text(command))}
+def evaluate(command: str, cwd: str | None, shell: str = "bash") -> list[Finding]:
+    plain = executable_text(normalise(command, shell))
+    text_env: dict[str, str] = {
+        m.group(next(i for i in range(1, 6) if m.group(i))).upper(): ""
+        for m in TEXT_ENV.finditer(plain)}
+    for m in ENV_STATEMENT.finditer(plain):
+        text_env[m.group(1).upper()] = next((g for g in m.groups()[1:] if g is not None), "")
     findings: list[Finding] = []
-    for cmd in iter_commands(command, cwd):
+    for cmd in iter_commands(command, cwd, shell=shell):
         judge(cmd, text_env, findings)
     unique: dict[tuple[str, str], Finding] = {}
     for item in findings:
@@ -750,15 +1055,19 @@ def main() -> None:
     if event.get("tool_name") not in ("Bash", "PowerShell"):
         allow()
     command = bash_command(event.get("tool_input", {}) or {})
-    if not command or not MENTIONS.search(command):
+    if not command or not (MENTIONS.search(command) or MAYBE.search(command)):
         allow()
     try:
-        findings = evaluate(command, str(event.get("cwd") or os.getcwd()))
+        shell = "powershell" if event.get("tool_name") == "PowerShell" else "bash"
+        findings = evaluate(command, str(event.get("cwd") or os.getcwd()), shell)
         if not findings:
             allow()
         prompt = _owner_prompt(event, command)
         blocked = unapproved(findings, prompt)
-    except Exception as exc:  # fail closed: the command mentions git/gh and was not judged
+    except Exception as exc:  # fail closed when the command names git/gh; else note and pass
+        if not MENTIONS.search(command):
+            log("WARN", HOOK, "error-pass", type(exc).__name__, command)
+            allow()
         log("BLOCK", HOOK, "error", type(exc).__name__, command)
         block(f"publish-bypass-guard could not judge this git/gh command ({type(exc).__name__}: "
               f"{exc}); blocked rather than passed unchecked.")
