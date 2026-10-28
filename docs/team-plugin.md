@@ -61,6 +61,11 @@ claude plugin install harness@aw-harness
 
 Without a GitHub SSH key set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` first.
 
+On Windows a long `CLAUDE_CONFIG_DIR` (for example a test profile deep in a temp
+folder) makes `marketplace add` fail with `Filename too long`: the clone path
+under `plugins/marketplaces/` passes the 260-character limit. Use a short profile
+path, or run `git config --global core.longpaths true`.
+
 ## Codex: one command
 
 Clone once to the canonical place, then update with one command:
