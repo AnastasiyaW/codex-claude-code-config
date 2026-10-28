@@ -271,6 +271,41 @@ class CoordinatorReview(unittest.TestCase):
         self.check("pwsh -e not-base64!!", "encoded-command", shell="powershell")
 
 
+class ThirdReview(unittest.TestCase):
+    """Third independent review of 9449f67 (HOLD): executed bypasses and one false positive."""
+
+    def check(self, command: str, route: str, cwd: Path | None = None, shell: str = "bash") -> None:
+        self.assertIn(route, routes(command, cwd, shell), command)
+
+    def test_1_wrapper_option_values(self) -> None:
+        for command in ("nice -n 5 git push", "timeout -s INT 60 git push", "env -u FOO git push",
+                        "ionice -c 3 git push", "stdbuf -o L git push", "sudo -u bob git push",
+                        "time -o t.log git push", "nohup git push", "command git push"):
+            self.check(command, "local-hooks", cwd=Fixture.unscanned)
+        self.check("nice -n 5 env GIT_DIR=../beta/.git git push", "local-hooks")
+        self.check("env -C ../beta git push", "local-hooks")
+        self.check("mywrap --flag git push", "unknown-shape")
+
+    def test_2_push_target_changed_in_the_same_command(self) -> None:
+        public = "https://github.com/acme/alpha.git"
+        self.check(f"git remote set-url origin {public} && git push", "local-hooks", cwd=Fixture.private)
+        self.check(f"git -c remote.origin.pushurl={public} push", "local-hooks", cwd=Fixture.private)
+        self.check(f"git config remote.origin.url {public}; git push", "local-hooks", cwd=Fixture.private)
+        self.check("git -c url.https://github.com/acme/alpha.pushInsteadOf=https://github.com/acme/secret push",
+                   "local-hooks", cwd=Fixture.private)
+
+    def test_3_gh_repo_env(self) -> None:
+        self.check("GH_REPO=acme/alpha gh release create v1", "release-public", cwd=Fixture.private)
+        self.check("export GH_REPO=acme/alpha; gh release create v1", "release-public", cwd=Fixture.private)
+        self.check("$env:GH_REPO='acme/alpha'; gh release upload v1 f", "release-public",
+                   cwd=Fixture.private, shell="powershell")
+
+    def test_4_start_process_workdir_and_dynamic_api_path(self) -> None:
+        self.check("Start-Process git -ArgumentList 'push origin main' -WorkingDirectory ../beta",
+                   "local-hooks", shell="powershell")
+        self.check("gh api -X PUT $P -f content=x", "dynamic-git")
+
+
 class MustPass(unittest.TestCase):
     def check(self, command: str, cwd: Path | None = None, shell: str = "bash") -> None:
         self.assertEqual(set(), routes(command, cwd, shell), command)
@@ -309,6 +344,14 @@ class MustPass(unittest.TestCase):
         self.check("git push origin HEAD:@{u}")
         self.check("git ls-files | xargs git add")
         self.check("git submodule foreach 'git status'")
+        # third review: quoted values of non-push git subcommands are data
+        self.check("git log --grep='git push --no-verify'")
+        self.check("git log -S 'git push --no-verify' --oneline")
+        self.check("git grep -e 'push --no-verify'")
+        self.check("git push", cwd=Fixture.private)
+        self.check("gh release create v1", cwd=Fixture.private)
+        self.check("nice -n 5 git push")
+        self.check("git remote -v && git push")
         self.check("git rebase -x 'npm test' main")
         self.check("curl https://api.github.com/repos/acme/alpha")
         self.check("$x = 'push done'; Write-Output $x", shell="powershell")
