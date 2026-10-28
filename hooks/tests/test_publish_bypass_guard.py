@@ -309,8 +309,46 @@ class ThirdReview(unittest.TestCase):
             self.check(command, "local-hooks", cwd=Fixture.unscanned)
         # Only the redirect target leaves the argument list; a flag after it is still seen.
         for command in ("git push > out.log --no-verify", "git push >out.log --no-verify",
-                        "git push 2>&1 --no-verify"):
+                        "git push 2>&1 --no-verify",
+                        # third review: a quoted `>` is an argument, not a redirection
+                        'git push -o ">" --no-verify origin main', 'git push --push-option=">" --no-verify',
+                        'git push --push-option "a>" --no-verify', "git push -o \\> --no-verify"):
             self.check(command, "push-no-verify", cwd=Fixture.private)
+        self.check('git -c "x.y=>" -c core.hooksPath=/dev/null push origin main', "hookspath-override")
+        self.check("git -c x.y=\\> -c core.hooksPath=/dev/null push origin main", "hookspath-override")
+
+    def test_1e_interpreter_code_is_not_shell(self) -> None:
+        # Live false block 2026-10-28: Python code in `python -c "..."` was re-read as shell, a line
+        # of it became an unknown command, and the module path in it holds `git` and `push`.
+        code = ("import importlib.util as u; s = u.spec_from_file_location('m', '../hooks/pre-push-public-repo-scan.py'); "
+                "m = u.module_from_spec(s); s.loader.exec_module(m); "
+                "print('mismatch:', [p for p in m.files('.git') if 'push' in p]); "
+                "print('policy problems:', m.private_policy_problems('..'))")
+        command = f'cd guard && python -I -c "{code}"; python test_x.py 2>&1 | tail -1; cd .. && git push -q origin main'
+        self.assertNotIn("unknown-shape", routes(command, Fixture.private), command)
+        self.assertEqual(routes(command, Fixture.private), set(), command)
+        # A literal git command inside the code is still judged as git.
+        self.check('python -c "import os; os.system(\'git push --no-verify\')"', "push-no-verify", cwd=Fixture.private)
+        # An interpreter that runs a wrapper with push words in its plain arguments is still unknown.
+        self.check("python wrapper.py git push", "unknown-shape")
+        self.check("python git push", "unknown-shape")
+        self.check('node -e "x()" git push', "unknown-shape")
+
+    def test_1f_stash_push_and_code_mentioning_push(self) -> None:
+        # Second live false block 2026-10-28: `git stash push` and Python code that names git and push.
+        for command in ('git stash push -m "msg"', "git stash push -- file",
+                        "cd . && python -I -c \"import subprocess; x = subprocess.run(['git', 'log']).stdout; "
+                        "print('git stash push saved', len(x), 'lines')\" && "
+                        'git stash push -q -m "live-folder sync" -- PROBLEMS.md hooks/a.py'):
+            self.assertEqual(routes(command, Fixture.private), set(), command)
+        self.check('python -I -c "print(1)" && git push --no-verify', "push-no-verify", cwd=Fixture.private)
+
+    def test_1g_redirection_edges(self) -> None:
+        self.assertEqual(pbg.tokenize("echo abc2>out next"), ["echo", "abc2", "next"])
+        self.assertEqual(pbg.tokenize("cmd 2>&- next"), ["cmd", "next"])
+        self.assertEqual(pbg.tokenize('cmd > "out log" next'), ["cmd", "next"])
+        self.check("2>err.log git push origin main", "local-hooks", cwd=Fixture.unscanned)
+        self.check('git push > "out log" --no-verify', "push-no-verify", cwd=Fixture.private)
 
     def test_1d_redirection_target_is_not_a_remote(self) -> None:
         # The redirect target must leave the argument list, or `out.log` reads as the remote and a
