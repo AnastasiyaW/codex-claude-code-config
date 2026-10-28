@@ -54,7 +54,9 @@ def get_remote_url(remote: str) -> str | None:
 
 def parse_github_slug(url: str) -> tuple[str, str] | None:
     """Return (owner, repo) for github.com URLs, or None."""
-    m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", url)
+    # Anchored to the host: `https://gitlab.com/x/github.com/o/r` is not GitHub.
+    m = re.match(r"(?:https?://(?:[^@/]+@)?|ssh://(?:[^@/]+@)?|git@)github\.com[:/]"
+                 r"([^/]+)/([^/]+?)(?:\.git)?/?$", url)
     if not m:
         return None
     return m.group(1), m.group(2)
@@ -62,10 +64,12 @@ def parse_github_slug(url: str) -> tuple[str, str] | None:
 
 def repo_is_public(owner: str, repo: str) -> bool | None:
     """Return True/False for public/private. None if gh unavailable."""
-    r = run(["gh", "api", f"repos/{owner}/{repo}", "--jq", ".private"])
+    r = run(["gh", "api", "--hostname", "github.com", f"repos/{owner}/{repo}", "--jq", ".private"])
     if r.returncode != 0:
         return None
-    return r.stdout.strip() == "false"
+    answer = r.stdout.strip()
+    # Only an explicit answer counts; empty or odd output must not read as "private".
+    return {"false": True, "true": False}.get(answer)
 
 
 def _self_hosted_git_conf() -> dict:
@@ -127,7 +131,7 @@ def gitea_repo_is_public(url: str) -> bool | None:
         return None
 
     host = re.sub(r"^https?://", "", base)
-    m = re.search(re.escape(host) + r"/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    m = re.match(r"https?://(?:[^@/]+@)?" + re.escape(host) + r"/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
     if not m:
         return None
 
@@ -147,37 +151,533 @@ def gitea_repo_is_public(url: str) -> bool | None:
     return not private
 
 
-EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+ZERO_SHA = "0" * 40
 
 
-def get_push_diff(remote_sha: str, local_sha: str, remote_name: str = "origin") -> str:
-    """Return the diff of exactly what this push adds.
+class ScanIncomplete(Exception):
+    """A git step needed to enumerate what the push publishes failed: not checked (exit 2)."""
 
-    git reports a new ref with remote_sha all-zero. Treating that as "diff against
-    the empty tree" rescans the whole repository as if every file were being added,
-    so a push carrying no new commits at all -- `main:refs/heads/tmp-check` pointing
-    at an already-published SHA -- is scanned as the entire history and can never
-    pass. Any pre-existing match in the tree then blocks every future new branch,
-    and the only way out is the bypass marker; a guard that is bypassed by default
-    has stopped guarding. So bound the range by what the remote already has.
-    """
-    if remote_sha and remote_sha != "0" * 40:
-        base = remote_sha
-    else:
-        r = run(["git", "rev-list", local_sha, "--not", f"--remotes={remote_name}"])
-        if r.returncode != 0:
-            # Cannot establish what the remote holds -- scan everything rather than
-            # nothing. Failing open here would silently disarm the guard.
-            base = EMPTY_TREE
-        else:
-            new_commits = r.stdout.split()
-            if not new_commits:
-                return ""  # ref moves onto published history; zero new objects
-            oldest = new_commits[-1]  # rev-list is newest-first
-            parent = run(["git", "rev-parse", "--verify", "--quiet", oldest + "^"])
-            base = parent.stdout.strip() or EMPTY_TREE  # oldest may be a root commit
-    r = run(["git", "diff", f"{base}..{local_sha}"])
+
+# Caller-controlled environment can replace or empty what git shows us: an external
+# diff program prints nothing, injected `-c` config sets diff.external or textconv.
+# refs/replace and grafts make log/cat-file show other objects than the ones push sends.
+_GIT_ENV_DROP = ("GIT_EXTERNAL_DIFF", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_DIFF_OPTS",
+                 "GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE")
+
+
+def _git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in list(env):
+        if key in _GIT_ENV_DROP or key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            del env[key]
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    return env
+
+
+def git_bytes(args: list[str], stdin: bytes | None = None, *, env: dict | None = None,
+              cwd: str | None = None) -> bytes:
+    """Run git for the scan; any non-zero exit raises ScanIncomplete (never an empty result)."""
+    cmd = ["git", "--no-replace-objects", "-c", "core.quotePath=false", *args]
+    try:
+        r = subprocess.run(cmd, input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL,
+                           capture_output=True, env=env or _git_env(), cwd=cwd)
+    except OSError as exc:
+        raise ScanIncomplete(f"git {args[0]} could not start: {exc}") from exc
+    if r.returncode != 0:
+        detail = r.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise ScanIncomplete(f"git {' '.join(args[:2])} exited {r.returncode}: "
+                             f"{detail[0] if detail else 'no stderr'}")
     return r.stdout
+
+
+def remote_advertised_shas(remote: str) -> set[str]:
+    """Object ids the push target itself advertises.
+
+    Local `refs/remotes/*` are not evidence: they go stale, can be written by hand,
+    and after `git remote set-url` private->public they describe the other server.
+    """
+    if not remote or remote.startswith("-"):
+        raise ScanIncomplete(f"no usable push target to ask for its refs: {remote!r}")
+    # argv[2] is already the rewritten push URL. ls-remote would apply url.*.insteadOf
+    # again and could ask a mirror; so run it outside the repository with no global or
+    # system config. A local path stays relative to the repository's cwd.
+    if os.path.exists(remote):
+        remote = os.path.abspath(remote)
+    env = {k: v for k, v in _git_env().items()
+           if not k.startswith(("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                                "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES"))}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
+    with tempfile.TemporaryDirectory(prefix="pre-push-ls-remote-", ignore_cleanup_errors=True) as neutral:
+        out = git_bytes(["ls-remote", remote], env=env, cwd=neutral).decode("utf-8", "replace")
+    shas = set()
+    for line in out.splitlines():
+        sha = line.split("\t", 1)[0].strip()
+        if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+            shas.add(sha)
+    return shas
+
+
+def _object_info(shas) -> dict[str, tuple[str, int]]:
+    """sha -> (type, size) for the shas present locally; absent ones are omitted."""
+    shas = sorted(set(shas))
+    if not shas:
+        return {}
+    out = git_bytes(["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+                    ("\n".join(shas) + "\n").encode())
+    info = {}
+    for line in out.decode("utf-8", "replace").splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[1] != "missing":
+            info[parts[0]] = (parts[1], int(parts[2]))
+    return info
+
+
+def _read_blobs(shas) -> dict[str, bytes]:
+    # simplification: whole blobs held in memory; stream through --batch if pushes grow past RAM
+    shas = sorted(set(shas))
+    if not shas:
+        return {}
+    out = git_bytes(["cat-file", "--batch"], ("\n".join(shas) + "\n").encode())
+    blobs, pos = {}, 0
+    while pos < len(out):
+        nl = out.index(b"\n", pos)
+        header = out[pos:nl].decode("ascii", "replace").split()
+        if len(header) != 3:
+            raise ScanIncomplete(f"unexpected cat-file header: {header}")
+        size = int(header[2])
+        blobs[header[0]] = out[nl + 1:nl + 1 + size]
+        pos = nl + 1 + size + 1
+    if set(blobs) != set(shas):
+        raise ScanIncomplete("cat-file did not return every changed blob")
+    return blobs
+
+
+# Binary files that may be published once their bytes pass the regex agent: only
+# formats walked structurally to the last byte. A signature alone let GIF + zlib(secret)
+# and wOF2 + zlib(file) through, so GIF, ICO, WebP, AVIF and every font format are
+# blocked until they get such a walk.
+_PNG = b"\x89PNG\r\n\x1a\n"
+SAFE_BINARY_MAGIC = {
+    ".png": lambda d: png_inspect(d)[0], ".apng": lambda d: png_inspect(d)[0],
+    ".jpg": lambda d: jpeg_structure_ok(d), ".jpeg": lambda d: jpeg_structure_ok(d),
+}
+_PNG_CHUNKS = {b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"cHRM", b"gAMA", b"iCCP", b"sBIT",
+               b"sRGB", b"cICP", b"mDCv", b"cLLi", b"tEXt", b"zTXt", b"iTXt", b"bKGD", b"hIST",
+               b"pHYs", b"sPLT", b"eXIf", b"tIME", b"acTL", b"fcTL", b"fdAT"}
+_INFLATE_LIMIT = 256 * 1024 * 1024
+
+
+def _inflate_whole(stream: bytes) -> bytes | None:
+    """One complete zlib stream with nothing after it, within the size limit; else None."""
+    import zlib
+    d = zlib.decompressobj()
+    try:
+        out = d.decompress(bytes(stream), _INFLATE_LIMIT)
+    except zlib.error:
+        return None
+    if d.unconsumed_tail or d.unused_data or not d.eof:
+        return None
+    return out
+
+
+def png_inspect(data: bytes) -> tuple[bool, list[str]]:
+    """Walk every chunk to IEND; inflate pixel and profile streams so their bytes are seen.
+
+    Not ok: unknown chunk type, short chunk, bytes after IEND, or a zlib stream that does
+    not decode completely (bytes hidden after the stream end).
+    """
+    if not data.startswith(_PNG):
+        return False, []
+    pos, texts, streams, frame = 8, [], [bytearray()], None
+    while pos + 12 <= len(data):
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind not in _PNG_CHUNKS or len(body) != length:
+            return False, texts
+        if kind == b"IDAT":
+            streams[0] += body
+        elif kind == b"fcTL":
+            frame = None
+        elif kind == b"fdAT":
+            if frame is None:
+                frame = bytearray()
+                streams.append(frame)
+            frame += body[4:]
+        elif kind == b"iCCP":
+            streams.append(bytearray(body.partition(b"\x00")[2][1:]))
+        elif kind == b"IEND":
+            ok = pos == len(data)
+            for stream in streams:
+                if not stream:
+                    continue
+                raw = _inflate_whole(stream)
+                if raw is None:
+                    return False, texts
+                texts += binary_strings(raw)
+            return ok, texts
+    return False, texts
+
+
+_JPEG_SEGMENTS_OK = {0xE0, 0xE1, 0xE2, 0xED, 0xEE, 0xFE}  # JFIF, Exif/XMP, ICC, IRB, Adobe, COM
+
+
+def jpeg_structure_ok(data: bytes) -> bool:
+    """Segments from SOI to EOI with nothing after; only known APPn segments."""
+    if not data.startswith(b"\xff\xd8"):
+        return False
+    pos, n = 2, len(data)
+    while pos < n:
+        if data[pos] != 0xFF:
+            return False
+        while pos < n and data[pos] == 0xFF:
+            pos += 1
+        if pos >= n:
+            return False
+        marker = data[pos]
+        pos += 1
+        if marker == 0xD9:
+            return pos == n
+        if 0xD0 <= marker <= 0xD7 or marker == 0x01:
+            continue
+        if 0xE0 <= marker <= 0xEF and marker not in _JPEG_SEGMENTS_OK:
+            return False
+        if pos + 2 > n:
+            return False
+        seglen = int.from_bytes(data[pos:pos + 2], "big")
+        if seglen < 2 or pos + seglen > n:
+            return False
+        pos += seglen
+        if marker == 0xDA:  # entropy-coded data runs to the next real marker
+            while pos < n:
+                if data[pos] == 0xFF and pos + 1 < n and data[pos + 1] != 0x00 \
+                        and not 0xD0 <= data[pos + 1] <= 0xD7:
+                    break
+                pos += 2 if data[pos] == 0xFF else 1
+    return False
+
+
+def binary_texts(data: bytes) -> list[str]:
+    """Everything readable in a binary blob: strings, PNG text chunks, inflated PNG streams."""
+    texts = binary_strings(data)
+    if data.startswith(_PNG):
+        texts += _png_text_chunks(data) + png_inspect(data)[1]
+    return texts
+
+
+def binary_strings(data: bytes) -> list[str]:
+    """Printable runs (>= 6) as ASCII and as UTF-16LE in both alignments, like strings(1).
+
+    Each run is its own line, so a \\b at the edge of a pattern is not defeated by the
+    byte glued to it (a PNG CRC, a UTF-16 code unit that happens to be a letter).
+    """
+    runs = [m.group(0).decode("ascii") for m in re.finditer(rb"[\x20-\x7e\t]{6,}", data)]
+    for chunk in (data, data[1:]):
+        runs += [m.group(0).decode("utf-16-le") for m in re.finditer(rb"(?:[\x20-\x7e]\x00){6,}", chunk)]
+    return runs
+
+
+def _is_binary(data: bytes) -> bool:
+    return b"\x00" in data[:8000]  # git's own buffer_is_binary heuristic
+
+
+def _png_text_chunks(data: bytes) -> list[str]:
+    """Text chunks as separate strings: compressed ones are invisible to a byte scan, and
+    in plain ones the CRC glued to the value can defeat a \\b at the end of a pattern."""
+    import zlib
+    texts, pos = [], 8
+    while pos + 8 <= len(data):
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        try:
+            if kind == b"tEXt":
+                texts.append(body.replace(b"\x00", b" ").decode("latin-1"))
+            elif kind == b"iTXt" and body.partition(b"\x00")[2][:1] == b"\x00":
+                texts.append(body.replace(b"\x00", b" ").decode("utf-8", "replace"))
+            elif kind == b"zTXt":
+                keyword, _, rest = body.partition(b"\x00")
+                texts.append((keyword + b" " + zlib.decompress(rest[1:])).decode("latin-1"))
+            elif kind == b"iTXt":
+                keyword, _, rest = body.partition(b"\x00")
+                if rest[:1] == b"\x01":
+                    _, _, rest2 = rest[2:].partition(b"\x00")
+                    _, _, rest3 = rest2.partition(b"\x00")
+                    texts.append((keyword + b" " + zlib.decompress(rest3)).decode("latin-1"))
+        except (zlib.error, IndexError):
+            texts.append("<undecodable compressed PNG text chunk>")
+    return texts
+
+
+@dataclass
+class PushMaterial:
+    text: str           # normalized unified-diff document: commit/tag messages + per-commit patches
+    findings: list      # Finding objects already established (binary bytes, structure)
+
+
+def _message_section(label: str, lines: list[str]) -> list[str]:
+    return [f"diff --message {label}", f"+++ b/<{label}>", f"@@ -0,0 +1,{len(lines)} @@",
+            *("+" + ln for ln in lines)]
+
+
+def _diff_sections(lines: list[str], nonce: str):
+    """Yield (kind, line) where kind is msg-start/msg/msg-end/header/hunk/content.
+
+    In a hunk every content line starts with ' ', '+', '-' or '\\'; only 'diff ' and
+    '@' lines leave it. So an added line reading '++ b/x' is content, never a header.
+    """
+    mode = "header"
+    for line in lines:
+        if line.startswith(nonce + "-commit "):
+            mode = "msg"
+            yield "msg-start", line
+        elif mode == "msg":
+            if line == nonce + "-end":
+                mode = "header"
+                yield "msg-end", line
+            else:
+                yield "msg", line
+        elif line.startswith("diff "):
+            mode = "header"
+            yield "header", line
+        elif line.startswith("@"):
+            mode = "hunk"
+            yield "hunk", line
+        elif mode == "hunk":
+            yield "content", line
+        else:
+            yield "header", line
+
+
+def own_email() -> str:
+    """The pusher's configured address: the one identity e-mail that is not a finding."""
+    try:
+        r = subprocess.run(["git", "config", "--get", "user.email"], capture_output=True,
+                           stdin=subprocess.DEVNULL, env=_git_env())
+    except OSError as exc:
+        raise ScanIncomplete(f"git config could not start: {exc}") from exc
+    if r.returncode not in (0, 1):
+        raise ScanIncomplete(f"git config user.email exited {r.returncode}")
+    return r.stdout.decode("utf-8", "replace").strip()
+
+
+def _identity_line(line: str, own: str) -> str:
+    """Full identity (name and address) is scanned; only the pusher's own address is masked."""
+    line = re.sub(r" \d+ [+-]\d{4}$", "", line)
+    return line.replace(f"<{own}>", "<own-address>") if own else line
+
+
+_SIG_BEGIN = {"-----BEGIN PGP SIGNATURE-----": "-----END PGP SIGNATURE-----",
+              "-----BEGIN SSH SIGNATURE-----": "-----END SSH SIGNATURE-----",
+              "-----BEGIN SIGNED MESSAGE-----": "-----END SIGNED MESSAGE-----"}
+
+
+def signature_texts(lines: list[str]) -> list[str] | None:
+    """Strings of a well-formed ASCII-armoured signature body; None if it is anything else."""
+    import base64
+    import binascii
+    lines = [ln.strip() for ln in lines]
+    if len(lines) < 3 or _SIG_BEGIN.get(lines[0]) != lines[-1]:
+        return None
+    body = []
+    for ln in lines[1:-1]:
+        if not ln or re.fullmatch(r"=[A-Za-z0-9+/]{4}", ln):
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", ln):
+            return None
+        body.append(ln)
+    try:
+        decoded = base64.b64decode("".join(body), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return binary_strings(decoded)
+
+
+def _commit_header_lines(sha: str, own: str, findings: list) -> list[str]:
+    """Published commit headers that %B does not show.
+
+    Extra headers (`x-note`, `mergetag`) and full identities are scanned. A signature is
+    accepted only as well-formed armour, and the strings of its decoded body are scanned.
+    """
+    raw = git_bytes(["cat-file", "commit", sha]).decode("utf-8", "replace")
+    header = raw.split("\n\n", 1)[0].split("\n")
+    out: list[str] = []
+    sig: list[str] | None = None
+
+    def _close_sig() -> None:
+        texts = signature_texts(sig)
+        if texts is None:
+            findings.append(Finding(f"<commit-header {sha}>", 0, "structure:malformed-signature",
+                                    (sig[0] if sig else "")[:40], "secret"))
+            out.extend(sig)
+        else:
+            # Armour lines are base64 by syntax, yet an access key id or a home path are valid
+            # base64 too: the raw lines are scanned as well as the decoded strings.
+            out.extend(sig[1:-1] + texts)
+
+    for line in header:
+        if line.startswith(" ") and sig is not None:
+            sig.append(line[1:])
+            continue
+        if sig is not None:
+            _close_sig()
+            sig = None
+        if line.startswith(("gpgsig ", "gpgsig-sha256 ")):
+            sig = [line.split(" ", 1)[1]]
+            continue
+        if line.startswith(("tree ", "parent ")):
+            continue
+        if line.startswith(("author ", "committer ")):
+            line = _identity_line(line, own)
+        elif own:
+            line = line.replace(f"<{own}>", "<own-address>")
+        out.append(line)
+    if sig is not None:
+        _close_sig()
+    return out
+
+
+def collect_push_material(push_lines: list[str], remote: str) -> PushMaterial:
+    """Everything this push would publish that the target does not already have.
+
+    Every commit is scanned on its own (an added-then-deleted key nets to an empty
+    diff), with its message; annotated tags are scanned as objects; merges as dense
+    combined diffs, so content no parent had is shown. Binary blobs are read as bytes.
+    """
+    tips = []
+    for line in push_lines:
+        if not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            raise ScanIncomplete(f"malformed pre-push line: {line!r}")
+        if parts[1] != ZERO_SHA:
+            tips.append((parts[1], parts[2]))
+    if not tips:
+        return PushMaterial("", [])
+
+    # The remote ref names are published even when no object is new.
+    findings: list[Finding] = []
+    ref_names = [ref for _, ref in tips]
+    for ref in ref_names:
+        for pattern, preview, kind in scan_text(ref):
+            findings.append(Finding(f"<ref name {ref}>", 0, pattern, preview, kind))
+    doc: list[str] = _message_section("pushed ref names", ref_names)
+
+    advertised = remote_advertised_shas(remote)
+    have = set(_object_info(advertised))  # only locally present ids can bound a walk
+    own = own_email()
+    commit_tips: list[str] = []
+    for sha, ref in tips:
+        obj = sha
+        for _ in range(64):
+            if obj in have:
+                break  # already published on the target
+            info = _object_info([obj])
+            if obj not in info:
+                raise ScanIncomplete(f"pushed object {obj} for {ref} is not in this repository")
+            kind = info[obj][0]
+            if kind == "tag":
+                text = git_bytes(["cat-file", "tag", obj]).decode("utf-8", "replace")
+                head, _, body = text.partition("\n\n")
+                header = head.split("\n")
+                doc += _message_section(f"tag-object {obj} {ref}",
+                                        [_identity_line(ln, own) if ln.startswith("tagger ") else ln
+                                         for ln in header] + body.split("\n"))
+                target = next((ln.split()[1] for ln in header if ln.startswith("object ")), None)
+                if not target:
+                    raise ScanIncomplete(f"tag object {obj} has no target")
+                obj = target
+                continue
+            if kind == "commit":
+                commit_tips.append(obj)
+            else:
+                findings.append(Finding(ref, 0, "structure:non-commit-ref", f"{kind} {obj[:12]}", "secret"))
+            break
+        else:
+            raise ScanIncomplete(f"tag chain from {sha} is deeper than 64")
+
+    if commit_tips:
+        revs_only = ("\n".join(commit_tips + ["^" + s for s in sorted(have)]) + "\n").encode()
+        commits = git_bytes(["rev-list", "--stdin"], revs_only).decode().split()
+        for sha in commits:
+            doc += _message_section(f"commit-header {sha}", _commit_header_lines(sha, own, findings))
+        import secrets as _secrets
+        nonce = "pre-push-" + _secrets.token_hex(16)
+        revs = ("\n".join(commit_tips + ["^" + s for s in sorted(have)]) + "\n").encode()
+        raw_log = git_bytes([
+            "log", "--stdin", "-p", "--cc", "--root", "-a", "--no-ext-diff", "--no-textconv",
+            "--no-color", "--full-index", "--no-renames", "--no-relative", "--no-show-signature",
+            "--src-prefix=a/", "--dst-prefix=b/", "--encoding=UTF-8",
+            f"--format={nonce}-commit %H%n%B%n{nonce}-end",
+        ], revs).decode("utf-8", "replace")
+        lines = raw_log.split("\n")  # not splitlines(): \x0c or \x1c inside a line must not start a new one
+
+        # Pass 1: the post-image blob of every changed file, with its paths.
+        blob_paths: dict[str, list[str]] = {}
+        pending = None
+        for kind, line in _diff_sections(lines, nonce):
+            if kind != "header":
+                continue
+            if line.startswith("diff "):
+                pending = None
+            elif line.startswith("index "):
+                new = line.split()[1].split("..")[-1]
+                pending = None if set(new) == {"0"} else new
+            elif line.startswith("+++ ") and pending:
+                path = line[4:]
+                blob_paths.setdefault(pending, []).append(path[2:] if path.startswith("b/") else path)
+        # Gitlinks (submodule commits) are not objects of this repository.
+        present = {sha for sha, (t, _) in _object_info(blob_paths).items() if t == "blob"}
+        blobs = _read_blobs(present)
+        binary = {sha: data for sha, data in blobs.items() if _is_binary(data)}
+
+        for sha, data in binary.items():
+            paths = sorted(set(blob_paths[sha]))
+            hint = ", ".join(paths)
+            texts = [data.decode("latin-1"), "\n".join(binary_texts(data))]
+            for text in texts:
+                for f in agent_a_regex("\n".join("+" + ln for ln in text.split("\n"))):
+                    if f.kind == "pii" and all(_is_exempt(p) for p in paths):
+                        continue
+                    findings.append(Finding(hint, 0, f.pattern, f.preview, f.kind))
+            for p in paths:
+                ext = os.path.splitext(p)[1].lower()
+                magic = SAFE_BINARY_MAGIC.get(ext)
+                if magic is None or not magic(data):
+                    findings.append(Finding(p, 0, "binary:not-a-structurally-valid-png-or-jpeg",
+                                            f"{len(data)} bytes, blob {sha[:12]}", "secret"))
+
+        # Pass 2: the document both agents read. Messages become added lines of a
+        # pseudo-file; binary hunks are replaced by a note (their bytes were scanned above).
+        msg: list[str] = []
+        msg_sha = ""
+        skipping = False
+        for kind, line in _diff_sections(lines, nonce):
+            if kind == "msg-start":
+                msg, msg_sha = [], line.split()[1]
+            elif kind == "msg":
+                msg.append(line)
+            elif kind == "msg-end":
+                while msg and msg[-1] == "":
+                    msg.pop()
+                doc += _message_section(f"commit-message {msg_sha}", msg)
+            elif kind == "header":
+                if line.startswith("diff "):
+                    skipping = False
+                elif line.startswith("index "):
+                    new = line.split()[1].split("..")[-1]
+                    if new in binary:
+                        skipping = True
+                        doc.append(line)
+                        doc += _message_section(f"binary-strings {new} ({len(binary[new])} bytes)",
+                                                binary_texts(binary[new]))
+                        continue
+                doc.append(line)
+            elif not skipping:
+                doc.append(line)
+    return PushMaterial("\n".join(doc), findings)
 
 
 def pushed_material_problems(push_lines: list[str], remote_name: str = "origin") -> list[str] | None:
@@ -212,7 +712,7 @@ SECRET_PATTERNS = {
     "aws_access_key_id_assign": r"AWS_ACCESS_KEY_ID\s*=\s*([A-Z0-9]{20})",
     "aws_secret_assign": r"AWS_SECRET_ACCESS_KEY\s*=\s*[\"']?([A-Za-z0-9+/]{35,50})[\"']?",
     "aws_akia": r"\b(AKIA[0-9A-Z]{16})\b",
-    "github_pat": r"\b(ghp_[A-Za-z0-9]{36,})\b",
+    "github_token": r"\b(gh[oprsu]_[A-Za-z0-9]{36,})\b",
     "github_fine_grained": r"\b(github_pat_[A-Za-z0-9_]{80,})\b",
     "stripe_live": r"\b(sk_live_[0-9a-zA-Z]{24,})\b",
     "stripe_test": r"\b(sk_test_[0-9a-zA-Z]{24,})\b",
@@ -296,32 +796,133 @@ _EXEMPT_PATHS = _load_exempt_paths()
 def _is_exempt(path: str) -> bool:
     """True when `path` is a declared marker list.
 
-    Matches the path as the diff spells it, and its basename, so an entry written
-    as `sync-manifest.json` is still recognised in a subdirectory. Exemption
-    covers NAME findings only: a credential inside one of these files is still a
-    credential, and secret patterns keep running there.
+    Full repo-relative path only: a basename match made every README.md in every
+    subdirectory exempt. Exemption covers PII findings only: a credential inside
+    one of these files is still a credential, and secret patterns keep running there.
     """
     if not _EXEMPT_PATHS:
         return False
-    norm = path.replace("\\", "/").lstrip("./")
-    base = norm.rsplit("/", 1)[-1]
-    for p in _EXEMPT_PATHS:
-        q = p.replace("\\", "/").lstrip("./")
-        if norm == q or base == q or norm.endswith("/" + q):
-            return True
-    return False
+
+    def _norm(p: str) -> str:
+        p = p.replace("\\", "/")
+        while p.startswith("./"):
+            p = p[2:]
+        return p
+
+    norm = _norm(path)
+    return any(norm == _norm(p) for p in _EXEMPT_PATHS)
 
 
 # Personal data patterns (for public repos)
+_OCTET = r"0*(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"  # octets may carry leading zeros
 PII_PATTERNS = {
     "ssh_private_paths": r"(~/\.ssh/id_[a-z0-9_]+(?!\.pub))",
-    "home_user_path": r"(/home/[a-z0-9_-]+/|C:\\Users\\[a-zA-Z0-9_-]+\\|/Users/[a-zA-Z0-9_-]+/)",
+    # Windows homes also in JSON-escaped (\\) and double-escaped (\\\\) spellings and with /.
+    # No trailing separator needed and any letter case, Unix and Windows spellings.
+    "home_user_path": (r"(/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+"
+                       r"|\b[A-Za-z]:(?:\\{1,4}|/)Users(?:\\{1,4}|/)[A-Za-z0-9_.-]+)"),
     "ssh_ports_internal": r"\bssh\s+.*-p\s+(2222|4000[0-7])\b",
+    "email_address": r"\b([A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b",
+    # RFC 1918 + RFC 6598 carrier-grade NAT (100.64/10, used by tailnets).
+    "private_ipv4": (rf"(?<![\d.])((?:0*10\.{_OCTET}|0*172\.0*(?:1[6-9]|2\d|3[01])|0*192\.0*168"
+                     rf"|0*100\.0*(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))(?:\.{_OCTET}){{2}})(?!\.?\d)"),
 }
 
 _PRIVATE_NAMES = _load_private_names()
 if _PRIVATE_NAMES:
     PII_PATTERNS["private_names"] = r"\b(" + "|".join(_PRIVATE_NAMES) + r")\b"
+
+# Bot/no-reply identities and RFC 2606 / 6761 reserved domains name no real person.
+_EMAIL_ALLOWED = {"noreply@anthropic.com", "noreply@github.com", "git@github.com"}
+_EMAIL_ALLOWED_DOMAINS = ("users.noreply.github.com", "example.com", "example.org", "example.net",
+                          "example", "invalid", "test", "localhost")
+
+
+def _email_allowed(addr: str) -> bool:
+    addr = addr.lower()
+    domain = addr.rsplit("@", 1)[1]
+    if addr in _EMAIL_ALLOWED or re.fullmatch(r"\d+(?:\.\d+)?x\.[a-z0-9]+", domain):
+        return True  # icon@2x.png is an asset name, not an address
+    return any(domain == d or domain.endswith("." + d) for d in _EMAIL_ALLOWED_DOMAINS)
+
+
+_B64_RUN = re.compile(r"[A-Za-z0-9+/_-]{24,}={0,2}")
+
+
+def _base64_pem(text: str) -> str | None:
+    """A base64 run that decodes to a PEM armour header (a key wrapped to dodge the regex)."""
+    import base64
+    import binascii
+    for m in _B64_RUN.finditer(text):
+        run_ = m.group(0).rstrip("=").replace("-", "+").replace("_", "/")
+        for offset in range(4):  # a glued prefix shifts the alignment
+            part = run_[offset:]
+            part = part[: len(part) - len(part) % 4]
+            try:
+                decoded = base64.b64decode(part)
+            except (binascii.Error, ValueError):
+                continue
+            if b"-----BEGIN " in decoded:
+                return m.group(0)
+    return None
+
+
+def _compile_checks():
+    checks = [(n, re.compile(p), "secret") for n, p in SECRET_PATTERNS.items()]
+    for n, p in PII_PATTERNS.items():
+        flags = re.IGNORECASE if n == "private_names" else 0
+        checks.append((f"pii:{n}", re.compile(p, flags), "pii"))
+    return checks
+
+
+_CHECKS = _compile_checks()
+
+
+# Look-alike letters folded to Latin after NFKC (which already maps full-width forms such
+# as U+FF20 to "@"): Cyrillic and Greek letters that render like Latin ones.
+_CONFUSABLES = str.maketrans(
+    "\u0430\u0435\u043e\u0440\u0441\u0443\u0445\u0455\u0456\u0458\u0501\u04bb\u04cf\u051b\u051d\u043a"
+    "\u0410\u0412\u0415\u041a\u041c\u041d\u041e\u0420\u0421\u0422\u0425\u0405\u0406\u0408\u04ae"
+    "\u03bf\u03b1\u03bd\u03c1\u0391\u0392\u0395\u0396\u0397\u0399\u039a\u039c\u039d\u039f\u03a1\u03a4\u03a5\u03a7",
+    "aeopcyxsijdhlqwk"
+    "ABEKMHOPCTXSIJY"
+    "oavpABEZHIKMNOPTYX")
+
+
+def normalized_variant(text: str) -> str | None:
+    """NFKC plus confusable folding, or None when that changes nothing."""
+    if text.isascii():
+        return None
+    import unicodedata
+    folded = unicodedata.normalize("NFKC", text).translate(_CONFUSABLES)
+    return folded if folded != text else None
+
+
+def scan_text(text: str) -> list[tuple[str, str, str]]:
+    """(pattern, preview, kind) for every check that fires on `text` or its normalized form."""
+    hits = []
+    variants = [text]
+    folded = normalized_variant(text)
+    if folded is not None:
+        variants.append(folded)
+    for name, rx, kind in _CHECKS:
+        found = None
+        for variant in variants:
+            for m in rx.finditer(variant):
+                val = m.group(1) if m.groups() else m.group(0)
+                if name == "pii:email_address" and _email_allowed(val):
+                    continue
+                found = val
+                break
+            if found is not None:
+                break
+        if found is not None:
+            preview = (found[:6] + "...") if kind == "secret" and len(found) > 6 else found[:40]
+            hits.append((name, preview, kind))
+    pem = _base64_pem(text)
+    if pem:
+        hits.append(("base64_pem_block", pem[:6] + "...", "secret"))
+    return hits
 
 
 @dataclass
@@ -334,44 +935,56 @@ class Finding:
 
 
 def agent_a_regex(diff: str) -> list[Finding]:
-    """Scan added lines (+) for credential/PII patterns."""
+    """Scan added lines, file names and message lines for credential/PII patterns.
+
+    Unified and dense-combined (merge) diffs: the hunk header's run of '@' gives the
+    prefix width. Inside a hunk only 'diff ' and '@' lines leave it, so an added line
+    that reads '++ b/x' is scanned as content instead of being taken for a header.
+    """
     findings: list[Finding] = []
     current_file = "?"
     line_no = 0
-    for line in diff.splitlines():
-        # Track current file
-        m = re.match(r"^\+\+\+ b/(.+)", line)
-        if m:
-            current_file = m.group(1)
-            line_no = 0
+    width = 1
+    in_hunk = False
+
+    def _scan(text: str, where: str, at: int) -> None:
+        for pattern, preview, kind in scan_text(text):
+            if kind == "pii" and _is_exempt(where):
+                continue
+            findings.append(Finding(file_hint=where, line=at, pattern=pattern, preview=preview, kind=kind))
+
+    for line in diff.split("\n"):  # not splitlines(): \x0c inside an added line must not split it
+        if line.startswith("diff "):
+            in_hunk = False
+            # An empty new file has no '+++' line; its name is only here.
+            m = re.match(r"^diff --(?:git a/.* b/|cc |combined )(.*)$", line)
+            if m:
+                current_file = m.group(1)
+                _scan(current_file, current_file, 0)
             continue
-        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)", line)
+        m = re.match(r"^(@{2,}) (?:-\S+ )+\+(\d+)", line)
         if m:
-            line_no = int(m.group(1)) - 1
+            in_hunk, width = True, len(m.group(1)) - 1
+            line_no = int(m.group(2)) - 1
             continue
-        if line.startswith("+") and not line.startswith("+++"):
-            line_no += 1
-            added = line[1:]
-            for name, pat in SECRET_PATTERNS.items():
-                m2 = re.search(pat, added)
-                if m2:
-                    val = m2.group(1) if m2.groups() else m2.group(0)
-                    findings.append(Finding(
-                        file_hint=current_file, line=line_no, pattern=name,
-                        preview=val[:6] + "..." if len(val) > 6 else val,
-                        kind="secret",
-                    ))
-            if not _is_exempt(current_file):
-                for name, pat in PII_PATTERNS.items():
-                    m2 = re.search(pat, added)
-                    if m2:
-                        findings.append(Finding(
-                            file_hint=current_file, line=line_no, pattern=f"pii:{name}",
-                            preview=(m2.group(0))[:40],
-                            kind="pii",
-                        ))
-        elif line.startswith(" ") or line.startswith("-"):
-            line_no += 0 if line.startswith("-") else 1
+        if not in_hunk:
+            m = re.match(r"^\+\+\+ (.*)", line)
+            if m:
+                path = m.group(1)
+                current_file = path[2:] if path.startswith("b/") else path
+                line_no = 0
+                _scan(current_file, current_file, 0)  # a file name is published too
+                continue
+            if line.startswith("--- ") or not line.startswith("+"):
+                continue
+            prefix, body = "+", line[1:]  # bare added line outside any header: scan it
+        else:
+            prefix, body = line[:width], line[width:]
+        if "-" in prefix:
+            continue
+        line_no += 1
+        if "+" in prefix:
+            _scan(body, current_file, line_no)
     return findings
 
 
@@ -396,6 +1009,8 @@ BLOCK criteria (any one = unsafe):
 - Cloud storage bucket names with access details
 - Any value that looks like a random alphanumeric string ≥32 chars (likely token)
 - Base64 blobs ≥100 chars (may encode secrets)
+
+Sections headed `diff --message` are commit or tag messages; they are published too.
 
 A `<hex-digest-40>` or `<hex-digest-64>` placeholder replaced a git SHA or SHA-256 value
 that its line labels as a hash; it is not a credential.
@@ -483,6 +1098,34 @@ def mask_labelled_hashes(diff: str) -> tuple[str, int]:
     return head + diff[_MASK_SCAN_LIMIT:], count
 
 
+AGENT_B_CHUNK_CHARS = 120_000
+AGENT_B_MAX_CHUNKS = 8  # ~1M chars; a bigger public push is blocked with a message, not sampled
+
+
+def split_for_review(text: str, limit: int = AGENT_B_CHUNK_CHARS) -> list[str]:
+    """Whole-line chunks of at most `limit` chars that together are exactly `text`."""
+    chunks: list[str] = []
+    cur: list[str] = []
+    size = 0
+    pieces = text.split("\n")
+    for i, line in enumerate(pieces):
+        piece = line + ("\n" if i < len(pieces) - 1 else "")
+        while len(piece) > limit:
+            if cur:
+                chunks.append("".join(cur))
+                cur, size = [], 0
+            chunks.append(piece[:limit])
+            piece = piece[limit:]
+        if cur and size + len(piece) > limit:
+            chunks.append("".join(cur))
+            cur, size = [], 0
+        cur.append(piece)
+        size += len(piece)
+    if cur and "".join(cur):
+        chunks.append("".join(cur))
+    return chunks
+
+
 def agent_b_claude(diff: str) -> dict | None:
     """Invoke Claude subprocess for semantic review. Returns None if unavailable."""
     claude = find_claude_cli()
@@ -492,8 +1135,12 @@ def agent_b_claude(diff: str) -> dict | None:
     if masked:
         print(f"[pre-push] Agent B: {masked} labelled 40/64-hex digest(s) shown to the reviewer "
               f"as <hex-digest-N>", file=sys.stderr)
-    # Truncate very long diffs to avoid context blowup
-    payload = diff if len(diff) < 120_000 else diff[:120_000] + "\n[... diff truncated for review ...]"
+    if len(diff) > AGENT_B_CHUNK_CHARS:
+        # Never truncate: an unseen tail is an unreviewed tail. main() chunks first.
+        print(f"[pre-push] Agent B: payload of {len(diff)} chars exceeds one review "
+              f"({AGENT_B_CHUNK_CHARS}); not reviewed", file=sys.stderr)
+        return None
+    payload = diff
     # Agent B would otherwise reproduce Agent A's false positive on the deny list:
     # these files name private things because naming them is their job.
     exempt_note = ""
@@ -734,49 +1381,57 @@ def main() -> int:
     else:
         print("[pre-push] material policy not configured; mandatory regex and semantic checks remain active", file=sys.stderr)
     if not push_lines:
-        # Called manually without stdin — scan against origin/HEAD
-        local_sha = run(["git", "rev-parse", "HEAD"]).stdout.strip()
-        remote_ref = run(["git", "rev-parse", f"{remote_name}/HEAD"]).stdout.strip() or ""
-        diff = get_push_diff(remote_ref, local_sha, remote_name)
+        # Called by hand without stdin: treat it as pushing HEAD to a new ref.
+        try:
+            head = git_bytes(["rev-parse", "--verify", "HEAD"]).decode().strip()
+        except ScanIncomplete as exc:
+            print(f"[pre-push] cannot resolve HEAD ({exc}) — push blocked (not checked)", file=sys.stderr)
+            return 2
+        scan_lines = [f"HEAD {head} refs/heads/manual-scan {ZERO_SHA}"]
     else:
-        # Concatenate diffs of all pushed refs
-        diffs = []
-        for line in push_lines:
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            local_sha, remote_sha = parts[1], parts[3]
-            if local_sha == "0" * 40:
-                continue  # delete
-            diffs.append(get_push_diff(remote_sha, local_sha, remote_name))
-        diff = "\n".join(diffs)
+        scan_lines = push_lines
+    try:
+        material = collect_push_material(scan_lines, remote_url or remote_name)
+    except ScanIncomplete as exc:
+        print(f"[pre-push] cannot enumerate what this push publishes: {exc} — "
+              "push blocked (not checked)", file=sys.stderr)
+        return 2
 
-    if not diff.strip():
-        print("[pre-push] empty diff — skipping", file=sys.stderr)
+    if not material.text.strip() and not material.findings:
+        print("[pre-push] nothing the remote does not already have — skipping", file=sys.stderr)
         return 0
 
-    # --- Agent A ---
-    a_findings = agent_a_regex(diff)
+    # --- Agent A --- (always over the full text; never truncated)
+    a_findings = list(material.findings) + agent_a_regex(material.text)
     if a_findings:
         print(f"\n[pre-push] ❌ Agent A (regex) BLOCKED — {len(a_findings)} finding(s):", file=sys.stderr)
         for f in a_findings[:20]:
             print(f"  [{f.kind:6s}] {f.pattern:28s} in {f.file_hint}:{f.line} → {f.preview}", file=sys.stderr)
+        if any(f.pattern.startswith("binary:") for f in a_findings):
+            print("[pre-push] only PNG/APNG and JPEG files that parse to their last byte may be "
+                  "published to a public repo; the binary files listed above are blocked.", file=sys.stderr)
         print("\n[pre-push] rotate leaked values, redact, retry.", file=sys.stderr)
         return 1
 
-    # --- Agent B ---
-    print(f"[pre-push] Agent A passed, invoking Agent B (Claude semantic)...", file=sys.stderr)
-    b_result = agent_b_claude(diff)
-    if b_result is None:
-        print(
-            "[pre-push] Agent B unavailable (claude CLI missing or timeout) — "
-            "public push blocked",
-            file=sys.stderr,
-        )
+    # --- Agent B --- (every chunk reviewed, or the push is blocked)
+    chunks = split_for_review(material.text)
+    if len(chunks) > AGENT_B_MAX_CHUNKS:
+        print(f"[pre-push] push is {len(material.text)} chars = {len(chunks)} review chunks, over the "
+              f"limit of {AGENT_B_MAX_CHUNKS}; the semantic reviewer cannot see all of it — public push "
+              "blocked (not checked). Push in smaller pieces.", file=sys.stderr)
         return 2
-    if b_result["verdict"] == "BLOCK":
-        print(f"\n[pre-push] ❌ Agent B (Claude) BLOCKED — {b_result['reason']}", file=sys.stderr)
-        return 1
+    print(f"[pre-push] Agent A passed, invoking Agent B (Claude semantic) on {len(chunks)} chunk(s)...",
+          file=sys.stderr)
+    for index, chunk in enumerate(chunks, 1):
+        b_result = agent_b_claude(chunk)
+        if b_result is None:
+            print(f"[pre-push] Agent B unavailable on chunk {index}/{len(chunks)} (claude CLI missing, "
+                  "timeout or oversize) — public push blocked", file=sys.stderr)
+            return 2
+        if b_result["verdict"] == "BLOCK":
+            print(f"\n[pre-push] ❌ Agent B (Claude) BLOCKED on chunk {index}/{len(chunks)} — "
+                  f"{b_result['reason']}", file=sys.stderr)
+            return 1
 
     print(f"[pre-push] ✅ both agents passed — push allowed", file=sys.stderr)
     return 0
@@ -905,7 +1560,7 @@ def self_test() -> int:
         _EXEMPT_PATHS = ["sync-manifest.json", "guard/check_split.py"]
         print("exempt paths:")
         check("declared name matches", _is_exempt("sync-manifest.json"), True)
-        check("matches in a subdirectory", _is_exempt("config/sync-manifest.json"), True)
+        check("same basename elsewhere is not exempt", _is_exempt("config/sync-manifest.json"), False)
         check("nested declared path matches", _is_exempt("guard/check_split.py"), True)
         check("unrelated file not exempt", _is_exempt("docs/note.md"), False)
         check("substring is not a match", _is_exempt("not-sync-manifest.jsonx"), False)
@@ -916,10 +1571,12 @@ def self_test() -> int:
         home_hit = "/" + "home/someone/private"
         key_hit = "AKIA" + "IOSFODNN7EXAMPLE"
         sample = (
+            "diff --git a/sync-manifest.json b/sync-manifest.json\n"
             "+++ b/sync-manifest.json\n"
             "@@ -0,0 +1,2 @@\n"
             f"+{home_hit}\n"
             f"+{key_hit}\n"
+            "diff --git a/docs/note.md b/docs/note.md\n"
             "+++ b/docs/note.md\n"
             "@@ -0,0 +1 @@\n"
             f"+{home_hit}\n"
@@ -934,29 +1591,33 @@ def self_test() -> int:
         _EXEMPT_PATHS = saved_exempt
 
     # --- push range ------------------------------------------------------------
-    # A new ref arrives with remote_sha all-zero. Basing the diff on the empty
-    # tree rescans the whole repository, so a ref that carries no new commits is
-    # scanned as the entire history.
+    # The range is bounded by what the push target itself advertises (ls-remote),
+    # never by local tracking refs.
     print("push range:")
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         cwd0 = os.getcwd()
+        bare = os.path.join(td, "remote.git")
+        work = os.path.join(td, "work")
         try:
-            os.chdir(td)
-            run(["git", "init", "-q", "-b", "main"])
+            run(["git", "init", "-q", "--bare", bare])
+            run(["git", "init", "-q", "-b", "main", work])
+            os.chdir(work)
             # Neutralise the global hooksPath so this repo's commits do not run the
             # machine's real guards.
             run(["git", "config", "core.hooksPath", os.path.join(td, "no-hooks")])
             run(["git", "config", "user.email", "selftest@example.invalid"])
             run(["git", "config", "user.name", "selftest"])
+            run(["git", "config", "commit.gpgsign", "false"])
             with open("a.txt", "w", encoding="utf-8") as fh:
                 fh.write("one\n")
             run(["git", "add", "a.txt"])
             run(["git", "commit", "-qm", "c1"])
             sha1 = run(["git", "rev-parse", "HEAD"]).stdout.strip()
-            run(["git", "update-ref", "refs/remotes/origin/main", sha1])
+            run(["git", "push", "-q", bare, "main"])
 
-            check("published sha on a new ref yields no diff",
-                  get_push_diff("0" * 40, sha1), "")
+            check("published sha on a new ref yields only its ref name",
+                  "diff --git" in collect_push_material([f"x {sha1} refs/heads/tmp {ZERO_SHA}"], bare).text,
+                  False)
 
             with open("b.txt", "w", encoding="utf-8") as fh:
                 fh.write("two\n")
@@ -964,11 +1625,9 @@ def self_test() -> int:
             run(["git", "commit", "-qm", "c2"])
             sha2 = run(["git", "rev-parse", "HEAD"]).stdout.strip()
 
-            new_ref_diff = get_push_diff("0" * 40, sha2)
+            new_ref = collect_push_material([f"x {sha2} refs/heads/tmp {ZERO_SHA}"], bare).text
             check("new ref scans only the new commit",
-                  ("b.txt" in new_ref_diff) and ("a.txt" not in new_ref_diff), True)
-            check("known remote sha still scans the range",
-                  "b.txt" in get_push_diff(sha1, sha2), True)
+                  ("b/b.txt" in new_ref) and ("b/a.txt" not in new_ref), True)
         finally:
             os.chdir(cwd0)
 
