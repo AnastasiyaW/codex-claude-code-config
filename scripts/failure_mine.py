@@ -13,10 +13,12 @@ WHAT IT READS
 Claude Code session transcripts: JSONL, one object per line, top level only
 (default root `~/.claude/projects`, glob `*/*.jsonl`; override with --root).
 
-Failure events:
-  * error      - a tool_result with `is_error: true`;
+Failure events (each tool_result is classified once):
   * hook_block - a tool_result whose text starts with `PreToolUse:` or
-                 `PostToolUse:` and contains "hook error" or "blocked";
+                 `PostToolUse:` and contains "hook error" or "blocked". A hook
+                 block usually also carries `is_error: true`; it is still one
+                 event, classified as hook_block (takes precedence);
+  * error      - any other tool_result with `is_error: true`;
   * repeat     - the same tool call (tool name + identical input JSON) made
                  3 or more times in one session (recorded once, at the 3rd call).
 
@@ -37,9 +39,13 @@ Usage:
   python failure_mine.py [--root DIR] [--top N] [--out FILE] [--include-single]
   python failure_mine.py --self-test
 
-Exit: 0 ran and found clusters; 1 ran and found none (also: self-test has a
-failing check); 2 nothing could be read (no files, all unreadable, bad
-arguments, or --out inside the repository).
+Exit (house contract, three states):
+  0 ran, nothing to report (no clusters);
+  3 ran, clusters found (findings);
+  2 not checked: nothing readable (no files, all unreadable), bad arguments,
+    or --out inside the repository.
+--self-test exits 0 when every check behaves, 1 when any check fails. Its
+exit 1 is never a normal result of a mining run, so the two cannot be confused.
 
 NEXT STEP (not done by this script)
 -----------------------------------
@@ -154,10 +160,12 @@ def mine_file(path: Path, stats: dict) -> list[dict]:
                 elif item.get("type") == "tool_result":
                     tool = tool_names.get(item.get("tool_use_id"), "unknown")
                     text = result_text(item.get("content"))
-                    if item.get("is_error") is True:
-                        events.append(_event(session, tool, "error", normalise(text), text))
+                    # One result is classified once. A hook block arrives as is_error: true,
+                    # so the hook check comes first and takes precedence over the generic error.
                     if is_hook_block(text):
                         events.append(_event(session, tool, "hook_block", normalise(text), text))
+                    elif item.get("is_error") is True:
+                        events.append(_event(session, tool, "error", normalise(text), text))
     return events
 
 
@@ -212,7 +220,7 @@ def scan(root: Path, include_single: bool, top: int) -> tuple[dict, int]:
         "clusters": rows[:top],
         "note": NOTE,
     }
-    return report, (0 if rows else 1)
+    return report, (3 if rows else 0)
 
 
 def self_test() -> int:
@@ -231,14 +239,14 @@ def self_test() -> int:
             line_use("a1", "Bash", {"command": "rm x"}),
             line_result("a1", "Error: file C:\\Users\\proj\\abc12ef9 not found at line 42", True),
             line_use("a2", "Bash", {"command": "ls"}),
-            line_result("a2", "PreToolUse:Bash hook error: blocked by policy 7f3a9b2c"),
+            line_result("a2", "PreToolUse:Bash hook error: blocked by policy 7f3a9b2c", True),
             *[line_use(f"e{i}", "Edit", edit) for i in range(3)],
         ],
         "s2": [
             line_use("b1", "Bash", {"command": "cat"}),
             line_result("b1", "Error: file /opt/app/q/zz9 not found at line 7", True),
             line_use("b2", "Bash", {"command": "cat2"}),
-            line_result("b2", "PreToolUse:Bash hook error: blocked by policy 0badc0de"),
+            line_result("b2", "PreToolUse:Bash hook error: blocked by policy 0badc0de", True),
             *[line_use(f"f{i}", "Edit", {**edit, "file_path": "/c/d.py"}) for i in range(3)],
         ],
         # single-session noise: must be dropped by default, kept with --include-single
@@ -267,6 +275,26 @@ def self_test() -> int:
                        and by_key[err_key]["sessions_count"] == 2))
         checks.append(("hook block across 2 sessions clusters", hook_key in by_key
                        and by_key[hook_key]["sessions_count"] == 2))
+        # Realistic hook block (is_error true): one result must give one event, not two.
+        checks.append(("hook block with is_error true counted once per result", hook_key in by_key
+                       and by_key[hook_key]["count"] == 2
+                       and by_key[hook_key]["samples"][0]["kind"] == "hook_block"
+                       and all(s["kind"] == "hook_block" for s in by_key[hook_key]["samples"])))
+        checks.append(("hook block is not also an error cluster", not any(
+            c["signature"].startswith("pretooluse:") and c["tool"] == "Bash"
+            and any(s["kind"] == "error" for s in c["samples"]) for c in report.get("clusters", []))))
+        # Unit controls for is_hook_block: mutation probe targets this function.
+        hook_true = ["PreToolUse:Bash hook error: x", "PostToolUse:Write blocked by policy",
+                     "  PreToolUse:Bash hook error: leading space", "PreToolUse:Bash hook error"]
+        hook_false = ["the file was blocked by the firewall in normal prose",
+                      "PostToolUse:Write completed successfully",
+                      "hook error mentioned without a hook prefix",
+                      "PreToolUse:Bash finished with exit 0 and no problems",
+                      ""]
+        checks.append(("is_hook_block: real hook messages are blocks",
+                       all(is_hook_block(t) for t in hook_true)))
+        checks.append(("is_hook_block: ordinary 'blocked' prose is not a hook block",
+                       not any(is_hook_block(t) for t in hook_false)))
         checks.append(("3x identical call detected across 2 sessions", edit_key in by_key
                        and by_key[edit_key]["sessions_count"] == 2))
         checks.append(("single-session error dropped by default", not any(
@@ -274,7 +302,7 @@ def self_test() -> int:
         checks.append(("single-session 3x repeat dropped by default", ("Read", REPEAT_SIGNATURE)
                        not in by_key))
         checks.append(("2x repeat is not an event", ("Grep", REPEAT_SIGNATURE) not in by_key))
-        checks.append(("exit 0 when clusters found", code == 0))
+        checks.append(("exit 3 when clusters found", code == 3))
 
         wide, _ = scan(root, include_single=True, top=50)
         wide_keys = {(c["tool"], c["signature"]) for c in wide.get("clusters", [])}
@@ -293,7 +321,7 @@ def self_test() -> int:
         (clean / "ok.jsonl").write_text(line_use("x", "Bash", {"command": "ok"}) + "\n"
                                         + line_result("x", "fine") + "\n", encoding="utf-8")
         _, code_clean = scan(base / "clean", include_single=False, top=5)
-        checks.append(("clean transcript -> exit 1 (nothing found)", code_clean == 1))
+        checks.append(("clean transcript -> exit 0 (ran, nothing to report)", code_clean == 0))
 
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
