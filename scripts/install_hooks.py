@@ -290,10 +290,14 @@ def _save_settings(path: Path, data: dict, dry_run: bool) -> None:
         print(f"  [dry-run] would write {path}")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Backup existing
+    # .json.bak holds the previous run; .json.bak-first keeps the pre-installer file,
+    # which a daily re-run (codex_update.py) would otherwise overwrite on day two.
     if path.exists():
-        backup = path.with_suffix(".json.bak")
-        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        current = path.read_text(encoding="utf-8")
+        first = path.with_suffix(".json.bak-first")
+        if not first.exists():
+            first.write_text(current, encoding="utf-8")
+        path.with_suffix(".json.bak").write_text(current, encoding="utf-8")
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
                    encoding="utf-8")

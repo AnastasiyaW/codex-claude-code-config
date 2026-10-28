@@ -1,0 +1,15 @@
+{
+  "name": "aw-harness",
+  "description": "Public marketplace for this repository: the harness plugin tracks the main branch commit by commit.",
+  "owner": {
+    "name": "AnastasiyaW",
+    "url": "https://github.com/AnastasiyaW"
+  },
+  "plugins": [
+    {
+      "name": "harness",
+      "source": "./",
+      "description": "Safety hooks, skills, review agents, workflows, and an index of the working rules."
+    }
+  ]
+}
