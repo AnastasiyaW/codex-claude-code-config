@@ -14,6 +14,7 @@ import datetime as _dt
 import json
 import os
 import re
+import stat
 import time
 import sys
 from pathlib import Path
@@ -551,8 +552,9 @@ def _mask_printed_arguments(line: str, start_depth: int = 0,
 # commit message was read as commands, and a print redirected to a file never
 # qualified. This pass reads the WHOLE command with bash quote rules and blanks
 # two shapes only: the quoted arguments of a message command, and the quoted
-# arguments of echo/printf whose one output is a plain file that nothing else in
-# the command can run. It masks nothing at all when it cannot read the command
+# arguments of echo/printf whose one output is a plain file, when that print is
+# the whole command: any other segment could create a link at the target first,
+# which no check at hook time can see (review of f758e24). It masks nothing at all when it cannot read the command
 # for certain: a substitution or backtick outside single quotes, a here-doc,
 # `$'...'`, or a backslash before a quote (bash and PowerShell end that string
 # at different places, so the masked run could be live PowerShell).
@@ -561,31 +563,18 @@ _GIT_GLOBAL_WITH_VALUE = {"-C", "--git-dir", "--work-tree", "--namespace"}
 _GIT_GLOBAL_FLAGS = {"--no-pager", "-P", "--no-replace-objects", "--literal-pathspecs",
                      "--no-optional-locks"}
 _PRINTERS = {"echo", "printf", "write-output"}
-# What may share a command with a masked print: nothing here can run a file.
-_FILE_INERT = {"git", "gh", "cd", "pushd", "popd", "set-location", "echo", "printf",
-               "write-output", "ls", "dir", "pwd", "true", "mkdir"}
-# `add` is absent: a configured clean filter reads every added file, and `git add -A`
-# never names the file it picks up.
-_GIT_FILE_INERT = {"commit", "tag", "push", "status", "log", "diff", "show", "fetch",
-                   "branch", "switch", "rev-parse"}
 # Words that open a compound command or rebind stdout for later commands: a
 # message inside `{ ...; } | sh` or after `exec > x.sh` is output that runs
 # (review 2026-10-28: `{ true; git tag -l --format='P'; } | sh` ran P).
 _COMPOUND_OR_EXEC = {"{", "}", "if", "then", "else", "elif", "fi", "do", "done", "while", "until",
                      "for", "case", "esac", "select", "coproc", "!", "[[", "time", "exec"}
-_CHANGES_DIRECTORY = {"cd", "pushd", "popd", "set-location"}
 # echo/printf options that still print; `printf -v NAME` assigns instead (review 2026-10-28).
 _PRINT_OPTIONS = {"-n", "-e", "-E", "-ne", "-en", "--"}
-# Targets are an allowlist (review of e73a804): a denylist of hook, profile and rc
-# names let settings.json hooks, systemd units, cron files and fish config through.
-# Relative, no dot-directory except the leading .claude/tmp/, inert extension only.
-_INERT_EXTENSIONS = {"txt", "md", "log", "msg", "csv"}
-# Inert extension, yet another program or agent reads the file as instructions (review of ccda9e8).
-_INSTRUCTION_NAMES = {"claude.md", "agents.md", "gemini.md", "cmakelists.txt"}
-_INSTRUCTION_TXT_PREFIXES = ("requirements", "constraints")
-_INSTRUCTION_FOLDERS = {".claude", ".codex", ".agents", "skills", "rules", "hooks"}
+# A printed payload is data only inside the agent's scratch folders. Three review rounds
+# of name lists (e73a804, ccda9e8, f758e24) showed that "a .md/.txt write is inert" is
+# false, so the premise is gone: elsewhere the payload stays visible to the guards.
+_SCRATCH_PREFIX = ".claude/tmp/"
 _NOT_BASH_QUOTING = re.compile("[`‘’‚‛“”„]")
-_GH_FILE_INERT = {"pr", "issue", "release", "repo"}
 _MESSAGE_FILE_FLAGS = {"-F", "--file", "--body-file", "--notes-file"}
 # A name defined in the same command could turn `git` or `printf` into anything.
 _REBINDS_A_NAME = {"alias", "set-alias", "new-alias", "sal", "nal", "function", "filter"}
@@ -751,44 +740,49 @@ def _harmless_redirect(op: str, target: str) -> bool:
 
 
 def _plain_file_target(path: str) -> bool:
-    """A relative text file that no shell, hook, scheduler or settings loader runs."""
-    if not _PLAIN_TARGET.fullmatch(path) or path[:1] in "/\\" or ":" in path:
+    """A file inside a scratch folder that no link redirects anywhere else."""
+    if not _PLAIN_TARGET.fullmatch(path) or ":" in os.path.splitdrive(path)[1]:
         return False
-    if not _inert_relative_path(path):
+    location = _scratch_location(path)
+    if location is None:
         return False
-    # A symlink (the file or a folder on the way) can point at .bashrc or outside the project.
-    base = os.path.realpath(_CURRENT_EVENT.get("cwd") or os.getcwd())
-    try:
-        resolved = os.path.relpath(os.path.realpath(os.path.join(base, path)), base)
-    except ValueError:
+    current, parts, free = location
+    if any(not part for part in parts) or any(part.startswith(".") for part in parts[free:]):
         return False
-    return _inert_relative_path(resolved)
+    for index, part in enumerate(parts, 1):
+        current = os.path.join(current, part)
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            return True
+        except (OSError, ValueError):
+            return False
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            return False
+        if not stat.S_ISDIR(info.st_mode):
+            # A second hard link makes this write land in some other file too.
+            return index == len(parts) and stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+    return False
 
 
-def _inert_relative_path(path: str) -> bool:
-    parts = path.lower().replace("\\", "/").split("/")
-    name = parts[-1]
-    if name in _INSTRUCTION_NAMES or (name.startswith(_INSTRUCTION_TXT_PREFIXES) and name.endswith(".txt")):
-        return False
-    if name.endswith(".md") and _INSTRUCTION_FOLDERS.intersection(parts[:-1]):
-        return False
-    if parts[:2] == [".claude", "tmp"]:
-        parts = parts[2:]
-    if not parts or any(not part or part.startswith(".") for part in parts):
-        return False
-    stem, _, extension = parts[-1].rpartition(".")
-    return bool(stem) and extension in _INERT_EXTENSIONS
+def _scratch_location(path: str) -> tuple[str, list[str], int] | None:
+    """(folder to walk from, parts below it, first part that may not be a dot-name)."""
+    if os.path.isabs(path):
+        normalized = os.path.normcase(path)
+        for root in _temp_roots():
+            prefix = os.path.normcase(root).rstrip("\\/") + os.sep
+            if normalized.startswith(prefix):
+                return root, re.split(r"[\\/]", path[len(prefix):]), 0
+        return None
+    if path.replace("\\", "/").lower().startswith(_SCRATCH_PREFIX):
+        return _CURRENT_EVENT.get("cwd") or os.getcwd(), re.split(r"[\\/]", path), 2
+    return None
 
 
-def _cannot_run_a_file(values: list[str]) -> bool:
-    if not values:
-        return True
-    name = values[0].lower()
-    if name in ("git", "git.exe"):
-        return _git_subcommand(values) in _GIT_FILE_INERT
-    if name in ("gh", "gh.exe"):
-        return len(values) > 1 and values[1] in _GH_FILE_INERT
-    return name in _FILE_INERT
+def _temp_roots() -> list[str]:
+    import tempfile
+    roots = [tempfile.gettempdir(), os.environ.get("TEMP", ""), os.environ.get("TMP", "")]
+    return [root for root in roots if os.path.isabs(root)]
 
 
 def _print_target(segment: dict) -> str | None:
@@ -799,21 +793,6 @@ def _print_target(segment: dict) -> str | None:
         return None
     target = outputs[0][1]["value"]
     return target if _plain_file_target(target) else None
-
-
-def _mentions(segment: dict, name: str) -> bool:
-    """Does this segment name the file anywhere except as a message-file flag value?"""
-    values = [word["value"] for word in segment["words"]]
-    message = _is_message_command(values)
-    for position, value in enumerate(values):
-        if name not in value.lower():
-            continue
-        flag = values[position - 1] if position else ""
-        if message and (flag in _MESSAGE_FILE_FLAGS
-                        or value.split("=", 1)[0] in _MESSAGE_FILE_FLAGS):
-            continue
-        return True
-    return any(name in target["value"].lower() for _, target in segment["redirects"])
 
 
 def _mask_message_data(command: str) -> str:
@@ -831,7 +810,7 @@ def _mask_message_data(command: str) -> str:
             or any(segment["sep"] == "|" for segment in segments)):
         return command
     spans: list[tuple[int, int]] = []
-    for number, segment in enumerate(segments):
+    for segment in segments:
         values = [word["value"] for word in segment["words"]]
         if not values or segment["depth"]:
             continue
@@ -844,20 +823,10 @@ def _mask_message_data(command: str) -> str:
                           and values[position - 1] not in _MESSAGE_FILE_FLAGS
                           for run in word["runs"]]
             continue
-        if values[0].lower() not in _PRINTERS or any(
+        if len(segments) != 1 or values[0].lower() not in _PRINTERS or any(
                 value.startswith("-") and value not in _PRINT_OPTIONS for value in values):
             continue
-        # A relative target after a cd names a file this check cannot place.
-        if any(earlier["words"] and earlier["words"][0]["value"].lower() in _CHANGES_DIRECTORY
-               for earlier in segments[:number]):
-            continue
-        target = _print_target(segment)
-        if target is None:
-            continue
-        name = re.split(r"[\\/]+", target.lower())[-1]
-        others = [other for index, other in enumerate(segments) if index != number]
-        if all(_cannot_run_a_file([word["value"] for word in other["words"]])
-               and not _mentions(other, name) for other in others):
+        if _print_target(segment) is not None:
             spans += [run for word in segment["words"][1:] for run in word["runs"]]
     for start, end in sorted(spans, reverse=True):
         command = command[:start] + " " + command[end:]

@@ -14,6 +14,7 @@ import importlib.util
 import os
 import pathlib
 import sys
+import tempfile
 
 HOOKS = pathlib.Path(os.environ.get("HOOKS_DIR", pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(HOOKS))
@@ -40,21 +41,41 @@ DATA = [
      "measured 2026-10-28: multi-line message naming transfer tools"),
     ('git commit -m "hcg: rmdir handling\n\nthe rmdir pattern\nfires on text"',
      "measured 2026-10-28: multi-line message naming rmdir"),
-    ("printf '%s\\n' \"note about rmdir x and robocopy\" > notes.txt",
+    ("printf '%s\\n' \"note about rmdir x and robocopy\" > .claude/tmp/notes.txt",
      "measured 2026-10-28: printf of text into a file"),
     ('git -C C:/repo commit -m "rmdir and robocopy in a message"', "-C before the subcommand"),
     ('git tag -a v1 -m "rmdir robocopy"', "a tag message"),
     ('git commit -m "title" -m "body names rmdir x\nand Remove-Item y"', "two -m, multi-line"),
     ('gh pr create --title "rmdir" --body "robocopy C:\\a C:\\b\nrmdir x"', "a PR body"),
     ("gh issue comment 5 --body 'Copy-Item a b\nrmdir c'", "an issue comment, single quotes"),
-    ("printf '%s\\n' 'rmdir x' 'robocopy a b' > .claude/tmp/msg.txt && git commit -F .claude/tmp/msg.txt",
-     "message file written then used by commit -F"),
+    ("printf '%s\\n' 'rmdir x' 'robocopy a b' > .claude/tmp/msg.txt", "message file written on its own"),
     ('cd C:/repo && git add a.py && git commit -m "rmdir x\nrobocopy y"', "commit after cd and add"),
-    ('echo "rmdir x" > notes.md', "echo into a file"),
+    ('echo "rmdir x" > .claude/tmp/notes.md', "echo into a scratch file"),
 ]
 
 # Code: the deletion guard (or, for transfers, the transfer guard) must block.
 DELETE = [
+    ("printf 'rm -rf /srv/data' > CLAUDE.local.md", "review f758e24: CLAUDE.local.md"),
+    ("printf 'rm -rf /srv/data' > AGENT.md", "review f758e24: AGENT.md"),
+    ("printf 'rm -rf /srv/data' > agents/a.md", "review f758e24: md under agents"),
+    ("printf 'rm -rf /srv/data' > commands/a.md", "review f758e24: md under commands"),
+    ("printf 'rm -rf /srv/data' > principles/a.md", "review f758e24: md under principles"),
+    ("printf 'rm -rf /srv/data' > workflows/a.md", "review f758e24: md under workflows"),
+    ("printf 'rm -rf /srv/data' > requirements/base.txt", "review f758e24: txt under requirements"),
+    ("printf 'rm -rf /srv/data' > constraints/ci.txt", "review f758e24: txt under constraints"),
+    ("printf 'rm -rf /srv/data' > notes.txt", "outside scratch: plain project file"),
+    ("git switch links && printf 'rm -rf /srv/data' > .claude/tmp/a.txt", "review f758e24: checkout brings a link"),
+    ("ln -s .bashrc a.txt && printf 'rm -rf /srv/data' > a.txt", "review f758e24: symlink made first"),
+    ("cmd //c mklink a.txt .bashrc && printf 'rm -rf /srv/data' > a.txt", "review f758e24: mklink made first"),
+    ("cmd //c mklink //J d .git && printf 'rm -rf /srv/data' > d/a.txt", "review f758e24: junction made first"),
+    ('powershell -c "New-Item -ItemType SymbolicLink -Path a.txt -Target .bashrc"; printf \'rm -rf /srv/data\' > a.txt',
+     "review f758e24: New-Item symlink made first"),
+    ('powershell -c "New-Item -ItemType Junction -Path d -Target .git"; printf \'rm -rf /srv/data\' > d/a.txt',
+     "review f758e24: New-Item junction made first"),
+    ("cp -s .bashrc a.txt; printf 'rm -rf /srv/data' > a.txt", "review f758e24: cp -s made first"),
+    ("ln .bashrc a.txt && printf 'rm -rf /srv/data' > a.txt", "review f758e24: hard link made first"),
+    ("printf 'rm -rf /srv/data' > a.txt\nln -s a.txt .bashrc", "review f758e24: newline after the print"),
+    ("printf 'rm -rf /srv/data' > a.txt & ln -sf a.txt x", "review f758e24: background then link"),
     ('git commit -m "$(rm -rf /srv/data)"', "substitution inside the message runs"),
     ('git commit -m "`rm -rf /srv/data`"', "backticks inside the message run"),
     ('git commit -m "a\n$(rmdir /srv/data)\nb"', "substitution inside a multi-line message"),
@@ -106,7 +127,7 @@ DELETE = [
     ("printf 'execute_process(COMMAND rm -rf /srv/data)' > CMakeLists.txt", "review ccda9e8: CMakeLists.txt"),
     ("printf 'rm -rf /srv/data' > requirements.txt", "review ccda9e8: requirements"),
     ("printf 'rm -rf /srv/data' > constraints-ci.txt", "review ccda9e8: constraints"),
-    ("printf 'rm -rf /srv/data' > .claude/tmp/note.md", "review ccda9e8: md under .claude"),
+    ("printf 'rm -rf /srv/data' > .claude/note.md", "review ccda9e8: md under .claude"),
     ("printf 'rm -rf /srv/data' > skills/x/SKILL.md", "review ccda9e8: md under skills"),
     ("printf 'rm -rf /srv/data' > rules/a.md", "review ccda9e8: md under rules"),
     ("printf 'rm -rf /srv/data' > hooks/a.md", "review ccda9e8: md under hooks"),
@@ -211,81 +232,49 @@ UNIT = [
     ("nul", sc._harmless_redirect, (">", "nul"), True),
     ("file", sc._harmless_redirect, (">", "f"), False),
     (">> 2", sc._harmless_redirect, (">>", "2"), False),
-    ("plain", sc._plain_file_target, ("notes.txt",), True),
-    ("nested", sc._plain_file_target, (".claude/tmp/msg.txt",), True),
-    ("windows", sc._plain_file_target, ("C:\\r\\m.txt",), False),
-    ("dotfile", sc._plain_file_target, (".bashrc",), False),
-    ("in .git", sc._plain_file_target, ("a/.GIT/x",), False),
-    ("in .husky", sc._plain_file_target, (".husky/x",), False),
-    ("hooks dir", sc._plain_file_target, ("git-hooks/pre-push",), False),
-    ("profile", sc._plain_file_target, ("my.profile.txt",), True),
-    ("rc", sc._plain_file_target, ("zshrc",), False),
-    ("variable", sc._plain_file_target, ("$f",), False),
-    ("hook with extension", sc._plain_file_target, ("scripts/pre-commit.sh",), False),
-    ("profile in a folder", sc._plain_file_target, ("a\\my.profile.txt",), True),
-    ("rc in a folder", sc._plain_file_target, ("dir/zshrc",), False),
-    ("dotfile in a folder", sc._plain_file_target, ("dir/.env",), False),
-    ("folder named like rc", sc._plain_file_target, ("src/notes.txt",), True),
-    ("root", sc._plain_file_target, ("/",), False),
-    ("absolute", sc._plain_file_target, ("/etc/a.txt",), False),
-    ("backslash root", sc._plain_file_target, ("\\a.txt",), False),
-    ("parent", sc._plain_file_target, ("../a.txt",), False),
-    ("json", sc._plain_file_target, ("a.json",), False),
-    ("no extension", sc._plain_file_target, ("notes",), False),
-    ("only extension", sc._plain_file_target, ("x/.txt",), False),
-    ("upper extension", sc._plain_file_target, ("A.TXT",), True),
-    ("each inert", sc._plain_file_target, ("a.md",), True),
-    ("log", sc._plain_file_target, ("a.log",), True),
-    ("msg", sc._plain_file_target, ("a.msg",), True),
-    ("csv", sc._plain_file_target, ("a.csv",), True),
+    ("project file", sc._plain_file_target, ("notes.txt",), False),
+    ("scratch", sc._plain_file_target, (".claude/tmp/msg.txt",), True),
+    ("scratch backslash", sc._plain_file_target, (".claude\\tmp\\m.txt",), True),
+    ("scratch upper", sc._plain_file_target, (".CLAUDE/Tmp/m.txt",), True),
+    ("scratch any extension", sc._plain_file_target, (".claude/tmp/CLAUDE.md",), True),
+    ("scratch nested", sc._plain_file_target, (".claude/tmp/a/b.sh",), True),
+    ("scratch parent", sc._plain_file_target, (".claude/tmp/../x.txt",), False),
+    ("scratch dot folder", sc._plain_file_target, (".claude/tmp/.git/x",), False),
+    ("scratch empty part", sc._plain_file_target, (".claude/tmp//x.txt",), False),
+    ("scratch folder itself", sc._plain_file_target, (".claude/tmp/",), False),
+    ("scratch without slash", sc._plain_file_target, (".claude/tmp",), False),
+    ("scratch prefix only", sc._plain_file_target, (".claude/tmpx/a.txt",), False),
     ("deeper .claude/tmp", sc._plain_file_target, ("a/.claude/tmp/x.txt",), False),
     (".claude only", sc._plain_file_target, (".claude/x.txt",), False),
+    ("data stream", sc._plain_file_target, (".claude/tmp/a.txt:x",), False),
+    ("space", sc._plain_file_target, (".claude/tmp/a b.txt",), False),
+    ("variable", sc._plain_file_target, (".claude/tmp/$f",), False),
     ("CLAUDE.md", sc._plain_file_target, ("CLAUDE.md",), False),
-    ("AGENTS.md nested", sc._plain_file_target, ("sub/Agents.MD",), False),
-    ("GEMINI.md", sc._plain_file_target, ("GEMINI.md",), False),
-    ("CMakeLists.txt", sc._plain_file_target, ("CMakeLists.txt",), False),
-    ("requirements", sc._plain_file_target, ("requirements-dev.txt",), False),
-    ("constraints", sc._plain_file_target, ("ci/Constraints.txt",), False),
-    ("md in .claude/tmp", sc._plain_file_target, (".claude/tmp/x.md",), False),
-    ("md in skills", sc._plain_file_target, ("Skills/x/SKILL.md",), False),
-    ("md in rules", sc._plain_file_target, ("rules/a.md",), False),
-    ("md in hooks", sc._plain_file_target, ("hooks/a.md",), False),
-    ("txt in rules", sc._plain_file_target, ("rules/a.txt",), True),
-    ("md elsewhere", sc._plain_file_target, ("docs/notes.md",), True),
-    ("requirements in name only", sc._plain_file_target, ("my-requirements.txt",), True),
-    ("data stream", sc._plain_file_target, ("a.txt:x.txt",), False),
-    ("space", sc._plain_file_target, ("a b.txt",), False),
-    ("empty part", sc._plain_file_target, ("dir//a.txt",), False),
-    ("windows tmp", sc._plain_file_target, (".claude\\tmp\\m.txt",), True),
-    ("no words", sc._cannot_run_a_file, ([],), True),
-    ("git status", sc._cannot_run_a_file, (["git", "status"],), True),
-    ("git add", sc._cannot_run_a_file, (["git", "add", "x"],), False),
-    ("git -c status", sc._cannot_run_a_file, (["git", "-c", "x", "status"],), False),
-    ("gh pr", sc._cannot_run_a_file, (["gh", "pr", "x"],), True),
-    ("gh alone", sc._cannot_run_a_file, (["gh"],), False),
-    ("gh alias", sc._cannot_run_a_file, (["gh", "alias"],), False),
-    ("CD", sc._cannot_run_a_file, (["CD", "x"],), True),
-    ("bash", sc._cannot_run_a_file, (["bash", "x"],), False),
-    ("print >", sc._print_target, (seg("printf x > a.txt"),), "a.txt"),
-    ("print >>", sc._print_target, (seg("printf x >> a.txt"),), "a.txt"),
-    ("print 1>", sc._print_target, (seg("printf x 1> a.txt"),), "a.txt"),
-    ("print 1>>", sc._print_target, (seg("printf x 1>> a.txt"),), "a.txt"),
-    ("print 2>", sc._print_target, (seg("printf x 2> a.txt"),), None),
-    ("print + merge", sc._print_target, (seg("printf x > a.txt 2>&1"),), "a.txt"),
-    ("print two", sc._print_target, (seg("printf x > a.txt > b.txt"),), None),
+    ("CLAUDE.local.md", sc._plain_file_target, ("CLAUDE.local.md",), False),
+    ("md under agents", sc._plain_file_target, ("agents/a.md",), False),
+    ("txt under requirements", sc._plain_file_target, ("requirements/base.txt",), False),
+    ("dotfile", sc._plain_file_target, (".bashrc",), False),
+    ("root", sc._plain_file_target, ("/",), False),
+    ("etc", sc._plain_file_target, ("/etc/a.txt",), False),
+    ("other drive", sc._plain_file_target, ("C:\\r\\m.txt",), False),
+    ("TEMP file", sc._plain_file_target, (os.path.join(tempfile.gettempdir(), "no-such-dir", "m.txt"),), True),
+    ("TEMP forward slashes", sc._plain_file_target,
+     (os.path.join(tempfile.gettempdir(), "no-such-dir", "m.txt").replace("\\", "/"),), True),
+    ("TEMP itself", sc._plain_file_target, (tempfile.gettempdir(),), False),
+    ("TEMP with separator", sc._plain_file_target, (os.path.join(tempfile.gettempdir(), ""),), False),
+    ("TEMP sibling", sc._plain_file_target, (tempfile.gettempdir().rstrip("\\/") + "x" + os.sep + "m.txt",), False),
+    ("TEMP parent", sc._plain_file_target, (os.path.join(tempfile.gettempdir(), "..", "m.txt"),), False),
+    ("print >", sc._print_target, (seg("printf x > .claude/tmp/a.txt"),), ".claude/tmp/a.txt"),
+    ("print >>", sc._print_target, (seg("printf x >> .claude/tmp/a.txt"),), ".claude/tmp/a.txt"),
+    ("print 1>", sc._print_target, (seg("printf x 1> .claude/tmp/a.txt"),), ".claude/tmp/a.txt"),
+    ("print 1>>", sc._print_target, (seg("printf x 1>> .claude/tmp/a.txt"),), ".claude/tmp/a.txt"),
+    ("print 2>", sc._print_target, (seg("printf x 2> .claude/tmp/a.txt"),), None),
+    ("print + merge", sc._print_target, (seg("printf x > .claude/tmp/a.txt 2>&1"),), ".claude/tmp/a.txt"),
+    ("print two", sc._print_target, (seg("printf x > .claude/tmp/a.txt > b.txt"),), None),
     ("print none", sc._print_target, (seg("printf x"),), None),
     ("print rc", sc._print_target, (seg("printf x > .bashrc"),), None),
-    ("print &>", sc._print_target, (seg("printf x &> a.txt"),), None),
-    ("print >|", sc._print_target, (seg("printf x >| a.txt"),), None),
-    ("-F file", sc._mentions, (seg("git commit -F msg.txt"), "msg.txt"), False),
-    ("--file=", sc._mentions, (seg("git commit --file=msg.txt"), "msg.txt"), False),
-    ("--body-file", sc._mentions, (seg("gh pr create --body-file MSG.txt"), "msg.txt"), False),
-    ("-F first word", sc._mentions, (seg("msg.txt -F"), "msg.txt"), True),
-    ("bash file", sc._mentions, (seg("bash msg.txt"), "msg.txt"), True),
-    ("-m value", sc._mentions, (seg("git commit -m msg.txt"), "msg.txt"), True),
-    ("redirect", sc._mentions, (seg("cat < msg.txt"), "msg.txt"), True),
-    ("non-message -F", sc._mentions, (seg("bash -F msg.txt"), "msg.txt"), True),
-    ("not named", sc._mentions, (seg("git status"), "msg.txt"), False),
+    ("print &>", sc._print_target, (seg("printf x &> .claude/tmp/a.txt"),), None),
+    ("print >|", sc._print_target, (seg("printf x >| .claude/tmp/a.txt"),), None),
     ("words", words, ('a "b c" d; e | f && g || h & i\nj',),
      [(["a", "b c", "d"], [], 0, ";"), (["e"], [], 0, "|"), (["f"], [], 0, "&&"), (["g"], [], 0, "||"),
       (["h"], [], 0, "&"), (["i"], [], 0, "\n"), (["j"], [], 0, "")]),
@@ -321,21 +310,23 @@ UNIT += [
     ("mask depth", sc._mask_message_data, ('( git commit -m "r" )',), '( git commit -m "r" )'),
     ("mask pipe", sc._mask_message_data, ('git commit -m "r" | cat',), 'git commit -m "r" | cat'),
     ("mask word 0", sc._mask_message_data, ("'git' commit -m 'r'",), "'git' commit -m  "),
-    ("mask printf", sc._mask_message_data, ("printf 'r' > a.txt; git status",), "printf   > a.txt; git status"),
-    ("mask printf other", sc._mask_message_data, ("printf 'r' > a.txt; bash b",), "printf 'r' > a.txt; bash b"),
-    ("mask printf named", sc._mask_message_data, ("printf 'r' > a.txt; git log a.txt",),
-     "printf 'r' > a.txt; git log a.txt"),
-    ("mask not printer", sc._mask_message_data, ("cat 'r' > a.txt",), "cat 'r' > a.txt"),
+    ("mask printf", sc._mask_message_data, ("printf 'r' > .claude/tmp/a.txt",), "printf   > .claude/tmp/a.txt"),
+    ("mask printf and status", sc._mask_message_data, ("printf 'r' > .claude/tmp/a.txt; git status",), "printf 'r' > .claude/tmp/a.txt; git status"),
+    ("mask printf background", sc._mask_message_data, ("printf 'r' > .claude/tmp/a.txt &",), "printf 'r' > .claude/tmp/a.txt &"),
+    ("mask printf other", sc._mask_message_data, ("printf 'r' > .claude/tmp/a.txt; bash b",), "printf 'r' > .claude/tmp/a.txt; bash b"),
+    ("mask printf named", sc._mask_message_data, ("printf 'r' > .claude/tmp/a.txt; git log a.txt",),
+     "printf 'r' > .claude/tmp/a.txt; git log a.txt"),
+    ("mask not printer", sc._mask_message_data, ("cat 'r' > .claude/tmp/a.txt",), "cat 'r' > .claude/tmp/a.txt"),
     ("mask no target", sc._mask_message_data, ("printf 'r'",), "printf 'r'"),
-    ("mask after cd", sc._mask_message_data, ("cd x && printf 'r' > a.txt",), "cd x && printf 'r' > a.txt"),
-    ("mask quoted printer", sc._mask_message_data, ("'printf' 'r' > a.txt",), "'printf'   > a.txt"),
-    ("mask name in folder", sc._mask_message_data, ("printf 'r' > d/x.txt; git log x.txt",),
-     "printf 'r' > d/x.txt; git log x.txt"),
-    ("mask printf -v", sc._mask_message_data, ("printf -v X 'r' > a.txt",), "printf -v X 'r' > a.txt"),
-    ("mask echo -n", sc._mask_message_data, ("echo -n 'r' > a.txt",), "echo -n   > a.txt"),
-    ("mask empty seg", sc._mask_message_data, ("; printf 'r' > a.txt",), ";printf   > a.txt"[0:1] + " printf   > a.txt"),
+    ("mask after cd", sc._mask_message_data, ("cd x && printf 'r' > .claude/tmp/a.txt",), "cd x && printf 'r' > .claude/tmp/a.txt"),
+    ("mask quoted printer", sc._mask_message_data, ("'printf' 'r' > .claude/tmp/a.txt",), "'printf'   > .claude/tmp/a.txt"),
+    ("mask name in folder", sc._mask_message_data, ("printf 'r' > .claude/tmp/d/x.txt; git log x.txt",),
+     "printf 'r' > .claude/tmp/d/x.txt; git log x.txt"),
+    ("mask printf -v", sc._mask_message_data, ("printf -v X 'r' > .claude/tmp/a.txt",), "printf -v X 'r' > .claude/tmp/a.txt"),
+    ("mask echo -n", sc._mask_message_data, ("echo -n 'r' > .claude/tmp/a.txt",), "echo -n   > .claude/tmp/a.txt"),
+    ("mask empty seg", sc._mask_message_data, ("; printf 'r' > .claude/tmp/a.txt",), "; printf 'r' > .claude/tmp/a.txt"),
     ("mask two prints", sc._mask_message_data, ("echo 'a' > x.txt && echo 'b' > y.txt",),
-     "echo   > x.txt && echo   > y.txt"),
+     "echo 'a' > x.txt && echo 'b' > y.txt"),
     ("mask typographic", sc._mask_message_data, ("git commit -m 'r\u2019'",), "git commit -m 'r\u2019'"),
 ]
 for name, function, args, expected in UNIT:
@@ -346,52 +337,61 @@ for name, function, args, expected in UNIT:
         got = f"raised {type(exc).__name__}"
     if got != expected:
         failures.append(f"UNIT {name}: expected {expected!r}, got {got!r}")
-import os, tempfile  # noqa: E401
+def must(label, path, expected):
+    global total
+    total += 1
+    if sc._plain_file_target(path) != expected:
+        failures.append(f"UNIT {label}: {path} expected {expected}")
+    if not expected:
+        total += 1
+        command = f"printf 'rm -rf /srv/data' > {path}"
+        if sc.executable_text(command) != command:
+            failures.append(f"DELETE passed ({label}): {command!r}")
+
+
 with tempfile.TemporaryDirectory() as root:
     project = os.path.join(root, "project")
-    os.makedirs(os.path.join(project, "real"))
-    open(os.path.join(root, ".bashrc"), "w").close()
-    open(os.path.join(project, ".bashrc"), "w").close()
-    links = [("note.txt", os.path.join(project, ".bashrc"), "symlink into .bashrc"),
-             ("out.txt", os.path.join(root, ".bashrc"), "symlink outside the project"),
-             ("dir", os.path.join(project, "real"), None)]
+    scratch = os.path.join(project, ".claude", "tmp")
+    os.makedirs(scratch)
+    os.makedirs(os.path.join(project, ".git", "hooks"))
+    os.makedirs(os.path.join(scratch, "real"))
+    bashrc = os.path.join(project, ".bashrc")
+    open(bashrc, "w").close()
+    open(os.path.join(scratch, "plain.txt"), "w").close()
+    sc._CURRENT_EVENT = {"tool_name": "Bash", "cwd": project}
+    must("new scratch file", ".claude/tmp/new.txt", True)
+    must("existing scratch file", ".claude/tmp/plain.txt", True)
+    must("scratch folder as target", ".claude/tmp/real", False)
+    must("file used as a folder", ".claude/tmp/plain.txt/x", False)
+    must("absolute TEMP file", os.path.join(root, "abs.txt"), True)
+    must("name too long to stat", ".claude/tmp/" + "a" * 300 + ".txt", False)
+    must("path too long to stat", ".claude/tmp/" + "x" * 40000, False)
+    # A hard link needs no privilege on NTFS or POSIX: writing it writes .bashrc.
+    os.link(bashrc, os.path.join(scratch, "hard.txt"))
+    os.link(bashrc, os.path.join(root, "hard.txt"))
+    must("hard link to .bashrc", ".claude/tmp/hard.txt", False)
+    must("absolute hard link to .bashrc", os.path.join(root, "hard.txt"), False)
     try:
-        for name, target, _ in links:
-            os.symlink(target, os.path.join(project, name), target_is_directory=os.path.isdir(target))
+        os.symlink(bashrc, os.path.join(scratch, "note.txt"))
+        os.symlink(os.path.join(project, ".git", "hooks"), os.path.join(scratch, "dir"), target_is_directory=True)
     except (OSError, NotImplementedError) as exc:
         print(f"  SKIPPED symlink cases: cannot create a symlink here ({type(exc).__name__}: {exc})")
     else:
-        sc._CURRENT_EVENT = {"tool_name": "Bash", "cwd": project}
-        for name, target, label in links[:2]:
-            total += 1
-            if sc._plain_file_target(name):
-                failures.append(f"UNIT {label}: {name} -> {target} was masked")
-            total += 1
-            command = f"printf 'rm -rf /srv/data' > {name}"
-            if sc.executable_text(command) != command:
-                failures.append(f"DELETE passed ({label}): {command!r}")
-        total += 1
-        if not sc._plain_file_target("dir/a.txt"):
-            failures.append("UNIT symlinked folder inside the project: dir/a.txt refused")
+        must("symlink to .bashrc", ".claude/tmp/note.txt", False)
+        must("symlinked folder", ".claude/tmp/dir/a.txt", False)
         print("  ran symlink cases")
     if os.name == "nt":
         # Junctions need no privilege, so the folder-redirect cases run on every Windows host.
         import _winapi
-        os.makedirs(os.path.join(project, ".git", "hooks"))
-        junctions = [("escape", root, "junction outside the project", False),
-                     ("tohooks", os.path.join(project, ".git", "hooks"), "junction into .git/hooks", False),
-                     ("inside", os.path.join(project, "real"), "junction inside the project", True)]
-        here = os.environ.get("SystemRoot", os.path.dirname(os.path.abspath(__file__)))
-        if os.path.splitdrive(here)[0].lower() != os.path.splitdrive(project)[0].lower():
-            junctions.append(("otherdrive", here, "junction to another drive", False))
-        else:
-            print("  SKIPPED junction to another drive: tests and TEMP share one drive")
-        sc._CURRENT_EVENT = {"tool_name": "Bash", "cwd": project}
-        for name, target, label, expected in junctions:
-            _winapi.CreateJunction(target, os.path.join(project, name))
-            total += 1
-            if sc._plain_file_target(name + "/a.txt") != expected:
-                failures.append(f"UNIT {label}: {name}/a.txt expected {expected}")
+        _winapi.CreateJunction(os.path.join(project, ".git", "hooks"), os.path.join(scratch, "j"))
+        _winapi.CreateJunction(os.path.join(project, ".git", "hooks"), os.path.join(root, "j"))
+        must("junction in scratch", ".claude/tmp/j/a.txt", False)
+        must("junction in TEMP", os.path.join(root, "j", "a.txt"), False)
+        other = os.path.join(root, "other")
+        os.makedirs(os.path.join(other, ".git", "tmp"))
+        _winapi.CreateJunction(os.path.join(other, ".git"), os.path.join(other, ".claude"))
+        sc._CURRENT_EVENT = {"tool_name": "Bash", "cwd": other}
+        must(".claude is a junction", ".claude/tmp/a.txt", False)
         print("  ran junction cases")
 sc._CURRENT_EVENT = {}
 total += 1

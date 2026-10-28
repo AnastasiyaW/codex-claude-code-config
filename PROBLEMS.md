@@ -169,6 +169,12 @@ print target was a denylist: printf into `.claude/settings*.json` hooks, a syste
 files and fish config was masked. `_plain_file_target` is now an allowlist (relative path, no
 dot-directory except a leading `.claude/tmp/`, extension txt/md/log/msg/csv); the six commands
 are must-block cases (red at e73a804, green after; mutation probe 56 of 56 killed).
+Rounds on ccda9e8 and f758e24 kept finding names an .md/.txt list missed (CLAUDE.local.md,
+AGENT.md, agents/, commands/, requirements/ ...), hard links, and links made earlier in the
+same command. The premise is removed: a printf/echo payload is masked only when the print is
+the whole command, the target is under `.claude/tmp/` or inside TEMP/TMP, and no existing
+component is a symlink or junction and an existing target is a regular file with one link.
+Everything else stays visible (docs are written with the Write tool, not printf).
 `agent_policy_gates.commit_invocations` now sees commits inside `bash/sh -c`, `powershell -c`
 and git aliases (`!` aliases included). Evidence: `hooks/tests/test_command_text_is_data.py`
 (202 cases, 12 red on main, all green after; registered in `run_guard_regressions.py`),
