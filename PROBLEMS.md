@@ -86,7 +86,37 @@ status - the gate must print that both agents passed.
 
 ## 2026-09-26 - STOP-GUARD: ENGLISH DIRECTIVE WORDS FIRE ANYWHERE IN A REPORT
 
-**Status**: arch-decision
+**Status**: RESOLVED 2026-10-28 on branch `fix/stop-guard-false-positives` (also closes
+REQ-1536EA2F40F5). The WIP this entry waited for is on main. `hooks/stop-phrase-guard.py`:
+1. An English directive (`_USER_WORK_DIRECTIVE`, and `_INSTRUCTION_VERB` in the shape window)
+   counts only in an imperative slot: opening its clause after a break, bullet or lead adverb,
+   or right after "please"/"you [modal]…"/"don't forget to"/"тебе нужно"; never when Russian
+   follows it ("; open вопросов"), nor a count on a line that already speaks Russian ("4 set",
+   ", run 41 passed"; "Run 3 times" still counts). Russian forms stay position-free.
+2. A whitespace-free backticked span (repo, branch, path) is judged by its own clause only, not
+   by a verb or "Пользователь" elsewhere in the 260-char window.
+3. A directive inside a quoted command is that command's word; the span is judged as a shape,
+   and a verb inside it no longer flags it when its clause reports it ("`Open https://…`
+   returns", "возвращал"); `_REPORT_PREDICATE` learned the Russian past/3rd-person forms that
+   `_REPORT_LEAD` already had.
+
+4. Performance (the hook has no timeout): slot, verb, addressee and I/we positions are indexed
+   once per message; `agent_owns_phrase` is asked only of instructions and skips sentences with
+   no I/we. Measured old -> new: 12k "the run" 21 s -> 0.09 s, 12k "please run" 32 s -> 0.1 s,
+   5000 bare spans 4.6 s -> 0.09 s; four timed self-test cases pin it.
+
+Evidence: the new self-test cases give 17 FAIL lines on the old functions (controls there fail
+only by a different trigger label: old still caught them) and pass now; controls (`Run \`npm
+test\` in your terminal`, "Please copy this into PowerShell.", "Запусти у себя \`python x.py\`",
+"Set \`FOO=1\` and run it.", "You will need to run …", "Run 3 times …", a dash, a task box)
+are caught; guard regressions 289/289; `scripts/mutation_probe.py`: new helpers 30/30 killed;
+`shape_is_instruction` + `agent_capable_user_homework` + `agent_owns_phrase` 71/92, the 21
+survivors are the ones the same functions had before the change (untouched lines). Replay of
+3000 real assistant messages: 201 verdicts dropped (sampled: factual reports), 0 added. A
+fresh-context Opus review (HOLD) found a quadratic span path, the digit rule and lost
+phrasings; all fixed, its 70-case probe now loses only "Once that is done run the installer."
+(no clause break; accepted). Still blocked by old and new alike: "Run time: 3 seconds.", "Open
+questions: none." (a label noun at clause start). The scratch-cwd gap moved to its own entry.
 
 Found while closing REQ-EDC941FD1708 (commit `511efa3`, hyphen-in-word is not a flag). The
 report of that finished fix was itself blocked as homework. Measured with
@@ -118,7 +148,12 @@ after a negated modal), and `Open`/`Запусти` from quoted test inputs insi
 backtick spans ("`Open https://…` returns `'Open'`"). The position rule above covers both;
 the negated modal also belongs among its non-imperative leads.
 
-Same session, second gap: `has_evidence_bound_external_task` looks only under
+## 2026-09-30 - STOP-GUARD: EVIDENCE-BOUND ORDER NOT FOUND FROM A SCRATCH CWD
+
+**Status**: arch-decision
+
+Split out of the entry above on 2026-10-28; unchanged since 2026-09-30 (`b10aeb3` session).
+`has_evidence_bound_external_task` looks only under
 `repo_root(Path.cwd())`, so a session whose cwd is a non-git scratch workspace can never
 bind its valid BLOCKED_EXTERNAL order. Measured in
 `.agent/user-tasks/REQ-5B886CC0BC3A/gate-smoke.log`: bound=False from the scratch cwd,

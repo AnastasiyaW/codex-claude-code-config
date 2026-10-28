@@ -409,6 +409,117 @@ _AGENT_TO_CONTROLS = {
     "required", "expected", "allowed", "prepared", "decided", "about",
 }
 _RUSSIAN_DIRECTIVE = re.compile(r"(?i)[а-яё]")
+# English directive words are nouns and reported verbs too: "the working-tree
+# copy", "10 join, 4 set" in Russian prose, "couldn't run" (measured 2026-09-26,
+# 2026-09-30). One assigns work only where English puts an imperative: opening
+# its clause, after a bullet or a lead adverb, or right after "please" / "you
+# [modal]". Russian imperative forms are unambiguous anywhere.
+_SLOT_BREAK = re.compile(r"[.!?;:,|(\n—–]")
+_EN_CLAUSE_LEAD = re.compile(
+    r"(?i)[ \t]*(?:[-*>#]+[ \t]+|\d+[.)][ \t]+)?(?:\[[ xX]\][ \t]+)?(?:\*\*|__|[\"'«“])?[ \t]*"
+    r"(?:(?:then|next|now|finally|also|just|simply|please|kindly|afterwards|and|or|first|"
+    r"so|потом|затем|теперь|сначала|далее|дальше|пожалуйста|и)\s+)*"
+)
+# Review 2026-10-28: "You will need to run", "I need you to run", "Don't forget
+# to run", "Тебе нужно run `x`" assign work wherever they stand.
+_EN_ADDRESSED = re.compile(
+    r"(?i)\b(?:please|kindly|(?:remember|forget|(?:be|make)\s+sure|(?:need|want|ask)\s+you|"
+    r"on\s+you|remains\s+is|left\s+is)\s+to|you(?:'ll)?(?:\s+(?:should|must|can|could|will|"
+    r"would|may|might|need\s+to|have\s+to|also|just|then|now|first))*|"
+    r"(?:тебе|вам)\s+(?:нужно|надо|осталось))\s+(?:(?:also|just|then|now|first)\s+)?"
+)
+# An English verb followed by Russian is a word inside Russian prose ("; open
+# вопросов нет", ": copy в worktree"); so is one followed by a count on a line
+# that already speaks Russian (", run 41 passed"), unlike "Run 3 times".
+_RUSSIAN_NEXT = re.compile(r"[ \t]*[а-яё]", re.IGNORECASE)
+_COUNT_NEXT = re.compile(r"[ \t]*\d")
+_CYRILLIC = re.compile(r"[а-яё]", re.IGNORECASE)
+_NEWLINE = re.compile(r"\n")
+# A whitespace-free span (`owner/repo`, `claude/branch-name`, `docs/x.md`) names
+# a thing; it is handed over only by its own clause, not by a verb or "user"
+# in the sentence before (measured 2026-09-30 and 2026-10-28).
+_CLAUSE_BREAK = re.compile(r"[.!?;\n]")
+
+
+@functools.cache  # one message per hook run, split once for all its words
+def _break_positions(masked: str, rx: re.Pattern) -> tuple[int, ...]:
+    return tuple(m.start() for m in rx.finditer(masked))
+
+
+# Searched once per message: a "$"-anchored search per word rescans its whole
+# clause, 21 s on one 96k clause of "the run" (measured 2026-10-28).
+@functools.cache
+def _addressed_ends(masked: str) -> frozenset[int]:
+    return frozenset(m.end() for m in _EN_ADDRESSED.finditer(masked))
+
+
+def _clause_head(masked: str, rx: re.Pattern, start: int) -> int:
+    breaks = _break_positions(masked, rx)
+    before = bisect.bisect_left(breaks, start)
+    return breaks[before - 1] + 1 if before else 0
+
+
+def _any_between(positions: tuple[int, ...], low: int, high: int) -> bool:
+    at = bisect.bisect_left(positions, low)
+    return at < len(positions) and positions[at] < high
+
+
+def _in_imperative_slot(masked: str, start: int, end: int) -> bool:
+    if _RUSSIAN_NEXT.match(masked, end):
+        return False
+    if _COUNT_NEXT.match(masked, end) and _any_between(
+        _break_positions(masked, _CYRILLIC), _clause_head(masked, _NEWLINE, start), start
+    ):
+        return False
+    head = _clause_head(masked, _SLOT_BREAK, start)
+    return bool(_EN_CLAUSE_LEAD.fullmatch(masked, head, start)) or start in _addressed_ends(
+        masked
+    )
+
+
+# One pass per message: a clause window searched per span made 2500 spans in
+# one clause take 19.5 s (fresh review, 2026-10-28).
+@functools.cache
+def _counting_verbs(masked: str) -> tuple[int, ...]:
+    return tuple(
+        verb.start() for verb in _INSTRUCTION_VERB.finditer(masked)
+        if _directive_counts(masked, verb)
+    )
+
+
+@functools.cache
+def _second_person_spans(masked: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    found = list(_SECOND_PERSON.finditer(masked))
+    return tuple(m.start() for m in found), tuple(m.end() for m in found)
+
+
+@functools.cache
+def _first_person_starts(message: str) -> tuple[int, ...]:
+    return tuple(m.start() for m in _FIRST_PERSON.finditer(message))
+
+
+def _clause_assigns(masked: str, start: int, end: int) -> bool:
+    """A whitespace-free span's own clause names its addressee or a counting verb."""
+    left, right = _clause_bounds(masked, start, end)
+    starts, ends = _second_person_spans(masked)
+    if bisect.bisect_right(ends, right) > bisect.bisect_left(starts, left):
+        return True
+    verbs = _counting_verbs(masked)
+    return _any_between(verbs, left, start) or _any_between(verbs, end, right)
+
+
+def _directive_counts(masked: str, verb: re.Match) -> bool:
+    return bool(_RUSSIAN_DIRECTIVE.search(verb.group(0))) or _in_imperative_slot(
+        masked, verb.start(), verb.end()
+    )
+
+
+def _clause_bounds(masked: str, start: int, end: int) -> tuple[int, int]:
+    breaks = _break_positions(masked, _CLAUSE_BREAK)
+    after = bisect.bisect_left(breaks, end)
+    return _clause_head(masked, _CLAUSE_BREAK, start), (
+        breaks[after] if after < len(breaks) else len(masked)
+    )
 
 
 def load_user_task_guard():
@@ -708,7 +819,8 @@ _REPORT_PREDICATE = re.compile(
     r"(?i):(?!\d)|(?<=\s)=|=(?=\s)|[→—–]|->|\s-\s|\b(?:is|are|was|were|be|been|has|"
     r"have|had|does|did|will|would|can|could|should|must|may|might|shall|isn't|"
     r"wasn't|won't|can't|ok|okay|clean|green|red|alive|active|fine|sane)\b|"
-    r"\b[a-z]{2,}ed\b"
+    r"\b[a-z]{2,}ed\b|\b(?!если\b)[а-яё]{2,}(?:л|ла|ло|ли)\b|"
+    r"\b[а-яё]{3,}(?:ает|яет|ует|еет|ают|яют|уют)\b"
 )
 _TAIL_WORD = re.compile(r"(?<![\w-])[A-Za-z][a-z]+\b")
 # What stands before the command in its clause. A report names what the
@@ -893,21 +1005,29 @@ def shape_is_instruction(message: str, start: int, end: int) -> bool:
         return False
     if _sets_shell_state(message, base, start, end, fenced):
         return True
-    left = max(0, start - 180)
-    right = min(len(message), end + 80)
+    # Grammar alone speaks only for a command; a whitespace-free span such as
+    # `docs/x.md` or `--verbose` after "File"/"Flag" names a thing.
+    if not fenced and not re.search(r"\S\s+\S", shape.strip("`")):
+        return _clause_assigns(base, start, end)
+    left, right = max(0, start - 180), min(len(message), end + 80)
     masked = base
     if fenced:
         # A fenced block judged as the shape keeps its own words; a block the
         # agent ran and shows as evidence is cleared by agent_owns_phrase.
         masked = masked[:start] + shape + masked[end:]
     window = masked[left:right]
-    if _SECOND_PERSON.search(window) or _INSTRUCTION_VERB.search(window):
+    verbs = list(_INSTRUCTION_VERB.finditer(masked, left, right))
+    if _SECOND_PERSON.search(window) or any(
+        not start <= verb.start() < end and _directive_counts(masked, verb) for verb in verbs
+    ):
         return True
-    # Grammar alone speaks only for a command; a whitespace-free span such as
-    # `docs/x.md` or `--verbose` after "File"/"Flag" names a thing.
-    if not fenced and not re.search(r"\S\s+\S", shape.strip("`")):
-        return False
-    lead = ("\n" if left == 0 else "") + masked[left:start]
+    # A verb inside the command is its own word ("claude auth login --x"), unless
+    # its clause reports the span as a quoted value ("`Open https://…` returns").
+    if any(start <= verb.start() < end for verb in verbs) and (
+        fenced or not (_reports_after(base, end) or _reports_before(base, start))
+    ):
+        return True
+    lead =("\n" if left == 0 else "") + masked[left:start]
 
     def touches(grammar: re.Match | None, searched: str) -> bool:
         # The grammar must touch the command in the raw text: masking blanks a
@@ -938,16 +1058,17 @@ def shape_is_instruction(message: str, start: int, end: int) -> bool:
 
 def agent_owns_phrase(message: str, start: int) -> bool:
     """True when the nearest explicit subject in this sentence is the agent."""
-    prefix = message[:start]
+    stop = start
     if message.startswith("```", start):
         # A completed command is commonly shown on the next line as evidence.
         # Bind the whole fenced block to the immediately preceding ownership claim.
-        prefix = prefix.rstrip()
-    sentence_start = max(
-        prefix.rfind(mark)
-        for mark in (".", "!", "?", "\n", ";")
-    )
-    context = prefix[sentence_start + 1:]
+        stop = len(message[:start].rstrip())
+    head = _clause_head(message, _CLAUSE_BREAK, stop)
+    # Without an I/we in the sentence nothing else matters. Copying the prefix
+    # per word first made 12k "please run" in one sentence take 32 s (2026-10-28).
+    if not _any_between(_first_person_starts(message), head, stop):
+        return False
+    context = message[head:stop]
     first = list(_FIRST_PERSON.finditer(context))
     if not first:
         return False
@@ -972,17 +1093,32 @@ def agent_capable_user_homework(
     intent, prompt = resolve_user_intent(user_messages, classifier)
     if intent != "action":
         return None
+    masked = _mask_code(message)
+    shapes = find_command_shapes(message)
+    # A directive word inside a quoted command is that command's word; the
+    # shape check below judges the span ("`Запусти https://…` возвращал …").
+    inline = [s.span() for s in shapes if message.startswith("`", s.start())]
+    inline_starts = [span[0] for span in inline]
+
+    def quoted(pos: int) -> bool:
+        at = bisect.bisect_right(inline_starts, pos) - 1
+        return at >= 0 and pos < inline[at][1]
+
     directives = [
         match
-        for match in _USER_WORK_DIRECTIVE.finditer(_mask_code(message))
-        if _RUSSIAN_DIRECTIVE.search(match.group(0))
-        or not agent_owns_phrase(message, match.start())
+        for match in _USER_WORK_DIRECTIVE.finditer(masked)
+        if not quoted(match.start())
+        and (_RUSSIAN_DIRECTIVE.search(match.group(0))
+             or (_in_imperative_slot(masked, match.start(), match.end())
+                 and not agent_owns_phrase(message, match.start())))
     ]
     command_shapes = [
         match
-        for match in find_command_shapes(message)
-        if not agent_owns_phrase(message, match.start())
-        and shape_is_instruction(message, match.start(), match.end())
+        for match in shapes
+        # agent_owns_phrase rescans the text before each span: asked only of
+        # instructions, 5000 spans in one clause take 0.2 s instead of 4.5 s.
+        if shape_is_instruction(message, match.start(), match.end())
+        and not agent_owns_phrase(message, match.start())
     ]
     if not directives and not command_shapes:
         return None
@@ -1406,6 +1542,101 @@ def _self_test() -> int:
         got = agent_capable_user_homework(text, [prompt], {})
         if got != want:
             fails.append(f"{label}: expected {want!r}, got {got!r}")
+    # Measured 2026-09-30 (REQ-1536EA2F40F5) and 2026-10-28: factual reports
+    # blocked by a repo or branch name in backticks with "Пользователь"/"open"
+    # elsewhere in the sentence, and by English words used as nouns or counts
+    # in Russian prose. Each must be silent; the controls keep the same verbs
+    # and spans in instruction position and must stay caught.
+    push = "git " + "push origin main"
+    for label, text, want in (
+        ("a repo name with a user nearby",
+         "Репозитория `happyin-app/seamguard` пока нет (404). Пользователь видит ошибку.", None),
+        ("branch names in a report",
+         "Коммит совпадает с веткой `claude/system-map-reanchor-20260927` и "
+         "`codex/release-service-installer-integration-20260930`; open вопросов нет.", None),
+        ("english words as counts in russian prose",
+         "Сверка: 10 join, 4 set, 58 расхождений; итого 125 set.", None),
+        ("paths and a repo in a russian report",
+         "Готово. Правка в `hooks/stop-phrase-guard.py`, отчёт в "
+         "`.agent/user-tasks/REQ-1536EA2F40F5/state.json`, репозиторий "
+         "`AnastasiyaW/codex-claude-code-config`. Пользователь больше ничего не делает.", None),
+        ("english words inside russian clauses",
+         "Итог: copy в worktree совпадает, run 41 passed.", None),
+        ("an english noun mid-sentence",
+         "The check takes the working-tree copy and the result is green.", None),
+        ("a verb after a negated modal",
+         "Agent B of the pre-push scan couldn't run, so the scan stopped.", None),
+        ("a quoted english test input",
+         "The probe `Open https://example.invalid/x` returns `'Open'` from the old code.", None),
+        ("a quoted russian test input",
+         f"Тестовый вход `{run_ru.capitalize()} https://example.invalid/x` возвращал ответ.",
+         None),
+        ("control: a quoted russian command with no report",
+         f"Дальше `{run_ru.capitalize()} https://example.invalid/x` у себя.",
+         f"`{run_ru.capitalize()} https://example.invalid/x`"),
+        ("control: a quoted english command with no report",
+         "Next: `Open https://example.invalid/x` in the browser.",
+         "`Open https://example.invalid/x`"),
+        ("control: run with a command in the terminal",
+         "Run `npm test` in your terminal.", "Run"),
+        ("control: please copy", "Please copy this into PowerShell.", "copy"),
+        ("control: russian imperative before a command",
+         f"{run_ru.capitalize()} у себя `python x.py`.", run_ru.capitalize()),
+        ("control: run a push", f"Run `{push}`.", "Run"),
+        ("control: set an assignment", "Set `FOO=1` and run it.", "Set"),
+        ("control: run a path", "Run `scripts/deploy.sh` before the release.", "Run"),
+        ("control: a bare span after its verb", "Before the release, run `scripts/deploy.sh`.",
+         "run"),
+        ("control: a single span with a russian verb in its clause",
+         "Файл `docs/report.md` открой и проверь.", "открой"),
+        ("control: could you", "Could you run the tests on your machine?", "run"),
+        ("control: a lead clause", "To finish, run the installer.", "run"),
+        ("control: a bullet", "Осталось:\n- copy the token into the form.", "copy"),
+        # Fresh-context review 2026-10-28: hand-offs the first cut of this fix lost.
+        ("control: two modals", "You will need to run the installer yourself.", "run"),
+        ("control: need you to", "I need you to run the installer.", "run"),
+        ("control: don't forget to", "Don't forget to run the installer.", "run"),
+        ("control: a count after an english imperative", "Run 3 times to warm the cache.",
+         "Run"),
+        ("control: after a dash", "Remaining step — run the installer yourself.", "run"),
+        ("control: a task box", "- [ ] Run the installer.", "Run"),
+        ("control: a russian lead adverb", "Затем run the installer.", "run"),
+        ("control: a russian addressee", "Тебе нужно run `npm test`.", "run"),
+    ):
+        got = agent_capable_user_homework(text, [prompt], {})
+        if got != want:
+            fails.append(f"{label}: expected {want!r}, got {got!r}")
+    # The span rule on its own, without a directive word to catch the case first.
+    for label, text, want in (
+        ("a branch name after a far verb",
+         "Run the suite later. Ветка `fix/stop-guard` пушнута.", False),
+        ("a user in another clause",
+         "Пользователь доволен; репозиторий `owner/repo` создан.", False),
+        ("control: a user in the span's clause", "Пользователю нужен файл `docs/x.md`.", True),
+        ("control: a verb in the span's clause", "Next, open `https://example.invalid/x`.", True),
+    ):
+        shapes = find_command_shapes(text)
+        got = any(shape_is_instruction(text, s.start(), s.end()) for s in shapes)
+        if not shapes or got != want:
+            fails.append(f"{label}: expected flagged={want}, got {got} ({len(shapes)} shapes)")
+    # A per-word clause rescan took 21 s on the first, a per-span clause window
+    # 19.5 s on the second (2026-10-28).
+    for label, text in (
+        ("12k directive nouns in one clause", "the run " * 12_000),
+        ("2500 paths in one clause",
+         "Changed files: " + ", ".join(f"`src/m{i}/f.py`" for i in range(2_500)) + "."),
+        ("5000 bare spans in one clause", "`a/b` " * 5_000),
+    ):
+        started = time.perf_counter()
+        verdict = agent_capable_user_homework(text, [prompt], {})
+        if time.perf_counter() - started > 1.0:
+            fails.append(f"{label}: not judged in linear time")
+        if verdict is not None:
+            fails.append(f"{label}: read as a hand-off: {verdict[:40]!r}")
+    started = time.perf_counter()  # agent_owns_phrase per word took 32 s here
+    verdict = agent_capable_user_homework("please run " * 12_000, [prompt], {})
+    if time.perf_counter() - started > 1.0 or verdict != "run":
+        fails.append(f"12k 'please run' in one sentence: {verdict!r}, not linear or not caught")
     fails.extend(_self_test_active_request())
     for f in fails:
         print("FAIL:", f)
