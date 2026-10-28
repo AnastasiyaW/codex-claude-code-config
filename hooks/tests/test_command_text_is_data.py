@@ -100,6 +100,16 @@ DELETE = [
     ("printf '[Service]\\nExecStart=/bin/rm -rf /srv/data' > /etc/systemd/system/x.service", "review e73a804: systemd unit"),
     ("printf 'rm -rf /srv/data' > /var/spool/cron/crontabs/root", "review e73a804: crontab"),
     ("printf 'rm -rf /srv/data' > /etc/cron.d/job", "review e73a804: cron.d"),
+    ("printf 'rm -rf /srv/data' > CLAUDE.md", "review ccda9e8: CLAUDE.md"),
+    ("printf 'rm -rf /srv/data' > AGENTS.md", "review ccda9e8: AGENTS.md"),
+    ("printf 'rm -rf /srv/data' > GEMINI.md", "review ccda9e8: GEMINI.md"),
+    ("printf 'execute_process(COMMAND rm -rf /srv/data)' > CMakeLists.txt", "review ccda9e8: CMakeLists.txt"),
+    ("printf 'rm -rf /srv/data' > requirements.txt", "review ccda9e8: requirements"),
+    ("printf 'rm -rf /srv/data' > constraints-ci.txt", "review ccda9e8: constraints"),
+    ("printf 'rm -rf /srv/data' > .claude/tmp/note.md", "review ccda9e8: md under .claude"),
+    ("printf 'rm -rf /srv/data' > skills/x/SKILL.md", "review ccda9e8: md under skills"),
+    ("printf 'rm -rf /srv/data' > rules/a.md", "review ccda9e8: md under rules"),
+    ("printf 'rm -rf /srv/data' > hooks/a.md", "review ccda9e8: md under hooks"),
     ("printf 'rm -rf /srv/data' > D:/work/.config/fish/config.fish", "review e73a804: fish config"),
     ("git commit -m 'msg\u2019 ; Remove-Item -Recurse C:\\data ; echo \u2018x'",
      "typographic quote: PowerShell closes the string there"),
@@ -230,6 +240,21 @@ UNIT = [
     ("csv", sc._plain_file_target, ("a.csv",), True),
     ("deeper .claude/tmp", sc._plain_file_target, ("a/.claude/tmp/x.txt",), False),
     (".claude only", sc._plain_file_target, (".claude/x.txt",), False),
+    ("CLAUDE.md", sc._plain_file_target, ("CLAUDE.md",), False),
+    ("AGENTS.md nested", sc._plain_file_target, ("sub/Agents.MD",), False),
+    ("GEMINI.md", sc._plain_file_target, ("GEMINI.md",), False),
+    ("CMakeLists.txt", sc._plain_file_target, ("CMakeLists.txt",), False),
+    ("requirements", sc._plain_file_target, ("requirements-dev.txt",), False),
+    ("constraints", sc._plain_file_target, ("ci/Constraints.txt",), False),
+    ("md in .claude/tmp", sc._plain_file_target, (".claude/tmp/x.md",), False),
+    ("md in skills", sc._plain_file_target, ("Skills/x/SKILL.md",), False),
+    ("md in rules", sc._plain_file_target, ("rules/a.md",), False),
+    ("md in hooks", sc._plain_file_target, ("hooks/a.md",), False),
+    ("txt in rules", sc._plain_file_target, ("rules/a.txt",), True),
+    ("md elsewhere", sc._plain_file_target, ("docs/notes.md",), True),
+    ("requirements in name only", sc._plain_file_target, ("my-requirements.txt",), True),
+    ("data stream", sc._plain_file_target, ("a.txt:x.txt",), False),
+    ("space", sc._plain_file_target, ("a b.txt",), False),
     ("empty part", sc._plain_file_target, ("dir//a.txt",), False),
     ("windows tmp", sc._plain_file_target, (".claude\\tmp\\m.txt",), True),
     ("no words", sc._cannot_run_a_file, ([],), True),
@@ -321,6 +346,53 @@ for name, function, args, expected in UNIT:
         got = f"raised {type(exc).__name__}"
     if got != expected:
         failures.append(f"UNIT {name}: expected {expected!r}, got {got!r}")
+import os, tempfile  # noqa: E401
+with tempfile.TemporaryDirectory() as root:
+    project = os.path.join(root, "project")
+    os.makedirs(os.path.join(project, "real"))
+    open(os.path.join(root, ".bashrc"), "w").close()
+    open(os.path.join(project, ".bashrc"), "w").close()
+    links = [("note.txt", os.path.join(project, ".bashrc"), "symlink into .bashrc"),
+             ("out.txt", os.path.join(root, ".bashrc"), "symlink outside the project"),
+             ("dir", os.path.join(project, "real"), None)]
+    try:
+        for name, target, _ in links:
+            os.symlink(target, os.path.join(project, name), target_is_directory=os.path.isdir(target))
+    except (OSError, NotImplementedError) as exc:
+        print(f"  SKIPPED symlink cases: cannot create a symlink here ({type(exc).__name__}: {exc})")
+    else:
+        sc._CURRENT_EVENT = {"tool_name": "Bash", "cwd": project}
+        for name, target, label in links[:2]:
+            total += 1
+            if sc._plain_file_target(name):
+                failures.append(f"UNIT {label}: {name} -> {target} was masked")
+            total += 1
+            command = f"printf 'rm -rf /srv/data' > {name}"
+            if sc.executable_text(command) != command:
+                failures.append(f"DELETE passed ({label}): {command!r}")
+        total += 1
+        if not sc._plain_file_target("dir/a.txt"):
+            failures.append("UNIT symlinked folder inside the project: dir/a.txt refused")
+        print("  ran symlink cases")
+    if os.name == "nt":
+        # Junctions need no privilege, so the folder-redirect cases run on every Windows host.
+        import _winapi
+        os.makedirs(os.path.join(project, ".git", "hooks"))
+        junctions = [("escape", root, "junction outside the project", False),
+                     ("tohooks", os.path.join(project, ".git", "hooks"), "junction into .git/hooks", False),
+                     ("inside", os.path.join(project, "real"), "junction inside the project", True)]
+        here = os.environ.get("SystemRoot", os.path.dirname(os.path.abspath(__file__)))
+        if os.path.splitdrive(here)[0].lower() != os.path.splitdrive(project)[0].lower():
+            junctions.append(("otherdrive", here, "junction to another drive", False))
+        else:
+            print("  SKIPPED junction to another drive: tests and TEMP share one drive")
+        sc._CURRENT_EVENT = {"tool_name": "Bash", "cwd": project}
+        for name, target, label, expected in junctions:
+            _winapi.CreateJunction(target, os.path.join(project, name))
+            total += 1
+            if sc._plain_file_target(name + "/a.txt") != expected:
+                failures.append(f"UNIT {label}: {name}/a.txt expected {expected}")
+        print("  ran junction cases")
 sc._CURRENT_EVENT = {}
 total += 1
 if sc._mask_message_data('git commit -m "r"') != 'git commit -m "r"':

@@ -580,6 +580,10 @@ _PRINT_OPTIONS = {"-n", "-e", "-E", "-ne", "-en", "--"}
 # names let settings.json hooks, systemd units, cron files and fish config through.
 # Relative, no dot-directory except the leading .claude/tmp/, inert extension only.
 _INERT_EXTENSIONS = {"txt", "md", "log", "msg", "csv"}
+# Inert extension, yet another program or agent reads the file as instructions (review of ccda9e8).
+_INSTRUCTION_NAMES = {"claude.md", "agents.md", "gemini.md", "cmakelists.txt"}
+_INSTRUCTION_TXT_PREFIXES = ("requirements", "constraints")
+_INSTRUCTION_FOLDERS = {".claude", ".codex", ".agents", "skills", "rules", "hooks"}
 _NOT_BASH_QUOTING = re.compile("[`‘’‚‛“”„]")
 _GH_FILE_INERT = {"pr", "issue", "release", "repo"}
 _MESSAGE_FILE_FLAGS = {"-F", "--file", "--body-file", "--notes-file"}
@@ -750,9 +754,27 @@ def _plain_file_target(path: str) -> bool:
     """A relative text file that no shell, hook, scheduler or settings loader runs."""
     if not _PLAIN_TARGET.fullmatch(path) or path[:1] in "/\\" or ":" in path:
         return False
-    lowered = path.lower().replace("\\", "/").removeprefix(".claude/tmp/")
-    parts = lowered.split("/")
-    if any(not part or part.startswith(".") for part in parts):
+    if not _inert_relative_path(path):
+        return False
+    # A symlink (the file or a folder on the way) can point at .bashrc or outside the project.
+    base = os.path.realpath(_CURRENT_EVENT.get("cwd") or os.getcwd())
+    try:
+        resolved = os.path.relpath(os.path.realpath(os.path.join(base, path)), base)
+    except ValueError:
+        return False
+    return _inert_relative_path(resolved)
+
+
+def _inert_relative_path(path: str) -> bool:
+    parts = path.lower().replace("\\", "/").split("/")
+    name = parts[-1]
+    if name in _INSTRUCTION_NAMES or (name.startswith(_INSTRUCTION_TXT_PREFIXES) and name.endswith(".txt")):
+        return False
+    if name.endswith(".md") and _INSTRUCTION_FOLDERS.intersection(parts[:-1]):
+        return False
+    if parts[:2] == [".claude", "tmp"]:
+        parts = parts[2:]
+    if not parts or any(not part or part.startswith(".") for part in parts):
         return False
     stem, _, extension = parts[-1].rpartition(".")
     return bool(stem) and extension in _INERT_EXTENSIONS
