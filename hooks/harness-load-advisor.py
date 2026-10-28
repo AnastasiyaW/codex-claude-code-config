@@ -54,10 +54,11 @@ SIGNALS: list[tuple[str, list[str]]] = [
     ),
 ]
 
-# Feedback words count only in a sentence that names one of our gates or test
-# profiles: the same words describe a product under test ("no false positives on
-# the buttons", 2026-10-28) or a report ("overkill for a two-line change"). A hook
-# is not a subject here: a hook's false positive is not a profile overload.
+# Feedback words count only next to one of our gates or test profiles, within one
+# clause: the same words describe a product under test ("no false positives on
+# the buttons", 2026-10-28), a report ("overkill for a two-line change"), or a
+# product next to a gate result ("gate passed, but the detector has false
+# positives"). A hook is not a subject: its false positive is not a profile overload.
 # Bare "перегруж" is not a feedback word: it also describes a slow computer
 # (2026-10-07); harness overload is caught by declared-overload.
 _FEEDBACK = (
@@ -67,20 +68,25 @@ _FEEDBACK = (
     r"избыточн\w*|ложн\w* срабатыван\w*|блокир\w* smoke)"
 )
 # Bare smoke/staging is a place a product is tested ("false positives on staging"),
-# not a subject: only a smoke/staging gate, profile or run counts.
+# not a subject: only a smoke/staging test, gate, profile or run counts.
 _STAGE = r"(?:smoke|staging|смоук\w*|стейдж\w*)"
 _SUBJECT = (
-    r"(?:harness(?:es)?|test (?:systems?|suites?|profiles?)|gates?|"
-    rf"{_STAGE}[- ]?(?:gates?|profiles?|suites?|runs?|гейт\w*|профил\w*|прогон\w*|набор\w*)|"
-    r"харнесс\w*|гейт\w*|обвязк\w*|тестов\w* контур\w*|"
-    r"систем\w* тест\w*|профил\w* тест\w*)"
+    r"(?:harness(?:es)?|test (?:systems?|suites?|profiles?)|gates?|validators?|"
+    rf"{_STAGE}[- ]?(?:tests?|gates?|profiles?|suites?|runs?|тест\w*|гейт\w*|профил\w*|"
+    r"прогон\w*|набор\w*|провер\w*)|"
+    r"(?:staging|стейдж\w*)[- ](?:smoke|смоук\w*)|"
+    rf"(?:тестов\w*|test) профил\w*|профил\w* (?:тест\w*|{_STAGE})|"
+    r"харнесс\w*|гейт\w*|валидатор\w*|обвязк\w*|тестов\w* контур\w*|систем\w* тест\w*)"
 )
-_SENTENCE = r"[^.?!\n]{0,120}"
+# simplification: one clause of at most 40 characters stands for "the feedback
+# describes the subject"; "the gate caught 3 false positives in the classifier"
+# still reads as a complaint. A parser of who-does-what is the upgrade path.
+_CLAUSE = r"[^.?!\n,;:—–]{0,40}"
 SIGNALS.append((
     "explicit-feedback",
     [
-        rf"\b{_SUBJECT}\b{_SENTENCE}\b{_FEEDBACK}\b",
-        rf"\b{_FEEDBACK}\b{_SENTENCE}\b{_SUBJECT}\b",
+        rf"\b{_SUBJECT}\b{_CLAUSE}\b{_FEEDBACK}\b",
+        rf"\b{_FEEDBACK}\b{_CLAUSE}\b{_SUBJECT}\b",
     ],
 ))
 # A stated absence of false positives is a result, not a complaint. Only the
@@ -88,9 +94,11 @@ SIGNALS.append((
 # "без того слишком строгий" or "раньше такого не было" stay complaints.
 _FALSE_POSITIVE = r"(?:false[- ]positives?|ложн\w* срабатыван\w*)"
 NEGATED_FEEDBACK = re.compile(
-    rf"\b(?:no|zero|0|нет|без|ни одного)[ \t]+(?:(?:real|реальн\w*)[ \t]+)?{_FALSE_POSITIVE}"
+    r"\b(?:no(?:[ \t]+more)?|zero|0|none[ \t]+of[ \t]+the|нет|без|ни одного)[ \t]+"
+    rf"(?:(?:real(?:[- ]world)?|реальн\w*)[ \t]+)?{_FALSE_POSITIVE}"
     rf"|{_FALSE_POSITIVE}[^.?!\n,;:—–]{{0,40}}"
-    r"\b(?:не было|не нашл\w*|не найден\w*|не обнаружен\w*|отсутству\w*)\b"
+    r"\b(?:не было|больше нет|нет|не нашл\w*|не найден\w*|не обнаружен\w*|отсутству\w*)\b"
+    rf"|{_FALSE_POSITIVE}[ \t]*[:—–-][ \t]*(?:0|none|нет)\b"
 )
 
 # Quoted text is a mention, not a statement: a UI title «слишком много попыток»,

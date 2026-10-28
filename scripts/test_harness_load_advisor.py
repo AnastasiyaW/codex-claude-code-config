@@ -185,6 +185,19 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             "Ложных срабатываний у гейта на стейдже не было.",
             "Ложные срабатывания гейта отсутствуют.",
             "Ложных срабатываний гейта не обнаружено.",
+            # a gate result next to a product result, in another clause
+            "Gate passed, but the button logic has too many false positives.",
+            "Гейт прошёл, детектор даёт ложные срабатывания на тенях.",
+            "The model has false positives; I added a gate to catch them.",
+            "The spam filter is too strict, I fixed it and the gate is green.",
+            "Гейт прошёл: ложных срабатываний у детектора нет.",
+            "Gate green, no more false positives.",
+            "The gate reports zero real-world false positives.",
+            "The gate run is clean, false positives: 0.",
+            "The gate output shows false positives — none.",
+            "The gate gives no false positives.",
+            "The gate shows no more false positives.",
+            "Ложных срабатываний у гейта нет.",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-product-") as raw:
                 root = Path(raw)
@@ -212,6 +225,13 @@ class HarnessLoadAdvisorTests(unittest.TestCase):
             "У гейта без конца ложные срабатывания.",
             "Retry?\nno\nfalse positives from the gate",
             "Гейт избыточный и смысла в нём не было.",
+            # smoke/staging tests and test profiles in their usual wording
+            "The smoke test is too strict.",
+            "Smoke-тест слишком строгий.",
+            "The staging smoke is too strict.",
+            "Тестовый профиль слишком строгий.",
+            "Профиль смоука слишком строгий.",
+            "The validators are too strict for this branch.",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="harness-gate-") as raw:
                 payload, output = run_hook(Path(raw), text)
