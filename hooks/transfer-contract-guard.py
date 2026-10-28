@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from safety_common import allow, block, log, read_event  # noqa: E402
+from safety_common import _split_segments, allow, block, log, read_event  # noqa: E402
 
 # One definition of "what in this command can actually run", shared with the
 # destructive guards. This copy is the one settings.json registers - a second,
@@ -222,6 +222,108 @@ def _transfer_kind(command: str) -> tuple[str, str] | None:
     return None
 
 
+# A local copy whose every destination is a temp folder (a backup before an
+# edit, a scratch snapshot) moves nothing between machines and leaves the source
+# untouched, so it needs no contract. Owner 2026-10-28: "он не должен мешать
+# работать" after `cp -p rule.md <scratchpad>/backup/` was blocked.
+# Only copies qualify: a move or sync changes the source; a remote endpoint
+# (UNC, host:path, PowerShell session) is a real transfer even into temp; an
+# unresolved variable or wildcard destination cannot be proven local, so it
+# stays gated.
+LOCAL_COPY_TOOLS = {"cp", "copy", "copy-item", "cpi", "xcopy", "robocopy"}
+_COPY_ITEM_VALUE_PARAMS = ("-path", "-literalpath", "-destination", "-filter", "-include", "-exclude")
+_REMOTE_TOKEN = re.compile(r"^(?:\\\\|//)|^[^-/\\:][^/\\:]+:|^-(?:to|from)session", re.IGNORECASE)
+_UNPROVABLE = re.compile(r"[$%`*?]")
+_DRIVE_TEMP = re.compile(r"^[a-z]:/(?:temp|tmp)/[^/]")
+
+
+def _norm_path(raw: str) -> str:
+    value = raw.strip().strip("'\"").replace("\\", "/")
+    git_bash = re.match(r"^/([a-zA-Z])(/.*)?$", value)
+    if git_bash:
+        value = f"{git_bash.group(1)}:{git_bash.group(2) or '/'}"
+    return value.lower()
+
+
+def _temp_roots() -> list[str]:
+    import tempfile
+    raw = {tempfile.gettempdir(), os.environ.get("TEMP", ""), os.environ.get("TMP", ""),
+           "/tmp", "/var/tmp"}
+    if os.environ.get("LOCALAPPDATA"):
+        raw.add(os.path.join(os.environ["LOCALAPPDATA"], "Temp"))
+    return sorted({_norm_path(r).rstrip("/") for r in raw if r})
+
+
+def _inside_temp(raw: str) -> bool:
+    path = _norm_path(raw).rstrip("/")
+    if "/../" in f"{path}/" or not (re.match(r"^[a-z]:/", path) or path.startswith("/")):
+        return False
+    if _DRIVE_TEMP.match(path):
+        return True
+    return any(path.startswith(root + "/") for root in _temp_roots())
+
+
+def _copy_destination(tokens: list[str]) -> str | None:
+    tool = tokens[0].lower()
+    args = tokens[1:]
+    if tool == "cp":
+        for index, token in enumerate(args):
+            if token in {"-t", "--target-directory"} and index + 1 < len(args):
+                return args[index + 1]
+            if token.startswith("--target-directory="):
+                return token.split("=", 1)[1]
+        positional = [t for t in args if not t.startswith("-")]
+    elif tool in {"copy-item", "cpi"}:
+        positional = []
+        skip = False
+        for index, token in enumerate(args):
+            if skip:
+                skip = False
+                continue
+            low = token.lower()
+            name, sep, value = low.partition(":")
+            if low.startswith("-"):
+                if name.startswith("-dest"):
+                    return token.split(":", 1)[1] if sep and value else (
+                        args[index + 1] if index + 1 < len(args) else None)
+                if any(p.startswith(name) for p in _COPY_ITEM_VALUE_PARAMS) and not sep:
+                    skip = True
+                continue
+            positional.append(token)
+    elif tool == "robocopy":
+        positional = [t for t in args if not t.startswith("/")]
+        return positional[1] if len(positional) >= 2 else None
+    else:
+        positional = [t for t in args if not t.startswith("/")]
+    return positional[-1] if len(positional) >= 2 else None
+
+
+def _local_copy_into_temp(command: str) -> bool:
+    import shlex
+    found = False
+    for line in command.splitlines():
+        for segment in _split_segments(line):
+            if _transfer_kind(segment) is None:
+                continue
+            try:
+                tokens = [t.strip("'\"") for t in shlex.split(segment, posix=False)]
+            except ValueError:
+                return False
+            while tokens and tokens[0].lower() in {"sudo", "command"}:
+                tokens = tokens[1:]
+            if not tokens or tokens[0].lower() not in LOCAL_COPY_TOOLS:
+                return False
+            if tokens[0].lower() == "robocopy" and re.search(r"(?:^|\s)/(?:move|mov)\b", segment, re.I):
+                return False
+            if any(_REMOTE_TOKEN.search(t) for t in tokens[1:]):
+                return False
+            destination = _copy_destination(tokens)
+            if not destination or _UNPROVABLE.search(destination) or not _inside_temp(destination):
+                return False
+            found = True
+    return found
+
+
 def _nonempty(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
@@ -330,6 +432,9 @@ def _pre(event: dict[str, Any]) -> None:
         allow()
     cwd = _event_cwd(event)
     marker = TRANSFER_MARKER.search(command)
+    if marker is None and _local_copy_into_temp(command):
+        log("INFO", "transfer_contract", "allowed", "local-copy-into-temp", command[:200])
+        allow()
     if marker is None:
         block(
             "Transfer command detected but no durable contract was provided. "
@@ -391,7 +496,7 @@ def _post(event: dict[str, Any]) -> None:
         allow()
     command = _text(_tool_input(event).get("command"))
     detected = _transfer_kind(command)
-    if detected is None:
+    if detected is None or (not TRANSFER_MARKER.search(command) and _local_copy_into_temp(command)):
         allow()
     response = event.get("tool_response") or {}
     if not isinstance(response, dict):

@@ -247,8 +247,28 @@ def _already_exists(path: str, cwd: str) -> bool:
         return False
 
 
+# The harness gives every session a scratchpad under the OS temp folder
+# (<TEMP>/claude/<project>/<session>/scratchpad) and says to use it for temporary
+# files; its lifecycle is the session's, and TEMP is swept by policy. A marker file
+# there records nothing new, so demanding one only blocked a pre-edit backup
+# (owner 2026-10-28: "он не должен мешать работать").
+_SESSION_SCRATCHPAD = re.compile(r"/claude/[^/]+/[^/]+/scratchpad/[^/]")
+
+
+def _in_session_scratchpad(path: str) -> bool:
+    import tempfile
+    p = _norm(path).lower()
+    if "/../" in p + "/":
+        return False
+    for root in {tempfile.gettempdir(), os.environ.get("TEMP", ""), os.environ.get("TMP", "")}:
+        prefix = _norm(root).lower().rstrip("/")
+        if prefix and p.startswith(prefix + "/") and _SESSION_SCRATCHPAD.match(p[len(prefix):]):
+            return True
+    return False
+
+
 def _verdict_for_target(path: str, cmd: str, cwd: str) -> str | None:
-    if _already_exists(path, cwd):
+    if _already_exists(path, cwd) or _in_session_scratchpad(path):
         return None
 
     legacy_delete_marker = bool(DELETE_MARKER_RE.search(cmd))
@@ -368,6 +388,15 @@ def _self_test() -> int:
             ("NEW scratch dir, marked, inside a tree", marked,
              "mkdir -p %s && echo TEMP_REPRODUCIBLE > %s/.folder-meta.json" % (marked, marked),
              root, False),
+        ]
+        temp = _norm(tempfile.gettempdir())
+        pad = temp + "/claude/C--proj/0a1b2c3d/scratchpad"
+        cases += [
+            ("NEW dir in session scratchpad", pad + "/backup-x", "mkdir -p %s/backup-x" % pad, root, False),
+            ("NEW dir beside scratchpad, no marker", temp + "/claude/C--proj/0a1b2c3d/tmp-run",
+             "mkdir -p x", root, True),
+            ("scratchpad name outside TEMP", root + "/claude/a/b/scratchpad/tmp-run", "mkdir -p x", root, True),
+            ("dot-dot out of scratchpad", pad + "/../../tmp-run", "mkdir -p x", root, True),
         ]
         for label, path, cmd, cwd, expect_blocked in cases:
             got = _verdict_for_target(path, cmd, cwd) is not None
