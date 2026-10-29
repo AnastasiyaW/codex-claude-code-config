@@ -964,14 +964,14 @@ def unit_disable_requested(prompt: str, unit: str) -> bool:
 DISABLE_SPAN = re.compile(r"\bsystemctl\s+disable\s+([A-Za-z][\w@.\-]{2,})(?=\s*$|\s*;)", re.IGNORECASE)
 
 
-def disable_units(cmd: str) -> list[str]:
-    """Units a command disables (ssh unwrapped); stop/kill operands are not included."""
+def disable_units(cmd: str, verb: str = "disable") -> list[str]:
+    """Units a command disables (or stops, verb="stop"), ssh unwrapped; kill operands are not included."""
     out: list[str] = []
     for seg in (s.strip() for s in split_segments(executable_text(cmd))):
         remote = remote_command(seg)
         if remote and remote != UNPARSED:
-            out += disable_units(remote)
-        elif STOP_SEGMENT.fullmatch(seg) and re.search(r"\bsystemctl\s+disable\b", seg, re.IGNORECASE):
+            out += disable_units(remote, verb)
+        elif STOP_SEGMENT.fullmatch(seg) and re.search(r"\bsystemctl\s+" + verb + r"\b", seg, re.IGNORECASE):
             out += _segment_targets(seg)
     return out
 
@@ -1010,7 +1010,7 @@ _SIG = r"(?:-(?:9|15|2|KILL|TERM|INT|SIGKILL|SIGTERM|SIGINT)|-s\s+(?:9|15|2|KILL
 _LIT = r"[A-Za-z][\w\-/=:.]{2,}(?:[ ][\w\-/=:.]+)*"   # '.' allowed; the pattern is then matched as a regex
                                                       # against STOP_PROTECTED_CMDLINES in stop_only
 STOP_SEGMENT = re.compile(
-    r"(?:sudo\s+)?(?:"
+    r"(?:sudo\s+(?:-n\s+)?)?(?:"   # -n only makes sudo fail instead of prompting (owner 2026-10-29)
     r"kill(?:\s+" + _SIG + r")?(?:\s+" + _PID + r")+|"
     r"pkill(?:\s+" + _SIG + r")?(?:\s+-[fx])*\s+(?:'" + _LIT + r"'|\"" + _LIT + r"\"|[A-Za-z][\w\-]{2,})|"
     r"killall(?:\s+" + _SIG + r")?\s+[A-Za-z][\w\-]{2,}|"
@@ -1024,7 +1024,10 @@ STOP_PROTECTED = re.compile(r"\b(?:sshd?|systemd|init|networking|networkmanager|
                             r"dockerd|containerd|kubelet|wg-quick|wg|wireguard|openvpn|autossh|frpc|frps|socat|"
                             r"ngrok|chisel|sshuttle|dropbear|stunnel|xray|v2ray|zerotier(?:-one)?|firewalld|"
                             r"gpg-agent|tunnel|getty(?:@[\w.-]+)?|dbus(?:-broker)?|polkit|udev|"
-                            r"xrdp(?:-sesman)?|x11vnc|vncserver(?:@[\w.:-]+)?|tigervnc\w*|anydesk|rustdesk)\b",
+                            r"xrdp(?:-sesman)?|x11vnc|vncserver(?:@[\w.:-]+)?|tigervnc\w*|anydesk|rustdesk|"
+                            # review 2026-10-29: units that take the network interface down cut ssh too
+                            r"ifup(?:@[\w.:-]+)?|ifupdown|ifplugd|wpa_supplicant(?:@[\w.:-]+)?|netplan\w*|"
+                            r"dhclient|dhcpcd|connman|iwd|[\w@.-]+\.target)\b",
                             re.IGNORECASE)   # getty: console login; dbus/polkit/udev: the box itself
 STOP_PROTECTED_CMDLINES = ("sshd", "sshd: root@pts/0", "/usr/sbin/sshd -D", "ssh -W host:22", "systemd", "init",
                            "/sbin/init", "NetworkManager", "rclone mount gdrive: /mnt", "cloudflared tunnel run",
@@ -1037,7 +1040,9 @@ STOP_COMPANION = re.compile(
     r"(?:sleep\s+\d+|ps(?:\s+-[A-Za-z]+(?:\s+[\w,]+)?)*|pgrep(?:\s+-[A-Za-z]+)*\s+(?:'[^'\n]*'|\"[^\"\n]*\"|[\w.\-]+)|"
     r"nvidia-smi(?:\s+(?:--query-[\w-]+=[\w.,-]+|--format=[\w.,-]+|--id=\d+|-i\s+\d+))*|uptime|date|echo\s+[\w=.:-]*|"
     r"grep(?:\s+-[A-Za-z]+)*\s+(?:'[^'\n]*'|\"[^\"\n]*\"|[\w.:\-\[\]]+)|head(?:\s+-n?\s*\d+)?|tail(?:\s+-n?\s*\d+)?|"
-    r"wc\s+-l|cut\s+-c\s*[\d-]+)\s*;?")
+    r"wc\s+-l|cut\s+-c\s*[\d-]+|"
+    # owner 2026-10-29: the exit code and the unit state right after a stop
+    r"echo\s+[\w=.:-]*\$\?|systemctl\s+(?:is-active|is-enabled|is-failed)(?:\s+[A-Za-z][\w@.\-]{2,})+)\s*;?")
 # Anything that makes the request not a plain go-ahead: negation, "keep", "no", a question.
 NOT_A_GO = re.compile(
     r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:удал|снос|снес|стир|сотр|трог|чист|убир|замен|перезапис)|"
@@ -1683,7 +1688,7 @@ def _segment_targets(seg: str) -> list[str]:
     (re-review 2026-10-12, finding 2: a separate target regex missed `kill -s TERM 22`)."""
     toks = shlex.split(seg.rstrip(" ;"))
     if toks and toks[0] == "sudo":
-        toks = toks[1:]
+        toks = toks[2:] if toks[1:2] == ["-n"] else toks[1:]
     verb, args = toks[0].lower(), toks[1:]
     if verb == "systemctl":
         return args[1:]
@@ -1922,6 +1927,7 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
         return False, "stop command without readable targets"
     try:
         disabled = disable_units(cmd)
+        units = set(disable_units(cmd, "stop"))
     except ValueError:
         return False, "cannot parse the disable command"
     if disabled:
@@ -1951,7 +1957,10 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
                              # review 2026-10-13: "убей 37116 и 22 часа" - a number before a time unit is no pid
                              r"(?!\s*(?:час|мин|сек|ч\b|h\b|m\b|s\b|hours?|min|sec))",
                              prompt, re.IGNORECASE) is not None
-        return re.search(r"(?<![\w.\-/~:])" + re.escape(t) + r"(?![\w\-/]|\.\w)", prompt) is not None
+        name = re.escape(t)
+        if t in units:   # owner 2026-10-29: a unit is named with or without .service on either side
+            name = re.escape(t.removesuffix(".service")) + r"(?:\.service)?"
+        return re.search(r"(?<![\w.\-/~:])" + name + r"(?![\w\-/]|\.\w)", prompt) is not None
     # third review 2026-10-12: when the owner names operands herself ("останови процесс 4242"), my proposal
     # cannot add others (4243); it counts only for a bare yes or a request that names no operand at all
     if not CONFIRM_ONLY.fullmatch(prompt) and (re.search(r"\d{2,}", prompt) or any(owner_named(t) for t in targets)):
@@ -2214,6 +2223,10 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     elif DELETE_INTENT.search(prompt) or REPLACE_INTENT.search(prompt):
         named_in, from_phrase = prompt, bool(FROM_PHRASE.search(prompt))
         allow_delete, allow_move = bool(DELETE_INTENT.search(prompt)), bool(REPLACE_INTENT.search(prompt))
+    elif STOP_INTENT.search(prompt):   # owner 2026-10-29: "does not ask to delete" hid the real cause
+        return False, ("a stop request approves only a command that is nothing but a plain stop "
+                       "(kill/pkill/killall/systemctl stop, sudo or sudo -n) with read-only checks, "
+                       "no protected daemon, inside a plain `ssh host '...'`")
     else:
         return False, "the latest request does not ask to delete"
     targets = plain_delete_targets(cmd, allow_move, allow_delete)
@@ -3051,6 +3064,18 @@ def self_test() -> int:
         ("bare yes to my stop proposal", "killall -9 python3",
          transcript("да", "Остановить все python3? `killall -9 python3`")),
         ("systemctl stop asked", "ssh h 'sudo systemctl stop worker'", transcript("stop the worker")),
+        # owner 2026-10-29 («останови службу ink-reader» was refused three times): sudo -n, the
+        # .service suffix on either side, and read-only status checks after the stop
+        ("unit with .service, owner says службу + bare name",
+         "ssh gpu-host 'sudo -n systemctl stop ink-reader.service; echo rc=$?; "
+         "systemctl is-active ink-reader.service'", transcript("останови службу ink-reader")),
+        ("bare unit, owner names it with .service",
+         "ssh gpu-host 'sudo -n systemctl stop ink-reader; echo rc=$?; systemctl is-active ink-reader'",
+         transcript("останови ink-reader.service")),
+        ("unit stop with an nvidia-smi check",
+         "ssh gpu-host 'sudo -n systemctl stop ink-reader.service; echo rc=$?; systemctl is-active "
+         "ink-reader.service; nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv,noheader'",
+         transcript("останови службу ink-reader")),
         ("stop with read-only companions", "ssh h 'kill 4242; sleep 20; ps -eo pid,args | grep -c train'",
          transcript("останови процесс 4242")),
         ("owner names the pid", "kill -s KILL 4242", transcript("убей pid 4242")),
@@ -3095,6 +3120,38 @@ def self_test() -> int:
         ("question about a kill", "kill -9 4242", transcript("посмотри, почему kill -9 4242 не сработал")),
         ("kill as a noun", "pkill -9 python3", transcript("this will kill performance of python3")),
         ("systemctl stop --all", "systemctl stop --all", transcript("stop --all")),
+        # owner 2026-10-29: the unit-stop shape passes only for the unit she names, on a plain stop request
+        ("unit stop not asked", "ssh h 'sudo -n systemctl stop ink-reader.service'",
+         transcript("проверь службу ink-reader")),
+        ("a different unit", "ssh h 'sudo -n systemctl stop ink-writer.service'",
+         transcript("останови службу ink-reader")),
+        ("a longer unit than named", "ssh h 'sudo -n systemctl stop ink-reader.service'",
+         transcript("останови службу ink")),
+        ("same name, another unit type", "ssh h 'sudo -n systemctl stop ink-reader.socket'",
+         transcript("останови службу ink-reader")),
+        ("a second unit not named", "ssh h 'sudo -n systemctl stop ink-reader.service api-worker.service'",
+         transcript("останови службу ink-reader")),
+        ("unit stop negated", "ssh h 'sudo -n systemctl stop ink-reader.service'",
+         transcript("не останавливай службу ink-reader")),
+        ("unit stop as a question", "ssh h 'sudo -n systemctl stop ink-reader.service'",
+         transcript("остановить службу ink-reader?")),
+        ("own access unit with .service", "ssh h 'sudo -n systemctl stop sshd.service'", transcript("останови службу sshd")),
+        ("tunnel unit with .service", "ssh h 'sudo -n systemctl stop cloudflared.service'",
+         transcript("останови cloudflared.service")),
+        ("sudo as another user", "ssh h 'sudo -u root systemctl stop ink-reader.service'",
+         transcript("останови службу ink-reader")),
+        ("status check that writes", "ssh h 'sudo -n systemctl stop ink-reader; systemctl mask ink-reader'",
+         transcript("останови службу ink-reader")),
+        ("status check piped to a shell", "ssh h 'sudo -n systemctl stop ink-reader; systemctl is-active x | sh'",
+         transcript("останови службу ink-reader")),
+        ("exit code echo hides a substitution", "ssh h 'sudo -n systemctl stop ink-reader; echo rc=$(id)'",
+         transcript("останови службу ink-reader")),
+        ("network interface unit", "ssh h 'sudo -n systemctl stop ifup@eth0'",
+         transcript("останови службу ifup@eth0")),
+        ("wifi supplicant", "ssh h 'sudo systemctl stop wpa_supplicant'", transcript("останови wpa_supplicant")),
+        ("a whole target", "ssh h 'sudo systemctl stop multi-user.target'", transcript("останови multi-user.target")),
+        ("restart after the stop","ssh h 'sudo -n systemctl stop ink-reader; systemctl restart api-worker'",
+         transcript("останови службу ink-reader")),
         # re-review 2026-10-12 REJECT findings, each must stay refused
         ("a time read as a pid", "kill -9 4242 22", transcript("Убей процесс 4242, в 22:30 он висел")),
         ("exclusion read as inclusion", "kill -9 4242 22", transcript("убей процесс 4242, но не 22")),
