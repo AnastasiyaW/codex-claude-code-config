@@ -1027,14 +1027,19 @@ STOP_PROTECTED = re.compile(r"\b(?:sshd?|systemd|init|networking|networkmanager|
                             r"xrdp(?:-sesman)?|x11vnc|vncserver(?:@[\w.:-]+)?|tigervnc\w*|anydesk|rustdesk|"
                             # review 2026-10-29: units that take the network interface down cut ssh too
                             r"ifup(?:@[\w.:-]+)?|ifupdown|ifplugd|wpa_supplicant(?:@[\w.:-]+)?|netplan\w*|"
-                            r"dhclient|dhcpcd|connman|iwd|[\w@.-]+\.target)\b",
+                            r"dhclient|dhcpcd|connman|iwd|[\w@.-]+\.target|user@[\w.-]*|"
+                            r"network(?:-manager)?(?=(?:\.service)?$))\b",
                             re.IGNORECASE)   # getty: console login; dbus/polkit/udev: the box itself
 STOP_PROTECTED_CMDLINES = ("sshd", "sshd: root@pts/0", "/usr/sbin/sshd -D", "ssh -W host:22", "systemd", "init",
                            "/sbin/init", "NetworkManager", "rclone mount gdrive: /mnt", "cloudflared tunnel run",
                            "tailscaled", "dockerd", "containerd", "kubelet", "openvpn", "autossh -M 0", "wg-quick up wg0",
                            "frpc -c frpc.toml", "socat TCP-LISTEN:2222", "ngrok tcp 22", "chisel client",
                            "sshuttle -r h", "dropbear", "stunnel", "xray run", "v2ray run", "zerotier-one",
-                           "firewalld", "gpg-agent --daemon")
+                           "firewalld", "gpg-agent --daemon",
+                           # review 2026-10-29: pkill fragments of network daemons ('wpa_supp', 'networkd')
+                           "/sbin/wpa_supplicant -u -s -O /run/wpa_supplicant", "/sbin/dhclient -4 -v eth0",
+                           "dhcpcd -q eth0", "/lib/systemd/systemd-networkd", "/usr/sbin/ifplugd -i eth0",
+                           "/usr/sbin/connmand -n", "/usr/libexec/iwd", "/usr/sbin/NetworkManager --no-daemon")
 # Read-only commands allowed beside a stop or a restart (review 2026-10-12, finding 1).
 STOP_COMPANION = re.compile(
     r"(?:sleep\s+\d+|ps(?:\s+-[A-Za-z]+(?:\s+[\w,]+)?)*|pgrep(?:\s+-[A-Za-z]+)*\s+(?:'[^'\n]*'|\"[^\"\n]*\"|[\w.\-]+)|"
@@ -1817,6 +1822,14 @@ def stop_only(cmd: str) -> bool:
     # residual risk (documented): a pid is checked only for being named, not resolved to its process here
     if not targets or any(STOP_PROTECTED.search(t) for t in targets):
         return False
+    # review 2026-10-29: a unit is a service, by name or with .service; every other unit type (target,
+    # slice, scope, socket, mount, timer ...) is refused instead of listing the dangerous ones
+    try:
+        units = disable_units(cmd, "stop") + disable_units(cmd)
+    except ValueError:
+        return False
+    if any("." in u.removesuffix(".service") for u in units):
+        return False
     for t in targets:   # pkill/killall match by regex: 'ss.d' hits sshd although no word says so
         if not t.isdigit():
             try:
@@ -2225,7 +2238,7 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         allow_delete, allow_move = bool(DELETE_INTENT.search(prompt)), bool(REPLACE_INTENT.search(prompt))
     elif STOP_INTENT.search(prompt):   # owner 2026-10-29: "does not ask to delete" hid the real cause
         return False, ("a stop request approves only a command that is nothing but a plain stop "
-                       "(kill/pkill/killall/systemctl stop, sudo or sudo -n) with read-only checks, "
+                       "(kill/pkill/killall/systemctl stop of a .service unit, sudo or sudo -n) with read-only checks, "
                        "no protected daemon, inside a plain `ssh host '...'`")
     else:
         return False, "the latest request does not ask to delete"
@@ -3150,6 +3163,24 @@ def self_test() -> int:
          transcript("останови службу ifup@eth0")),
         ("wifi supplicant", "ssh h 'sudo systemctl stop wpa_supplicant'", transcript("останови wpa_supplicant")),
         ("a whole target", "ssh h 'sudo systemctl stop multi-user.target'", transcript("останови multi-user.target")),
+        # review 2026-10-29: only services, by name or .service; other unit types refused by default
+        ("a slice", "ssh h 'sudo systemctl stop user.slice'", transcript("останови user.slice")),
+        ("a scope", "ssh h 'sudo systemctl stop session-3.scope'", transcript("останови session-3.scope")),
+        ("a mount", "ssh h 'sudo systemctl stop data.mount'", transcript("останови data.mount")),
+        ("a timer", "ssh h 'sudo -n systemctl stop backup.timer'", transcript("останови службу backup.timer")),
+        ("a dotted name without a type", "ssh h 'sudo systemctl stop app.v2'", transcript("останови app.v2")),
+        ("disable a socket", "ssh h 'sudo systemctl disable ink-reader.socket'",
+         transcript("убери ink-reader.socket из автозапуска")),
+        ("the user manager", "ssh h 'sudo systemctl stop user@1000'", transcript("останови службу user@1000")),
+        ("the legacy network service", "ssh h 'sudo systemctl stop network.service'", transcript("останови network.service")),
+        ("network-manager", "ssh h 'sudo systemctl stop network-manager'", transcript("останови network-manager")),
+        ("pkill a supplicant fragment", "ssh h 'pkill wpa_supp'", transcript("останови wpa_supp")),
+        ("pkill a dhcp client fragment", "ssh h 'pkill dhcl'", transcript("останови dhcl")),
+        ("pkill networkd", "ssh h 'pkill networkd'", transcript("останови networkd")),
+        ("pkill a dhcpcd fragment", "ssh h 'pkill dhcpc'", transcript("останови dhcpc")),
+        ("pkill an ifplugd fragment", "ssh h 'pkill ifplug'", transcript("останови ifplug")),
+        ("pkill a connman fragment", "ssh h 'pkill connma'", transcript("останови connma")),
+        ("pkill iwd", "ssh h 'pkill -f libexec/iwd'", transcript("останови libexec/iwd")),
         ("restart after the stop","ssh h 'sudo -n systemctl stop ink-reader; systemctl restart api-worker'",
          transcript("останови службу ink-reader")),
         # re-review 2026-10-12 REJECT findings, each must stay refused
