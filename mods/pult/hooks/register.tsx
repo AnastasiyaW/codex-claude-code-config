@@ -311,21 +311,22 @@ async function landsInside($: $, rootReal: string, path: string): Promise<boolea
   const norm = (p: string) => fold(p.replace(/\\/g, '/').replace(/\/+$/, ''))
   const root = norm(rootReal)
   const isUnder = (p?: string) => p !== undefined && (norm(p) === root || norm(p).startsWith(`${root}/`))
-  // A link that leads nowhere fails stat like a missing file, yet a write would follow it:
-  // the folder listing shows the entry as it stands.
-  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  const name = fold(path.slice(cut + 1))
-  const entries = await $.fs.list(path.slice(0, cut)).catch(() => [])
-  if (entries.some(entry => fold(entry.name) === name && entry.isLink)) return false
-  const own = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
-  if (own) return !own.isLink && isUnder(own.realPath)
-  let dir = path
-  for (;;) {
-    const cut = Math.max(dir.lastIndexOf('/'), dir.lastIndexOf('\\'))
+  // Walk up from the file to the first level that exists. A level may be missing (the write creates
+  // it) but never a link stat cannot follow: the folder listing shows such an entry as it stands.
+  // Names compare case-insensitively everywhere: a false refusal costs nothing.
+  for (let child = path; ; ) {
+    const cut = Math.max(child.lastIndexOf('/'), child.lastIndexOf('\\'))
     if (cut <= 0) return false
-    dir = dir.slice(0, cut)
-    const parent = await $.fs.stat(dir, { resolve: true }).catch(() => undefined)
-    if (parent) return isUnder(parent.realPath)
+    const dir = child.slice(0, cut)
+    const name = child.slice(cut + 1).toLowerCase()
+    const entries = await $.fs.list(dir).catch(() => undefined)
+    if (entries === undefined && (await $.fs.exists(dir))) return false
+    const isLink = (entries ?? []).some(entry => entry.name.toLowerCase() === name && entry.isLink)
+    // The file itself is never written through a link, even one into the project (.git/hooks).
+    const found = await $.fs.stat(child, { resolve: true }).catch(() => undefined)
+    if (found) return (child !== path || !found.isLink) && isUnder(found.realPath)
+    if (isLink) return false
+    child = dir
   }
 }
 

@@ -11,12 +11,17 @@ const usage = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 
 // On Windows the engine returns paths with backslashes.
 const slash = (p: string) => p.replace(/\\/g, '/')
 // A disk where every path exists at its own spelling, except: `links` (path -> target, followed for
-// everything below it) and `missing` (paths absent with everything below them; stat rejects).
+// everything below it; target '' is a link that leads nowhere, stat answers isLink without realPath)
+// and `missing` (paths absent with everything below them; stat rejects).
 function plainDisk(on: Parameters<Parameters<typeof test>[1]>[1], links: Record<string, string> = {}, missing: string[] = []) {
   const below = (p: string, top: string) => p === top || p.startsWith(`${top}/`)
   on('fs.stat', async ($, e) => {
     const p = slash(String((e as { path: string }).path))
     const link = Object.keys(links).find(from => below(p, from))
+    if (link !== undefined && links[link] === '') {
+      if (p !== link) throw new Error('ENOENT')
+      return { value: { kind: 'other' as const, size: 0, mtimeMs: 0, isLink: true } }
+    }
     const realPath = link === undefined ? p : links[link]! + p.slice(link.length)
     if (missing.some(m => below(p, m) || below(realPath, m))) throw new Error('ENOENT')
     return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: p in links, realPath } }
@@ -108,7 +113,7 @@ test('before compaction a handoff and an INDEX.md line are written', async ($, o
 
 // One compaction on project `root`; returns the paths the mod wrote.
 async function compactWith($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1],
-  root: string, disk: () => void, list: (dir: string) => ReturnType<typeof listing> = () => []) {
+  root: string, disk: () => void, list: (dir: string) => ReturnType<typeof listing> = () => [], existing: string[] = []) {
   mock.clock(on, { now: new Date(2026, 9, 13, 9, 5).getTime() })
   const written: string[] = []
   on('session.root', async () => ({ value: root }))
@@ -116,7 +121,7 @@ async function compactWith($: Parameters<Parameters<typeof test>[1]>[0], on: Par
   on('session.turns', async () => ({ value: 5 }))
   disk()
   on('fs.list', async ($, e) => ({ value: list(slash(String((e as { path: string }).path))) }))
-  on('fs.exists', async () => ({ value: false }))
+  on('fs.exists', async ($, e) => ({ value: existing.includes(slash(String((e as { path: string }).path))) }))
   on('fs.write', async ($, e) => {
     written.push(slash((e as { path: string }).path))
     return { value: undefined }
@@ -148,6 +153,38 @@ test('a dangling INDEX.md link is not followed, the handoff is still written', a
 test('a link to a sibling folder with the same prefix is outside', async ($, on) => {
   const written = await compactWith($, on, 'D:/p', () =>
     plainDisk(on, { 'D:/p/.claude/handoffs': 'D:/p2/handoffs' }, ['D:/p2/handoffs/p']))
+  expect(written).toEqual([])
+})
+
+test('an INDEX.md linked to a git hook inside the project is not written through', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () =>
+    plainDisk(on, { 'D:/p/.claude/handoffs/INDEX.md': 'D:/p/.git/hooks/pre-commit' }))
+  expect(written).toEqual([HANDOFF])
+})
+
+test('a dangling link that stat reports (isLink, no realPath) is not followed', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () => plainDisk(on, { 'D:/p/.claude/handoffs/INDEX.md': '' }))
+  expect(written).toEqual([HANDOFF])
+})
+
+test('a dangling link differing only in case is caught on a case-sensitive root', async ($, on) => {
+  const written = await compactWith($, on, '//srv/share/p', () => plainDisk(on, {}, ['//srv/share/p/.claude/handoffs/INDEX.md']),
+    dir => (dir === '//srv/share/p/.claude/handoffs' ? listing(['index.md'], ['index.md']) : []))
+  expect(written).toEqual(['//srv/share/p/.claude/handoffs/p/2026-10-13_09-05_abcdef12.md'])
+})
+
+test('a dangling link at the project folder level gets nothing', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () => plainDisk(on, {}, ['D:/p/.claude/handoffs/p']),
+    dir => (dir === 'D:/p/.claude/handoffs' ? listing(['p'], ['p']) : []))
+  expect(written).toEqual([])
+})
+
+test('a folder that exists but cannot be listed gets nothing', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () => plainDisk(on, {}, [HANDOFF]),
+    dir => {
+      if (dir === 'D:/p/.claude/handoffs/p') throw new Error('EACCES')
+      return []
+    }, ['D:/p/.claude/handoffs/p'])
   expect(written).toEqual([])
 })
 
