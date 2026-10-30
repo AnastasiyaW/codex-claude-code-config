@@ -61,6 +61,7 @@ Opt-in extras (use --extras):
   - feedback-pending-show       SessionStart  surfaces the bounded distillation backlog
   - shared-branch-guard          PreToolUse    protects marked checkouts shared by several workers
   - publish-bypass-guard         PreToolUse    blocks publishing routes that skip the pre-push leak scan
+  - merge-gate-guard             PreToolUse    lands PRs on the default branch only through scripts/safe_merge.py
 
 Usage
 -----
@@ -162,6 +163,7 @@ EXTRAS: list[tuple[str, str, str | None]] = [
     ("feedback-pending-show.py", "SessionStart", None),
     ("shared-branch-guard.py", "PreToolUse", "Bash|PowerShell"),
     ("publish-bypass-guard.py", "PreToolUse", "Bash|PowerShell"),
+    ("merge-gate-guard.py", "PreToolUse", "Bash|PowerShell"),
 ]
 
 # Claude calls its delegation boundary Task. Codex exposes spawn_agent through

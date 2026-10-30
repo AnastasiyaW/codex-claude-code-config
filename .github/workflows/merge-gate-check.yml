@@ -1,0 +1,43 @@
+name: merge gate check
+
+# hooks/merge-gate-guard.py and scripts/safe_merge.py decide whether an agent may land
+# work on the default branch. A regression there either blocks ordinary work or lets a
+# merge through, so every change runs their full suites (real git repositories for the
+# hook, a fake gh for safe_merge). It runs on EVERY pull request, without a path filter:
+# safe_merge refuses a head on which no check succeeded, so a PR touching only other
+# files must still get at least this one.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'hooks/merge-gate-guard.py'
+      - 'hooks/safety_common.py'
+      - 'scripts/safe_merge.py'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: git identity for the test repositories
+        run: |
+          git config --global user.email ci@example.invalid
+          git config --global user.name ci
+      - name: merge-gate-guard
+        run: |
+          python hooks/merge-gate-guard.py --self-test
+          MERGE_GATE_FAST=1 python hooks/tests/test_merge_gate_guard.py
+          python hooks/tests/test_merge_gate_guard.py
+      - name: safe_merge
+        run: |
+          python scripts/safe_merge.py --self-test
+          python scripts/tests/test_safe_merge.py
