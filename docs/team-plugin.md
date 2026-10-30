@@ -49,7 +49,25 @@ machine it blocks every push, private ones included, so do not run
 `install_hooks.py --git-hooks` there until the wrapper is fixed. Public pushes from such a
 machine go through the owner.
 
-After a change to `SAFE_DEFAULTS`, `PLUGIN_EXTRAS` or `skills/` categories run:
+### Token savers
+
+The plugin also ships two hooks that cut token spend:
+
+- `hooks/benjamin-plus-inject.py` (SessionStart on startup, resume, clear and compact)
+  injects the Benjamin-Plus working habits from `references/benjamin-plus/`. Opt out
+  with `CLAUDE_SKIP_BENJAMIN=1` or a `.claude/.skip-benjamin` file in the project.
+  If `settings.json` already registers `benjamin-plus-inject.py`, remove that entry
+  when installing the plugin, or the text is injected twice.
+- `hooks/rtk-plugin-hook.py` (PreToolUse, Bash only) passes the command to
+  RTK, which rewrites `git status` into `rtk git status` and compresses the output.
+  It acts only when `rtk` on `PATH` matches the pinned hash in
+  `scripts/rtk_integration.py` (Windows release 0.43.0); otherwise the command runs
+  untouched. Install RTK by [rtk-integration.md](rtk-integration.md) and put the
+  verified `rtk.exe` on `PATH`. Skip `install-claude-hook` when the plugin is
+  installed, or RTK runs twice on every command. macOS and Linux binaries are not
+  pinned yet, so there the hook stays silent.
+
+After a change to `SAFE_DEFAULTS`, `PLUGIN_EXTRAS`, `PLUGIN_ONLY` or `skills/` categories run:
 
 ```bash
 python scripts/plugin_build.py          # regenerate hooks/hooks.json

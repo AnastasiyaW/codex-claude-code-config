@@ -25,8 +25,13 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import skill_paths  # noqa: E402
 TARGET = REPO_ROOT / "hooks" / "hooks.json"
 MANIFEST = REPO_ROOT / ".claude-plugin" / "plugin.json"
-# Plugin-only: replaces the rules/ and CLAUDE.md context a plugin cannot ship.
-PLUGIN_ONLY = [("plugin-rules-context.py", "SessionStart", None)]
+PLUGIN_ONLY = [
+    # Replaces the rules/ and CLAUDE.md context a plugin cannot ship.
+    ("plugin-rules-context.py", "SessionStart", None),
+    # Token savers (owner 2026-10-30); the matcher re-injects after context-wiping events.
+    ("benjamin-plus-inject.py", "SessionStart", "startup|resume|clear|compact"),
+    ("rtk-plugin-hook.py", "PreToolUse", "Bash"),
+]
 # Opt-in hooks the team plugin also ships (owner 2026-10-28); event and matcher come from EXTRAS.
 PLUGIN_EXTRAS = ["publish-bypass-guard.py"]
 

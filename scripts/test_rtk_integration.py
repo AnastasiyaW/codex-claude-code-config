@@ -48,14 +48,14 @@ class RtkIntegrationTests(unittest.TestCase):
         self.assertFalse(rtk_integration.merge_hook(settings, binary))
         entries = settings["hooks"]["PreToolUse"]
         self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]["matcher"], "Bash|PowerShell")
+        self.assertEqual(entries[0]["matcher"], "Bash")
         self.assertIn("hook claude", entries[0]["hooks"][0]["command"])
         if rtk_integration.os.name == "nt":
             self.assertNotIn("\\\\", entries[0]["hooks"][0]["command"])
 
     def test_merge_hook_upgrades_the_legacy_backslash_command_in_place(self) -> None:
         settings = {"hooks": {"PreToolUse": [{
-            "matcher": "Bash|PowerShell",
+            "matcher": "Bash",
             "hooks": [{
                 "type": "command",
                 "command": r"C:\\legacy\\rtk.exe hook claude",

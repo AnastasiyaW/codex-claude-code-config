@@ -67,6 +67,21 @@ class PluginBuildTests(unittest.TestCase):
             groups = [g for g in hooks["PreToolUse"] if any(h["args"][0].endswith("/" + script) for h in g["hooks"])]
             self.assertEqual([g.get("matcher") for g in groups], ["Bash|PowerShell"], script)
 
+    def test_token_savers_registered(self) -> None:
+        hooks = json.loads(MODULE.TARGET.read_text(encoding="utf-8"))["hooks"]
+
+        def matchers(event: str, script: str) -> list:
+            return [g.get("matcher") for g in hooks[event] if any(h["args"][0].endswith("/" + script) for h in g["hooks"])]
+
+        self.assertEqual(matchers("SessionStart", "benjamin-plus-inject.py"), ["startup|resume|clear|compact"])
+        self.assertEqual(matchers("PreToolUse", "rtk-plugin-hook.py"), ["Bash"])
+        self.assertTrue((REPO / "references" / "benjamin-plus" / "injected-instruction.md").is_file())
+
+    def test_rtk_hook_self_test(self) -> None:
+        result = subprocess.run([sys.executable, str(REPO / "hooks" / "rtk-plugin-hook.py"), "--self-test"],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_unknown_plugin_extra_is_refused(self) -> None:
         original = MODULE.PLUGIN_EXTRAS
         MODULE.PLUGIN_EXTRAS = original + ["no-such-hook.py"]
