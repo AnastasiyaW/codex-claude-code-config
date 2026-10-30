@@ -303,6 +303,26 @@ async function freeName($: $, dir: string, name: string): Promise<string> {
   return name
 }
 
+// A cloned repository may plant a link at .claude/handoffs or INDEX.md; the mod writes only where the
+// path really lands inside the project, and never through a link to a file.
+// simplification: checked right before each write, not atomically with it.
+async function landsInside($: $, rootReal: string, path: string): Promise<boolean> {
+  const fold = /^[A-Za-z]:[\\/]/.test(rootReal) ? (p: string) => p.toLowerCase() : (p: string) => p
+  const norm = (p: string) => fold(p.replace(/\\/g, '/').replace(/\/+$/, ''))
+  const root = norm(rootReal)
+  const isUnder = (p?: string) => p !== undefined && (norm(p) === root || norm(p).startsWith(`${root}/`))
+  const own = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
+  if (own) return !own.isLink && isUnder(own.realPath)
+  let dir = path
+  for (;;) {
+    const cut = Math.max(dir.lastIndexOf('/'), dir.lastIndexOf('\\'))
+    if (cut <= 0) return false
+    dir = dir.slice(0, cut)
+    const parent = await $.fs.stat(dir, { resolve: true }).catch(() => undefined)
+    if (parent) return isUnder(parent.realPath)
+  }
+}
+
 // The model writes the handoff from the cached transcript. Never throws: returns the outcome as text.
 async function writeHandoff($: $, why: string, skipIfFresh: boolean, messages?: readonly { role: string; text: string }[], announce = false): Promise<string> {
   const now = await $.clock.now()
@@ -333,12 +353,17 @@ async function writeHandoff($: $, why: string, skipIfFresh: boolean, messages?: 
     }
     const name = await freeName($, `${base}/${slug}`, handoffName(now, sid))
     const path = `${base}/${slug}/${name}`
+    const rootReal = (await $.fs.stat(root, { resolve: true }).catch(() => undefined))?.realPath
+    if (rootReal === undefined || !(await landsInside($, rootReal, path))) {
+      return 'Хендофф не записан: .claude/handoffs ведёт за пределы проекта или папку проекта не найти.'
+    }
     await $.fs.write(path, `<!-- pult: ${why} -->\n\n${body}\n`)
     await update($, checkpoint, () => ({ path, at: now, why }))
     const done = `Хендофф${fork.isAnswered ? '' : '-черновик'} записан: .claude/handoffs/${slug}/${name}`
     // INDEX.md is rewritten whole, so only after a successful read: a locked file
     // (antivirus, sync client) must not turn into an empty index.
     const index = `${base}/INDEX.md`
+    if (!(await landsInside($, rootReal, index))) return `${done}. INDEX.md не тронут: это ссылка или он ведёт за пределы проекта.`
     let old = '# Handoffs\n'
     if (await $.fs.exists(index)) {
       try {

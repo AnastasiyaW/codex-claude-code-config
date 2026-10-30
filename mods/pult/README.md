@@ -64,6 +64,12 @@ The interface strings (band, pane, toasts, handoff prompt) are in Russian.
 - Writes handoffs to `<project root>/.claude/handoffs/<project-slug>/YYYY-MM-DD_HH-MM_<session8>.md`
   and appends one line to `<project root>/.claude/handoffs/INDEX.md`. INDEX.md is rewritten only
   after a successful read, so a locked file never becomes an empty index.
+- Writes only where the path really lands inside the project: if `.claude/handoffs` (or a folder
+  above the file) is a link leading outside, nothing is written; if `INDEX.md` is itself a link,
+  it is left alone.
+- A handoff contains text from the conversation; a draft (when the model could not answer)
+  quotes the last messages directly. If you paste secrets into chats, add `.claude/handoffs/`
+  to `.gitignore` or check handoffs before committing.
 - Makes no network calls. The handoff is one model request over the cached transcript;
   compaction waits for it.
 

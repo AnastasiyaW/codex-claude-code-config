@@ -10,6 +10,13 @@ const PANE = {
 const usage = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
 // On Windows the engine returns paths with backslashes.
 const slash = (p: string) => p.replace(/\\/g, '/')
+// Every path is a real folder at its own spelling, except the links given as path -> target.
+function plainDisk(on: Parameters<Parameters<typeof test>[1]>[1], links: Record<string, string> = {}) {
+  on('fs.stat', async ($, e) => {
+    const p = slash(String((e as { path: string }).path))
+    return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: p in links, realPath: links[p] ?? p } }
+  })
+}
 
 test('Activity pane: running call, permission prompt, result', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
@@ -66,6 +73,7 @@ test('before compaction a handoff and an INDEX.md line are written', async ($, o
   on('session.root', async () => ({ value: 'D:/My_Project' }))
   on('session.id', async () => ({ value: '7f5720a1-b99b-485c-beb3-085137ba8390' }))
   on('session.turns', async () => ({ value: 5 }))
+  plainDisk(on)
   on('fs.list', async () => ({ value: [] }))
   on('fs.exists', async ($, e) => ({ value: slash(String((e as { path: string }).path)) in written }))
   on('fs.read', async ($, e) => {
@@ -91,6 +99,44 @@ test('before compaction a handoff and an INDEX.md line are written', async ($, o
   expect(written['D:/My_Project/.claude/handoffs/INDEX.md']).toContain('| 7f5720a1 | my-project | хендофф модом pult: перед /compact |')
 })
 
+test('a handoffs folder linked outside the project gets nothing', async ($, on) => {
+  mock.clock(on, { now: new Date(2026, 9, 13, 9, 5).getTime() })
+  const written: string[] = []
+  on('session.root', async () => ({ value: 'D:/p' }))
+  on('session.id', async () => ({ value: 'abcdef12-0000' }))
+  on('session.turns', async () => ({ value: 5 }))
+  plainDisk(on, { 'D:/p/.claude/handoffs/p/2026-10-13_09-05_abcdef12.md': 'E:/outside/target.txt' })
+  on('fs.list', async () => ({ value: [] }))
+  on('fs.exists', async () => ({ value: false }))
+  on('fs.write', async ($, e) => {
+    written.push(slash((e as { path: string }).path))
+    return { value: undefined }
+  })
+  on('model.fork', async () => ({ value: { isAnswered: true as const, text: '# Handoff', usage } }))
+  on('session.compact', async () => ({ messages: MSG }))
+  await $.session.compact({ trigger: 'manual', messages: MSG })
+  expect(written).toEqual([])
+})
+
+test('an INDEX.md that is a link is not followed, the handoff is still written', async ($, on) => {
+  mock.clock(on, { now: new Date(2026, 9, 13, 9, 5).getTime() })
+  const written: string[] = []
+  on('session.root', async () => ({ value: 'D:/p' }))
+  on('session.id', async () => ({ value: 'abcdef12-0000' }))
+  on('session.turns', async () => ({ value: 5 }))
+  plainDisk(on, { 'D:/p/.claude/handoffs/INDEX.md': 'D:/p/.claude/handoffs/INDEX.md' })
+  on('fs.list', async () => ({ value: [] }))
+  on('fs.exists', async () => ({ value: false }))
+  on('fs.write', async ($, e) => {
+    written.push(slash((e as { path: string }).path))
+    return { value: undefined }
+  })
+  on('model.fork', async () => ({ value: { isAnswered: true as const, text: '# Handoff', usage } }))
+  on('session.compact', async () => ({ messages: MSG }))
+  await $.session.compact({ trigger: 'manual', messages: MSG })
+  expect(written).toEqual(['D:/p/.claude/handoffs/p/2026-10-13_09-05_abcdef12.md'])
+})
+
 test('a fresh handoff is not rewritten', async ($, on) => {
   const clock = mock.clock(on, { now: 5_000_000 })
   let forks = 0
@@ -113,6 +159,7 @@ test('a locked INDEX.md is not wiped, the handoff is still written', async ($, o
   on('session.root', async () => ({ value: 'D:/p' }))
   on('session.id', async () => ({ value: 'abcdef12-0000' }))
   on('session.turns', async () => ({ value: 5 }))
+  plainDisk(on)
   on('fs.list', async () => ({ value: [] }))
   on('fs.exists', async ($, e) => ({ value: slash(String((e as { path: string }).path)).endsWith('INDEX.md') }))
   on('fs.read', async () => {
@@ -135,6 +182,7 @@ test('the model did not answer: a draft from the last messages is written', asyn
   on('session.root', async () => ({ value: 'D:/p' }))
   on('session.id', async () => ({ value: 'abcdef12-0000' }))
   on('session.turns', async () => ({ value: 5 }))
+  plainDisk(on)
   on('fs.list', async () => ({ value: [] }))
   on('fs.exists', async () => ({ value: false }))
   on('fs.write', async ($, e) => {
@@ -268,6 +316,7 @@ test('the model has not answered yet: /save-handoff writes nothing', async ($, o
   on('session.root', async () => ({ value: 'D:/p' }))
   on('session.id', async () => ({ value: 'abcdef12-0000' }))
   on('session.turns', async () => ({ value: 1 }))
+  plainDisk(on)
   on('fs.list', async () => ({ value: [] }))
   on('fs.exists', async () => ({ value: false }))
   on('fs.write', async ($, e) => {
