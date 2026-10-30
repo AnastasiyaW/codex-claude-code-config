@@ -28,8 +28,18 @@ whole point: the block is lifted by the action that would have solved it three a
 ago. Advisory at the third, blocking at the fourth, because the fourth is where the
 quoted session noticed and where the cost stops being tolerable.
 
+A second, narrower signal rides on the same record: the premise loop. Reading clears the
+retry block, but it does not clear this one -- an edit, a run, the SAME error, another edit,
+the same error again. Two fixes that failed on one check share an assumption, and a third
+fix on that assumption is the circle `finish-the-task.md` ("attack the premise") forbids.
+When one normalised error signature comes back three times in a session with an edit
+between each, the agent gets one advisory note per signature (never a block). The idea is
+from TokenEconomizer's failure-loop intervention (github.com/microsoft/TokenEconomizer,
+arXiv 2610.22732), rebuilt rule-only: no judge model, no stop.
+
 Wire on BOTH events:
-    PostToolUse  -- records outcomes (needs tool_response to see failure)
+    PostToolUse  -- records outcomes (needs tool_response to see failure); also on
+                    Edit|Write|MultiEdit|NotebookEdit so edits between failures are seen
     PreToolUse   -- reads the record and decides
 
 Tunables: CLAUDE_RETRY_SOFT (2 prior failures -> advise), CLAUDE_RETRY_HARD (3 -> block),
@@ -119,12 +129,87 @@ def failed(tool_response) -> bool:
                           text, re.I))
 
 
+PREMISE_AFTER = 3
+EDITING = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# A named exception says which failure it is; a bare "1 failed" summary would make two
+# different failing tests look like one, so it is used only when nothing better is there.
+_NAMED_ERROR = re.compile(r"\w*(error|exception)\b|\bfatal\b", re.I)
+_ERROR_LINE = re.compile(r"\w*(error|exception)\b|\b(traceback|failed|failure|fatal|assert\w*)\b", re.I)
+_MASKS = (
+    (re.compile(r"0x[0-9a-f]+", re.I), "<hex>"),
+    (re.compile(r"(?:[A-Za-z]:)?[\\/][^\s:'\"()]+"), "<path>"),
+    (re.compile(r"\d+"), "<n>"),
+)
+
+
+def error_signature(tool_response) -> str:
+    """The last error-looking line, with paths, numbers and addresses masked.
+
+    The last such line is where an exception ends up; masking keeps one failure the same
+    signature across a changed line number or temp path.
+    """
+    if isinstance(tool_response, dict):
+        text = "\n".join(str(tool_response.get(k) or "") for k in ("stderr", "stdout", "error"))
+    else:
+        text = str(tool_response or "")
+    lines = [l.strip() for l in text.splitlines()]
+    named = [l for l in lines if _NAMED_ERROR.search(l)]
+    lines = named or [l for l in lines if _ERROR_LINE.search(l)]
+    if not lines:
+        return ""
+    sig = lines[-1]
+    for pattern, mask in _MASKS:
+        sig = pattern.sub(mask, sig)
+    return sig[:200]
+
+
+def premise_loop(rows: list[dict], sig: str, sid: str) -> int:
+    """How many times `sig` failed in this session with an edit before each repeat."""
+    if not sig:
+        return 0
+    mine = [r for r in rows if r.get("sid") == sid]
+    times = sorted(float(r["ts"]) for r in mine if r.get("kind") == "fail" and r.get("sig") == sig)
+    edits = [float(r["ts"]) for r in mine if r.get("kind") == "edit"]
+    count = 1 if times else 0
+    for before, after in zip(times, times[1:]):
+        if any(before < t < after for t in edits):
+            count += 1
+    return count
+
+
+COMPACT_ABOVE_BYTES = 1_000_000
+
+
 def _load(now: float) -> list[dict]:
+    """Rows inside the window. A bad line is skipped, not fatal: parallel sessions append to one
+    file, and two writes interleaving once used to make the whole file read as empty (measured
+    2026-10-30: 4 bad lines in 89,835 had silenced this guard)."""
     try:
-        rows = [json.loads(l) for l in STATE.read_text(encoding="utf-8-sig").splitlines() if l.strip()]
-    except (OSError, ValueError):
+        text = STATE.read_text(encoding="utf-8-sig")
+    except OSError:
         return []
-    return [r for r in rows if now - float(r.get("ts", 0)) <= WINDOW]
+    rows = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+            if isinstance(row, dict) and now - float(row.get("ts", 0)) <= WINDOW:
+                rows.append(row)
+        except (ValueError, TypeError):
+            continue
+    if len(text) > COMPACT_ABOVE_BYTES:
+        _compact(rows)
+    return rows
+
+
+def _compact(rows: list[dict]) -> None:
+    """Keep only the window. simplification: a row another session appends during the rewrite
+    is lost; the cost is one missed attempt, not a wrong block."""
+    tmp = STATE.with_suffix(f".compact.{os.getpid()}")
+    try:
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        os.replace(tmp, STATE)
+    except OSError:
+        pass
 
 
 def _append(row: dict) -> None:
@@ -136,27 +221,82 @@ def _append(row: dict) -> None:
         pass
 
 
-def assess(rows: list[dict], key: str) -> tuple[int, bool]:
-    """How many failures for this key, and has anything been read since the last one."""
+def assess(rows: list[dict], key: str, sid: str = "") -> tuple[int, bool]:
+    """How many failures for this key, and has THIS session read anything since the last one.
+
+    A read in a parallel session does not clear another session's block; rows written before
+    reads carried a session id count for everyone."""
     fails = [r for r in rows if r.get("key") == key and r.get("kind") == "fail"]
     if not fails:
         return 0, True
     last = max(float(r["ts"]) for r in fails)
-    consulted = any(r.get("kind") == "read" and float(r.get("ts", 0)) > last for r in rows)
+    consulted = any(r.get("kind") == "read" and float(r.get("ts", 0)) > last
+                    and r.get("sid", sid) == sid for r in rows)
     return len(fails), consulted
 
 
 def record(event: dict) -> int:
     tool = event.get("tool_name") or ""
     ti = event.get("tool_input") or {}
+    sid = str(event.get("session_id") or "")
+    hook = event.get("hook_event_name") or "PostToolUse"
+    # PostToolUseFailure is the engine saying the call failed (a Bash exit != 0 arrives here, not
+    # in PostToolUse); its text is in `error`. An abort is not a failed attempt.
+    is_failure_event = hook == "PostToolUseFailure"
+    if is_failure_event and event.get("is_interrupt"):
+        return 0
+    response = event.get("error") if is_failure_event else event.get("tool_response")
     now = time.time()
-    if tool in CONSULTING:
-        _append({"ts": now, "kind": "read", "key": target_key(tool, ti) or tool})
-    elif tool in ACTING and failed(event.get("tool_response")):
+    sig = error_signature(response)
+    if tool in CONSULTING or (not is_failure_event and _shell_read(tool, ti)):
+        _append({"ts": now, "kind": "read", "key": target_key(tool, ti) or tool, "sid": sid})
+    # A bare "Exit code 1" (grep found nothing, test -f, a polling probe) is an answer, not a
+    # failed attempt: only a failure with error text counts.
+    elif tool in ACTING and ((is_failure_event and sig) or (not is_failure_event and failed(response))):
         key = target_key(tool, ti)
         if key:
-            _append({"ts": now, "kind": "fail", "key": key})
+            _append({"ts": now, "kind": "fail", "key": key, "sid": sid, "sig": sig})
+        rows = _load(now)
+        noted = any(r.get("kind") == "premise" and r.get("sid") == sid and r.get("sig") == sig for r in rows)
+        if sig and not noted and premise_loop(rows, sig, sid) >= PREMISE_AFTER:
+            _append({"ts": now, "kind": "premise", "sid": sid, "sig": sig})
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": hook,
+                "additionalContext": (
+                    f"[premise-loop] The same error came back {PREMISE_AFTER} times in this session, "
+                    f"with a fix between each: `{sig}`. The fixes share an assumption that is "
+                    f"wrong. Before a fourth fix: write that assumption in one sentence, name who "
+                    f"holds it, and test it with one observation that would come out differently "
+                    f"if it were false (finish-the-task.md, \"attack the premise\")."),
+            }}, ensure_ascii=False))
+    elif not is_failure_event and (tool in EDITING or _shell_edited(response)):
+        _append({"ts": now, "kind": "edit", "sid": sid})
     return 0
+
+
+_READ_VERBS = {"cat", "head", "tail", "less", "more", "grep", "rg", "type", "get-content", "gc", "nl", "wc"}
+
+
+def _shell_read(tool: str, tool_input: dict) -> bool:
+    """`cat file`, `grep x file`, `sed -n 1,40p f`: reading through the shell clears the block too."""
+    if tool not in ("Bash", "PowerShell"):
+        return False
+    command = (tool_input.get("command") or "").strip()
+    # `cat > f <<EOF` writes; a redirect into a file is never a read.
+    if re.search(r"(^|[^>&0-9])>(?!&)", command.replace("2>", " ").replace("&>", " ")):
+        return False
+    command = re.sub(r"^(cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*)+", "", command)
+    words = command.split()
+    if not words:
+        return False
+    verb = words[0].lower()
+    return verb in _READ_VERBS or (verb == "sed" and len(words) > 1 and words[1] == "-n")
+
+
+def _shell_edited(response) -> bool:
+    """A shell command that changed files (sed -i, a redirect, git apply) is an edit too."""
+    diff = response.get("bashEditDiff") if isinstance(response, dict) else None
+    return isinstance(diff, dict) and bool(diff.get("changedFiles") or diff.get("files"))
 
 
 def decide(event: dict) -> int:
@@ -171,7 +311,7 @@ def decide(event: dict) -> int:
     if not key:
         return 0
 
-    n, consulted = assess(_load(time.time()), key)
+    n, consulted = assess(_load(time.time()), key, str(event.get("session_id") or ""))
     if consulted or n < WARN_AFTER_FAILURES:
         return 0
 
@@ -205,7 +345,7 @@ def main() -> int:
     except ValueError:
         return 0  # fail open: a guard bug must not be the reason work stops
     hook = event.get("hook_event_name") or ""
-    return record(event) if hook == "PostToolUse" else decide(event)
+    return record(event) if hook in ("PostToolUse", "PostToolUseFailure") else decide(event)
 
 
 def self_test() -> int:
@@ -263,7 +403,108 @@ def self_test() -> int:
           assess(early_read, key)[1], False)
     check("unrelated key is untouched", assess(three, "cmd:other")[0], 0)
 
+    check("signature masks line numbers, paths and addresses",
+          error_signature({"stderr": "File \"D:/a/x.py\", line 12\nAssertionError: got 3 at 0xdeadbeef"}),
+          error_signature({"stderr": "File \"/tmp/b/x.py\", line 99\nAssertionError: got 7 at 0x1f"}))
+    check("output without an error line has no signature",
+          error_signature({"stdout": "all good", "stderr": ""}), "")
+    check("two failing tests are not one signature because both end in '1 failed'",
+          error_signature("E   KeyError: 'a'\n1 failed") != error_signature("E   TypeError: x\n1 failed"), True)
+    check("different errors keep different signatures",
+          error_signature("TypeError: bad operand") != error_signature("KeyError: 'name'"), True)
+    sig = "AssertionError: got <n>"
+    loop = [{"ts": 1, "kind": "fail", "sig": sig, "sid": "s"}, {"ts": 2, "kind": "edit", "sid": "s"},
+            {"ts": 3, "kind": "fail", "sig": sig, "sid": "s"}, {"ts": 4, "kind": "edit", "sid": "s"},
+            {"ts": 5, "kind": "fail", "sig": sig, "sid": "s"}]
+    check("same error after each of two fixes counts three", premise_loop(loop, sig, "s"), 3)
+    no_edits = [r for r in loop if r["kind"] == "fail"]
+    check("plain retries without edits are not a premise loop", premise_loop(no_edits, sig, "s"), 1)
+    check("another session's edits and failures do not count", premise_loop(loop, sig, "other"), 0)
+    changing = [dict(r, sig=f"Error {i}") if r["kind"] == "fail" else r for i, r in enumerate(loop)]
+    check("errors that keep changing stay silent",
+          max(premise_loop(changing, f"Error {i}", "s") for i in range(5)), 1)
+
     global STATE
+    with tempfile.TemporaryDirectory() as td:
+        saved = STATE
+        try:
+            import contextlib
+            import io
+            STATE = Path(td) / "premise.jsonl"
+            fail = {"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "session_id": "s1",
+                    "tool_input": {"command": "pytest tests/test_x.py"},
+                    "error": "Exit code 1\nE   AssertionError: got 3\n1 failed"}
+            edit = {"hook_event_name": "PostToolUse", "tool_name": "Edit", "session_id": "s1",
+                    "tool_input": {"file_path": "x.py"}, "tool_response": {"filePath": "x.py"}}
+            notes = []
+            for step in (fail, edit, fail, edit, fail, edit, fail):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    record(step)
+                if out.getvalue():
+                    notes.append(json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"])
+            check("third failure after two fixes adds one note, the fourth adds none", len(notes), 1)
+            STATE = Path(td) / "premise-shell.jsonl"
+            sed = {"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": "s2",
+                   "tool_input": {"command": "sed -i s/a/b/ x.py"},
+                   "tool_response": {"stdout": "", "stderr": "", "bashEditDiff": {"changedFiles": ["x.py"]}}}
+            shell_fail = dict(fail, session_id="s2")
+
+            def notes_for(steps) -> int:
+                count = 0
+                for step in steps:
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        record(step)
+                    count += bool(out.getvalue())
+                return count
+            check("edits made by a shell command count as fixes",
+                  notes_for((shell_fail, sed, shell_fail, sed, shell_fail)), 1)
+            STATE = Path(td) / "premise-abort.jsonl"
+            aborted = dict(shell_fail, session_id="s3", is_interrupt=True)
+            sed3 = dict(sed, session_id="s3")
+            check("aborted calls are not failures",
+                  notes_for((dict(shell_fail, session_id="s3"), sed3, aborted, sed3, aborted)), 0)
+            STATE = Path(td) / "premise.jsonl"
+            check("the note names the repeated error", "got <n>" in (notes[0] if notes else ""), True)
+        finally:
+            STATE = saved
+
+    with tempfile.TemporaryDirectory() as td:
+        saved = STATE
+        try:
+            STATE = Path(td) / "corrupt.jsonl"
+            good = json.dumps({"ts": time.time(), "kind": "fail", "key": "cmd:x"})
+            STATE.write_text(f"{good}\n}}\n{good}{good}\nnot json\n{good}\n", encoding="utf-8")
+            check("bad lines from interleaved writes do not blank the record", len(_load(time.time())), 2)
+            STATE = Path(td) / "big.jsonl"
+            old = json.dumps({"ts": time.time() - WINDOW - 60, "kind": "read", "key": "x", "pad": "p" * 200})
+            STATE.write_text((old + "\n") * 6000 + good + "\n", encoding="utf-8")
+            _load(time.time())
+            check("a big file is compacted to the window", STATE.read_text(encoding="utf-8").count("\n"), 1)
+            STATE = Path(td) / "probe.jsonl"
+            record({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "session_id": "p",
+                    "tool_input": {"command": "grep -q DONE run.log"}, "error": "Exit code 1"})
+            check("a bare exit code without error text is not a failed attempt", _load(time.time()), [])
+            record({"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": "p",
+                    "tool_input": {"command": "cat src/resolver.py"}, "tool_response": {"stdout": "x", "stderr": ""}})
+            check("reading through the shell counts as reading",
+                  [r["kind"] for r in _load(time.time())], ["read"])
+            check("a cd prefix before a read is still a read",
+                  _shell_read("Bash", {"command": 'cd "D:/repo" && cat x.py'}), True)
+            check("cat into a file is a write, not a read",
+                  _shell_read("Bash", {"command": "cat > out.py <<'EOF'"}), False)
+            check("stderr redirect alone keeps a read a read",
+                  _shell_read("Bash", {"command": "grep -n x f.py 2>/dev/null"}), True)
+            fail_row = {"ts": time.time() - 10, "kind": "fail", "key": "cmd:k"}
+            other_read = {"ts": time.time(), "kind": "read", "key": "x", "sid": "other"}
+            check("a read in another session does not clear this session's block",
+                  assess([fail_row, other_read], "cmd:k", "mine")[1], False)
+            check("a read in the same session clears it",
+                  assess([fail_row, dict(other_read, sid="mine")], "cmd:k", "mine")[1], True)
+        finally:
+            STATE = saved
+
     with tempfile.TemporaryDirectory() as td:
         saved = STATE
         try:
