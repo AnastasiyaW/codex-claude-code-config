@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for the plugin: hand Bash/PowerShell input to a verified RTK.
+"""PreToolUse hook for the plugin: hand Bash input to a verified RTK.
 
 RTK rewrites `git status` into `rtk git status`, so the shell must resolve
 `rtk` on PATH; the binary found there is the one checked against the pinned

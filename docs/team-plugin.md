@@ -56,7 +56,9 @@ The plugin also ships two hooks that cut token spend:
 - `hooks/benjamin-plus-inject.py` (SessionStart on startup, resume, clear and compact)
   injects the Benjamin-Plus working habits from `references/benjamin-plus/`. Opt out
   with `CLAUDE_SKIP_BENJAMIN=1` or a `.claude/.skip-benjamin` file in the project.
-- `hooks/rtk-plugin-hook.py` (PreToolUse, Bash and PowerShell) passes the command to
+  If `settings.json` already registers `benjamin-plus-inject.py`, remove that entry
+  when installing the plugin, or the text is injected twice.
+- `hooks/rtk-plugin-hook.py` (PreToolUse, Bash only) passes the command to
   RTK, which rewrites `git status` into `rtk git status` and compresses the output.
   It acts only when `rtk` on `PATH` matches the pinned hash in
   `scripts/rtk_integration.py` (Windows release 0.43.0); otherwise the command runs

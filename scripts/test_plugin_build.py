@@ -74,7 +74,7 @@ class PluginBuildTests(unittest.TestCase):
             return [g.get("matcher") for g in hooks[event] if any(h["args"][0].endswith("/" + script) for h in g["hooks"])]
 
         self.assertEqual(matchers("SessionStart", "benjamin-plus-inject.py"), ["startup|resume|clear|compact"])
-        self.assertEqual(matchers("PreToolUse", "rtk-plugin-hook.py"), ["Bash|PowerShell"])
+        self.assertEqual(matchers("PreToolUse", "rtk-plugin-hook.py"), ["Bash"])
         self.assertTrue((REPO / "references" / "benjamin-plus" / "injected-instruction.md").is_file())
 
     def test_rtk_hook_self_test(self) -> None:

@@ -52,6 +52,13 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/self-harm-guard.py"
             ]
+          },
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/rtk-plugin-hook.py"
+            ]
           }
         ]
       },
@@ -108,13 +115,6 @@
             "command": "python",
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/publish-bypass-guard.py"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "python",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/rtk-plugin-hook.py"
             ]
           }
         ]
