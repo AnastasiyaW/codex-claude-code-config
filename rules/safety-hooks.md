@@ -33,6 +33,7 @@ Env vars через inline `FOO=1 cmd` НЕ видны хуку — нужен m
 | `ask-question-guard.py` | deferral/меню-ВОПРОС через `AskUserQuestion` на обратимом | ask (`CLAUDE_ALLOW_ASK=1`) | решить самой и делать; спрашивать только необратимое/genuine-fork конкретным вопросом |
 | `db-snapshot-guard.py` | bypass'нутый destructive SQL без снапшота | — | авто-снапшот БД перед операцией |
 | `file-cohesion-guard.py` | (advisory, не блок) durable-файл в scratch-локации | — | положить в правильное место структуры (см. `file-organization-cohesion.md`) |
+| `merge-gate-guard.py` (Bash, PowerShell) | `gh pr merge`, `gh api`/HTTP-слияние или сдвиг ветки, `git push` в master/main/ветку по умолчанию в любом написании (кавычки, ssh, `bash -c`, `python -c`, алиасы) | нет (экстренно — владелица сама) | `scripts/safe_merge.py <owner/repo> <pr>`: зелёные проверки на точном head + head содержит текущий master; см. `merge-gate.md` |
 | `secret-on-disk-guard.py` (Bash, Write/Edit) | запись секрета во временный каталог (`/tmp`, `%TEMP%`) без ограничения прав; Write/Edit секрета в temp-файл | secret-on-disk | передать значение процессу напрямую (`docker run -e`, stdin); если файл неизбежен — `umask 077`/`mktemp`/`install -m 600` и удалить после; `--self-test` |
 
 ## PostToolUse / Stop / SessionStart / PreCompact
