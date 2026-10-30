@@ -28,7 +28,8 @@ WINDOWS_ASSET = (
     "https://github.com/rtk-ai/rtk/releases/download/v0.43.0/"
     "rtk-x86_64-pc-windows-msvc.zip"
 )
-HOOK_MATCHER = "Bash|PowerShell"
+# Bash only: RTK applies Bash rewrites, and in PowerShell `ls` and `cat` are aliases for other commands.
+HOOK_MATCHER = "Bash"
 HOOK_STATUS = "Compact safe shell output with verified RTK; raw fallback stays available"
 
 

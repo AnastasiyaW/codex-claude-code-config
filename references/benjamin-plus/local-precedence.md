@@ -23,7 +23,7 @@ wins and they yield:
   full length — they are durable artifacts, not conversation.
 - **A green check is a claim about the shapes someone imagined.** It does not
   close a defect class, and the author of a finding does not certify their own
-  fix (`green-suite-proves-imagined-shapes`).
+  fix (`quality-over-tokens-independent-verify`).
 
 Reading a file whole to edit it, or a dataset whole to transform it, was never
 what the keyhole rule limits — it limits inspection.

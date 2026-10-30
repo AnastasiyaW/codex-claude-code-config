@@ -7,7 +7,8 @@ Git source-of-truth checks, tests, or full-output verification.
 ## Decision
 
 Use RTK `v0.43.0` when its executable passes the pinned SHA-256 check. Wire its
-native `hook claude` processor into Claude Code for `Bash` and `PowerShell`.
+native `hook claude` processor into Claude Code for `Bash` only: RTK applies Bash
+rewrites, and in PowerShell `ls` and `cat` are aliases for other commands.
 On Windows the generated hook command deliberately uses a `C:/...` executable
 path: Claude invokes the command through a shell, where bare backslashes are
 escape characters and can collapse the path into a nonexistent file name.
