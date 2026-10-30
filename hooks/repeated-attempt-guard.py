@@ -177,12 +177,39 @@ def premise_loop(rows: list[dict], sig: str, sid: str) -> int:
     return count
 
 
+COMPACT_ABOVE_BYTES = 1_000_000
+
+
 def _load(now: float) -> list[dict]:
+    """Rows inside the window. A bad line is skipped, not fatal: parallel sessions append to one
+    file, and two writes interleaving once used to make the whole file read as empty (measured
+    2026-10-30: 4 bad lines in 89,835 had silenced this guard)."""
     try:
-        rows = [json.loads(l) for l in STATE.read_text(encoding="utf-8-sig").splitlines() if l.strip()]
-    except (OSError, ValueError):
+        text = STATE.read_text(encoding="utf-8-sig")
+    except OSError:
         return []
-    return [r for r in rows if now - float(r.get("ts", 0)) <= WINDOW]
+    rows = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+            if isinstance(row, dict) and now - float(row.get("ts", 0)) <= WINDOW:
+                rows.append(row)
+        except (ValueError, TypeError):
+            continue
+    if len(text) > COMPACT_ABOVE_BYTES:
+        _compact(rows)
+    return rows
+
+
+def _compact(rows: list[dict]) -> None:
+    """Keep only the window. simplification: a row another session appends during the rewrite
+    is lost; the cost is one missed attempt, not a wrong block."""
+    tmp = STATE.with_suffix(".compact")
+    try:
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        os.replace(tmp, STATE)
+    except OSError:
+        pass
 
 
 def _append(row: dict) -> None:
@@ -216,11 +243,13 @@ def record(event: dict) -> int:
         return 0
     response = event.get("error") if is_failure_event else event.get("tool_response")
     now = time.time()
-    if tool in CONSULTING:
+    sig = error_signature(response)
+    if tool in CONSULTING or (not is_failure_event and _shell_read(tool, ti)):
         _append({"ts": now, "kind": "read", "key": target_key(tool, ti) or tool})
-    elif tool in ACTING and (is_failure_event or failed(response)):
+    # A bare "Exit code 1" (grep found nothing, test -f, a polling probe) is an answer, not a
+    # failed attempt: only a failure with error text counts.
+    elif tool in ACTING and ((is_failure_event and sig) or (not is_failure_event and failed(response))):
         key = target_key(tool, ti)
-        sig = error_signature(response)
         if key:
             _append({"ts": now, "kind": "fail", "key": key, "sid": sid, "sig": sig})
         rows = _load(now)
@@ -239,6 +268,20 @@ def record(event: dict) -> int:
     elif not is_failure_event and (tool in EDITING or _shell_edited(response)):
         _append({"ts": now, "kind": "edit", "sid": sid})
     return 0
+
+
+_READ_VERBS = {"cat", "head", "tail", "less", "more", "grep", "rg", "type", "get-content", "gc", "nl", "wc"}
+
+
+def _shell_read(tool: str, tool_input: dict) -> bool:
+    """`cat file`, `grep x file`, `sed -n 1,40p f`: reading through the shell clears the block too."""
+    if tool not in ("Bash", "PowerShell"):
+        return False
+    words = (tool_input.get("command") or "").strip().split()
+    if not words:
+        return False
+    verb = words[0].lower()
+    return verb in _READ_VERBS or (verb == "sed" and len(words) > 1 and words[1] == "-n")
 
 
 def _shell_edited(response) -> bool:
@@ -415,6 +458,29 @@ def self_test() -> int:
                   notes_for((dict(shell_fail, session_id="s3"), sed3, aborted, sed3, aborted)), 0)
             STATE = Path(td) / "premise.jsonl"
             check("the note names the repeated error", "got <n>" in (notes[0] if notes else ""), True)
+        finally:
+            STATE = saved
+
+    with tempfile.TemporaryDirectory() as td:
+        saved = STATE
+        try:
+            STATE = Path(td) / "corrupt.jsonl"
+            good = json.dumps({"ts": time.time(), "kind": "fail", "key": "cmd:x"})
+            STATE.write_text(f"{good}\n}}\n{good}{good}\nnot json\n{good}\n", encoding="utf-8")
+            check("bad lines from interleaved writes do not blank the record", len(_load(time.time())), 2)
+            STATE = Path(td) / "big.jsonl"
+            old = json.dumps({"ts": time.time() - WINDOW - 60, "kind": "read", "key": "x", "pad": "p" * 200})
+            STATE.write_text((old + "\n") * 6000 + good + "\n", encoding="utf-8")
+            _load(time.time())
+            check("a big file is compacted to the window", STATE.read_text(encoding="utf-8").count("\n"), 1)
+            STATE = Path(td) / "probe.jsonl"
+            record({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "session_id": "p",
+                    "tool_input": {"command": "grep -q DONE run.log"}, "error": "Exit code 1"})
+            check("a bare exit code without error text is not a failed attempt", _load(time.time()), [])
+            record({"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": "p",
+                    "tool_input": {"command": "cat src/resolver.py"}, "tool_response": {"stdout": "x", "stderr": ""}})
+            check("reading through the shell counts as reading",
+                  [r["kind"] for r in _load(time.time())], ["read"])
         finally:
             STATE = saved
 
