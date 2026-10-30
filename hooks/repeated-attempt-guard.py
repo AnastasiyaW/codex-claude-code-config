@@ -133,8 +133,9 @@ PREMISE_AFTER = 3
 EDITING = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 # A named exception says which failure it is; a bare "1 failed" summary would make two
 # different failing tests look like one, so it is used only when nothing better is there.
-_NAMED_ERROR = re.compile(r"\w*(error|exception)\b|\bfatal\b", re.I)
-_ERROR_LINE = re.compile(r"\w*(error|exception)\b|\b(traceback|failed|failure|fatal|assert\w*)\b", re.I)
+_NAMED_ERROR = re.compile(r"\w*(error|exception)\b|\bfatal\b|no such file|not found|cannot|denied", re.I)
+_ERROR_LINE = re.compile(r"\w*(error|exception)\b|\b(traceback|failed|failure|fatal|assert\w*)\b"
+                         r"|no such file|not found|cannot|denied", re.I)
 _MASKS = (
     (re.compile(r"0x[0-9a-f]+", re.I), "<hex>"),
     (re.compile(r"(?:[A-Za-z]:)?[\\/][^\s:'\"()]+"), "<path>"),
@@ -486,6 +487,8 @@ def self_test() -> int:
             record({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "session_id": "p",
                     "tool_input": {"command": "grep -q DONE run.log"}, "error": "Exit code 1"})
             check("a bare exit code without error text is not a failed attempt", _load(time.time()), [])
+            check("a shell error without the word 'error' still has a signature",
+                  bool(error_signature("Exit code 2\nls: cannot access 'D:/x': No such file or directory")), True)
             record({"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": "p",
                     "tool_input": {"command": "cat src/resolver.py"}, "tool_response": {"stdout": "x", "stderr": ""}})
             check("reading through the shell counts as reading",
