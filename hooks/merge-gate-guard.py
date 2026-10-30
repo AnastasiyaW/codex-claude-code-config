@@ -701,8 +701,11 @@ def _note_branch_switch(rest: list[str], ctx: Ctx, cwd: Path | None) -> None:
     if any(a in ("-t", "--track") or a.startswith("--track=") for a in rest):
         ctx.head_moved = True  # the new branch's upstream may be the default branch
         return
+    creates = [a for a in rest if a in ("-b", "-B", "-c", "-C", "--orphan")]
     for i, a in enumerate(rest):
-        if a in ("-b", "-B", "-c", "-C", "--orphan"):
+        if len(creates) > 1:
+            break  # -b x -b master: which name wins is git's business, not a guess here
+        if a in creates:
             new, resolved = expand(rest[i + 1] if i + 1 < len(rest) else "$", ctx)
             if resolved:
                 ctx.branch, ctx.head_moved = new, False

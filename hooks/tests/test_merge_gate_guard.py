@@ -240,6 +240,7 @@ BLOCK = [
     ("git checkout -t origin/master -b x && git push", "feature", False),
     ("git checkout -b feat9 master && git push origin HEAD:master", "repo", False),
     ("git checkout -b && git push", "feature", False),
+    ("git checkout -b master2 -b master && git push origin HEAD", "feature", False),
     ("git push origin \"${X_UNSET}/main\"", "feature", False),
     ("gh api graphql -f query=\"mutation{${M}(input:{})}\"", "feature", False),
     ("gh api graphql -f query=\"{x} $(cat m.graphql)\"", "feature", False),
