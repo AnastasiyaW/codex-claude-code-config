@@ -10,13 +10,20 @@ const PANE = {
 const usage = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
 // On Windows the engine returns paths with backslashes.
 const slash = (p: string) => p.replace(/\\/g, '/')
-// Every path is a real folder at its own spelling, except the links given as path -> target.
-function plainDisk(on: Parameters<Parameters<typeof test>[1]>[1], links: Record<string, string> = {}) {
+// A disk where every path exists at its own spelling, except: `links` (path -> target, followed for
+// everything below it) and `missing` (paths absent with everything below them; stat rejects).
+function plainDisk(on: Parameters<Parameters<typeof test>[1]>[1], links: Record<string, string> = {}, missing: string[] = []) {
+  const below = (p: string, top: string) => p === top || p.startsWith(`${top}/`)
   on('fs.stat', async ($, e) => {
     const p = slash(String((e as { path: string }).path))
-    return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: p in links, realPath: links[p] ?? p } }
+    const link = Object.keys(links).find(from => below(p, from))
+    const realPath = link === undefined ? p : links[link]! + p.slice(link.length)
+    if (missing.some(m => below(p, m) || below(realPath, m))) throw new Error('ENOENT')
+    return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: p in links, realPath } }
   })
 }
+const listing = (names: string[], links: string[] = []) =>
+  names.map(name => ({ name, kind: 'file' as const, size: 0, mtimeMs: 0, isLink: links.includes(name) }))
 
 test('Activity pane: running call, permission prompt, result', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
@@ -99,14 +106,16 @@ test('before compaction a handoff and an INDEX.md line are written', async ($, o
   expect(written['D:/My_Project/.claude/handoffs/INDEX.md']).toContain('| 7f5720a1 | my-project | хендофф модом pult: перед /compact |')
 })
 
-test('a handoffs folder linked outside the project gets nothing', async ($, on) => {
+// One compaction on project `root`; returns the paths the mod wrote.
+async function compactWith($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1],
+  root: string, disk: () => void, list: (dir: string) => ReturnType<typeof listing> = () => []) {
   mock.clock(on, { now: new Date(2026, 9, 13, 9, 5).getTime() })
   const written: string[] = []
-  on('session.root', async () => ({ value: 'D:/p' }))
+  on('session.root', async () => ({ value: root }))
   on('session.id', async () => ({ value: 'abcdef12-0000' }))
   on('session.turns', async () => ({ value: 5 }))
-  plainDisk(on, { 'D:/p/.claude/handoffs/p/2026-10-13_09-05_abcdef12.md': 'E:/outside/target.txt' })
-  on('fs.list', async () => ({ value: [] }))
+  disk()
+  on('fs.list', async ($, e) => ({ value: list(slash(String((e as { path: string }).path))) }))
   on('fs.exists', async () => ({ value: false }))
   on('fs.write', async ($, e) => {
     written.push(slash((e as { path: string }).path))
@@ -115,26 +124,36 @@ test('a handoffs folder linked outside the project gets nothing', async ($, on) 
   on('model.fork', async () => ({ value: { isAnswered: true as const, text: '# Handoff', usage } }))
   on('session.compact', async () => ({ messages: MSG }))
   await $.session.compact({ trigger: 'manual', messages: MSG })
+  return written
+}
+const HANDOFF = 'D:/p/.claude/handoffs/p/2026-10-13_09-05_abcdef12.md'
+
+test('a handoffs folder linked outside the project gets nothing (the file does not exist yet)', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () =>
+    plainDisk(on, { 'D:/p/.claude/handoffs': 'E:/outside' }, ['E:/outside/p']))
   expect(written).toEqual([])
 })
 
-test('an INDEX.md that is a link is not followed, the handoff is still written', async ($, on) => {
-  mock.clock(on, { now: new Date(2026, 9, 13, 9, 5).getTime() })
-  const written: string[] = []
-  on('session.root', async () => ({ value: 'D:/p' }))
-  on('session.id', async () => ({ value: 'abcdef12-0000' }))
-  on('session.turns', async () => ({ value: 5 }))
-  plainDisk(on, { 'D:/p/.claude/handoffs/INDEX.md': 'D:/p/.claude/handoffs/INDEX.md' })
-  on('fs.list', async () => ({ value: [] }))
-  on('fs.exists', async () => ({ value: false }))
-  on('fs.write', async ($, e) => {
-    written.push(slash((e as { path: string }).path))
-    return { value: undefined }
-  })
-  on('model.fork', async () => ({ value: { isAnswered: true as const, text: '# Handoff', usage } }))
-  on('session.compact', async () => ({ messages: MSG }))
-  await $.session.compact({ trigger: 'manual', messages: MSG })
-  expect(written).toEqual(['D:/p/.claude/handoffs/p/2026-10-13_09-05_abcdef12.md'])
+test('a handoff file that is a link elsewhere gets nothing', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () => plainDisk(on, { [HANDOFF]: 'E:/outside/target.txt' }))
+  expect(written).toEqual([])
+})
+
+test('a dangling INDEX.md link is not followed, the handoff is still written', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () => plainDisk(on, {}, ['D:/p/.claude/handoffs/INDEX.md']),
+    dir => (dir === 'D:/p/.claude/handoffs' ? listing(['INDEX.md'], ['INDEX.md']) : []))
+  expect(written).toEqual([HANDOFF])
+})
+
+test('a link to a sibling folder with the same prefix is outside', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () =>
+    plainDisk(on, { 'D:/p/.claude/handoffs': 'D:/p2/handoffs' }, ['D:/p2/handoffs/p']))
+  expect(written).toEqual([])
+})
+
+test('drive letter case does not matter on Windows', async ($, on) => {
+  const written = await compactWith($, on, 'd:/p', () => plainDisk(on, { 'd:/p': 'D:/P' }, ['D:/P/.claude', 'd:/p/.claude']))
+  expect(written).toEqual(['d:/p/.claude/handoffs/p/2026-10-13_09-05_abcdef12.md', 'd:/p/.claude/handoffs/INDEX.md'])
 })
 
 test('a fresh handoff is not rewritten', async ($, on) => {

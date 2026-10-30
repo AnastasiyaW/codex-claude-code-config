@@ -311,6 +311,12 @@ async function landsInside($: $, rootReal: string, path: string): Promise<boolea
   const norm = (p: string) => fold(p.replace(/\\/g, '/').replace(/\/+$/, ''))
   const root = norm(rootReal)
   const isUnder = (p?: string) => p !== undefined && (norm(p) === root || norm(p).startsWith(`${root}/`))
+  // A link that leads nowhere fails stat like a missing file, yet a write would follow it:
+  // the folder listing shows the entry as it stands.
+  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  const name = fold(path.slice(cut + 1))
+  const entries = await $.fs.list(path.slice(0, cut)).catch(() => [])
+  if (entries.some(entry => fold(entry.name) === name && entry.isLink)) return false
   const own = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
   if (own) return !own.isLink && isUnder(own.realPath)
   let dir = path

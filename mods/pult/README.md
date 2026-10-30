@@ -66,7 +66,8 @@ The interface strings (band, pane, toasts, handoff prompt) are in Russian.
   after a successful read, so a locked file never becomes an empty index.
 - Writes only where the path really lands inside the project: if `.claude/handoffs` (or a folder
   above the file) is a link leading outside, nothing is written; if `INDEX.md` is itself a link,
-  it is left alone.
+  it is left alone, including a link that leads nowhere. Out of scope: hard links (they keep their
+  own spelling) and a link swapped in between the check and the write.
 - A handoff contains text from the conversation; a draft (when the model could not answer)
   quotes the last messages directly. If you paste secrets into chats, add `.claude/handoffs/`
   to `.gitignore` or check handoffs before committing.
