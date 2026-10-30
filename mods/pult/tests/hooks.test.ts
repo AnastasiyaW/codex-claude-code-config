@@ -13,10 +13,16 @@ const slash = (p: string) => p.replace(/\\/g, '/')
 // A disk where every path exists at its own spelling, except: `links` (path -> target, followed for
 // everything below it; target '' is a link that leads nowhere, stat answers isLink without realPath)
 // and `missing` (paths absent with everything below them; stat rejects).
-function plainDisk(on: Parameters<Parameters<typeof test>[1]>[1], links: Record<string, string> = {}, missing: string[] = []) {
+// `unreported` redirects like a link but never says so (a Windows junction listed as a folder).
+function plainDisk(on: Parameters<Parameters<typeof test>[1]>[1], links: Record<string, string> = {}, missing: string[] = [],
+  unreported: Record<string, string> = {}) {
   const below = (p: string, top: string) => p === top || p.startsWith(`${top}/`)
   on('fs.stat', async ($, e) => {
     const p = slash(String((e as { path: string }).path))
+    const hidden = Object.keys(unreported).find(from => below(p, from))
+    if (hidden !== undefined) {
+      return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false, realPath: unreported[hidden]! + p.slice(hidden.length) } }
+    }
     const link = Object.keys(links).find(from => below(p, from))
     if (link !== undefined && links[link] === '') {
       if (p !== link) throw new Error('ENOENT')
@@ -153,6 +159,24 @@ test('a dangling INDEX.md link is not followed, the handoff is still written', a
 test('a link to a sibling folder with the same prefix is outside', async ($, on) => {
   const written = await compactWith($, on, 'D:/p', () =>
     plainDisk(on, { 'D:/p/.claude/handoffs': 'D:/p2/handoffs' }, ['D:/p2/handoffs/p']))
+  expect(written).toEqual([])
+})
+
+test('a redirect the disk does not report as a link is still caught by where it lands', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () =>
+    plainDisk(on, {}, [], { 'D:/p/.claude/handoffs': 'D:/p2/handoffs' }))
+  expect(written).toEqual([])
+})
+
+test('a handoffs folder linked into .claude/rules (inside the project) gets nothing', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () => plainDisk(on, { 'D:/p/.claude/handoffs': 'D:/p/.claude/rules' }),
+    dir => (dir === 'D:/p/.claude' ? listing(['handoffs', 'rules'], ['handoffs']) : []))
+  expect(written).toEqual([])
+})
+
+test('a .claude folder that is a link above an existing handoffs folder gets nothing', async ($, on) => {
+  const written = await compactWith($, on, 'D:/p', () => plainDisk(on, { 'D:/p/.claude': 'D:/p/docs' }),
+    dir => (dir === 'D:/p' ? listing(['.claude', 'docs'], ['.claude']) : []))
   expect(written).toEqual([])
 })
 

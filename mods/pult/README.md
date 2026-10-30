@@ -64,10 +64,13 @@ The interface strings (band, pane, toasts, handoff prompt) are in Russian.
 - Writes handoffs to `<project root>/.claude/handoffs/<project-slug>/YYYY-MM-DD_HH-MM_<session8>.md`
   and appends one line to `<project root>/.claude/handoffs/INDEX.md`. INDEX.md is rewritten only
   after a successful read, so a locked file never becomes an empty index.
-- Writes only where the path really lands inside the project: if `.claude/handoffs` (or a folder
-  above the file) is a link leading outside, nothing is written; if `INDEX.md` is itself a link,
-  it is left alone, including a link that leads nowhere. Out of scope: hard links (they keep their
-  own spelling) and a link swapped in between the check and the write.
+- Writes only when no level between the project root and the file is a link, including links
+  that lead nowhere and links that stay inside the project (handoffs redirected into
+  `.claude/rules` or `.git/hooks` would become instructions or code), and the path really lands
+  inside the project. The project root itself may be a link. When a handoff is skipped for this
+  reason, the mod says so and compaction goes on; replace the link with a plain folder to get
+  handoffs back. Out of scope: hard links (they keep their own spelling) and a link swapped in
+  between the check and the write.
 - A handoff contains text from the conversation; a draft (when the model could not answer)
   quotes the last messages directly. If you paste secrets into chats, add `.claude/handoffs/`
   to `.gitignore` or check handoffs before committing.

@@ -303,31 +303,34 @@ async function freeName($: $, dir: string, name: string): Promise<string> {
   return name
 }
 
-// A cloned repository may plant a link at .claude/handoffs or INDEX.md; the mod writes only where the
-// path really lands inside the project, and never through a link to a file.
+// A cloned repository may plant links under .claude/handoffs. The mod writes only when no level
+// between the project root and the file is a link (not even one that stays inside the project:
+// handoffs redirected into .claude/rules or .git/hooks would become instructions or code) and the
+// path really lands inside the project. The root itself may be a link.
 // simplification: checked right before each write, not atomically with it.
-async function landsInside($: $, rootReal: string, path: string): Promise<boolean> {
+async function landsInside($: $, root: string, rootReal: string, path: string): Promise<boolean> {
   const fold = /^[A-Za-z]:[\\/]/.test(rootReal) ? (p: string) => p.toLowerCase() : (p: string) => p
   const norm = (p: string) => fold(p.replace(/\\/g, '/').replace(/\/+$/, ''))
-  const root = norm(rootReal)
-  const isUnder = (p?: string) => p !== undefined && (norm(p) === root || norm(p).startsWith(`${root}/`))
-  // Walk up from the file to the first level that exists. A level may be missing (the write creates
-  // it) but never a link stat cannot follow: the folder listing shows such an entry as it stands.
-  // Names compare case-insensitively everywhere: a false refusal costs nothing.
-  for (let child = path; ; ) {
+  const isUnder = (p?: string) => p !== undefined && (norm(p) === norm(rootReal) || norm(p).startsWith(`${norm(rootReal)}/`))
+  // Every level is listed: the listing shows a link as it stands, even one that leads nowhere.
+  // Levels may be missing (the write creates them). Names compare case-insensitively everywhere.
+  let deepest: string | undefined
+  for (let child = path; norm(child) !== norm(root); ) {
     const cut = Math.max(child.lastIndexOf('/'), child.lastIndexOf('\\'))
     if (cut <= 0) return false
     const dir = child.slice(0, cut)
     const name = child.slice(cut + 1).toLowerCase()
     const entries = await $.fs.list(dir).catch(() => undefined)
     if (entries === undefined && (await $.fs.exists(dir))) return false
-    const isLink = (entries ?? []).some(entry => entry.name.toLowerCase() === name && entry.isLink)
-    // The file itself is never written through a link, even one into the project (.git/hooks).
-    const found = await $.fs.stat(child, { resolve: true }).catch(() => undefined)
-    if (found) return (child !== path || !found.isLink) && isUnder(found.realPath)
-    if (isLink) return false
+    if ((entries ?? []).some(entry => entry.name.toLowerCase() === name && entry.isLink)) return false
+    if (deepest === undefined) {
+      const found = await $.fs.stat(child, { resolve: true }).catch(() => undefined)
+      if (found?.isLink) return false
+      if (found) deepest = found.realPath ?? ''
+    }
     child = dir
   }
+  return isUnder(deepest ?? rootReal)
 }
 
 // The model writes the handoff from the cached transcript. Never throws: returns the outcome as text.
@@ -361,8 +364,8 @@ async function writeHandoff($: $, why: string, skipIfFresh: boolean, messages?: 
     const name = await freeName($, `${base}/${slug}`, handoffName(now, sid))
     const path = `${base}/${slug}/${name}`
     const rootReal = (await $.fs.stat(root, { resolve: true }).catch(() => undefined))?.realPath
-    if (rootReal === undefined || !(await landsInside($, rootReal, path))) {
-      return 'Хендофф не записан: .claude/handoffs ведёт за пределы проекта или папку проекта не найти.'
+    if (rootReal === undefined || !(await landsInside($, root, rootReal, path))) {
+      return 'Хендофф пропущен (работа и сжатие идут дальше): в пути .claude/handoffs есть ссылка или он ведёт за пределы проекта. Чтобы мод снова писал хендоффы, замените ссылку обычной папкой.'
     }
     await $.fs.write(path, `<!-- pult: ${why} -->\n\n${body}\n`)
     await update($, checkpoint, () => ({ path, at: now, why }))
@@ -370,7 +373,7 @@ async function writeHandoff($: $, why: string, skipIfFresh: boolean, messages?: 
     // INDEX.md is rewritten whole, so only after a successful read: a locked file
     // (antivirus, sync client) must not turn into an empty index.
     const index = `${base}/INDEX.md`
-    if (!(await landsInside($, rootReal, index))) return `${done}. INDEX.md не тронут: это ссылка или он ведёт за пределы проекта.`
+    if (!(await landsInside($, root, rootReal, index))) return `${done}. INDEX.md не тронут: это ссылка или он ведёт за пределы проекта.`
     let old = '# Handoffs\n'
     if (await $.fs.exists(index)) {
       try {
