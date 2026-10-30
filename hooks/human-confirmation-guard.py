@@ -1746,7 +1746,11 @@ def _offered_spans(text: str, strict: bool) -> list[str]:
                 continue
             prev = next((x for x in reversed(lines[:n]) if x.strip()), "")
             nxt = next((x for x in lines[n + 1:] if x.strip()), "")
-            if re.search(r"\bесли\b|\bif\b|\bкогда\b|\bwhen\b", prev, re.IGNORECASE) or (
+            # owner 2026-10-30: only the sentence that leads into the offer can set its condition; an
+            # earlier sentence of the paragraph ("хук пропускает, только если ...") explains, not conditions
+            lead_in = re.split(r"(?<=[.!?…])\s+", prev.strip())[-1]
+            if re.search(r"\bесли\b|\bif\b|\bкогда\b|\bwhen\b|\bиначе\b|\botherwise\b|\bunless\b|\bв\s+случае\b|"
+                         r"\bin\s+case\b", lead_in, re.IGNORECASE) or (
                     nxt and (PROPOSAL_NOT_GO.search(nxt) or NOT_A_GO.search(nxt.replace("?", " "))
                              or CANCEL_WORDS.search(nxt))):
                 continue
