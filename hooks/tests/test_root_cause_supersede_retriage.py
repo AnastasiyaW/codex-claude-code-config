@@ -121,12 +121,12 @@ results.append((
 # --- supersede: must-fail negatives -----------------------------------------
 results.append((
     "supersede by a missing case is refused",
-    run(["supersede", "dup-b", "--by", "no-such-case", "--reason", "x"]) != 0
+    run(["supersede", "dup-b", "--by", "no-such-case", "--reason", "x"]) == 2
     and load("dup-b")["status"] == "IMPLEMENTING",
 ))
 results.append((
     "supersede by a case with no shared owner path is refused",
-    run(["supersede", "dup-b", "--by", "dup-unshared", "--reason", "x"]) != 0
+    run(["supersede", "dup-b", "--by", "dup-unshared", "--reason", "x"]) == 2
     and load("dup-b")["status"] == "IMPLEMENTING",
 ))
 results.append((
@@ -135,11 +135,11 @@ results.append((
 ))
 results.append((
     "supersede of an already terminal case is refused",
-    run(["supersede", "dup-a", "--by", CANON, "--reason", "again"]) != 0,
+    run(["supersede", "dup-a", "--by", CANON, "--reason", "again"]) == 2,
 ))
 results.append((
     "supersede of a case by itself is refused",
-    run(["supersede", CANON, "--by", CANON, "--reason", "self"]) != 0
+    run(["supersede", CANON, "--by", CANON, "--reason", "self"]) == 2
     and load(CANON)["status"] == "IMPLEMENTING",
 ))
 
@@ -149,17 +149,17 @@ make_case("chain-z", "IMPLEMENTING", [OWNER])
 results.append(("chain setup: x superseded by y", run(["supersede", "chain-x", "--by", "chain-y", "--reason", "dup"]) == 0))
 results.append((
     "supersede chain is refused: canonical y is itself SUPERSEDED",
-    run(["supersede", "chain-z", "--by", "chain-x", "--reason", "chain"]) != 0
+    run(["supersede", "chain-z", "--by", "chain-x", "--reason", "chain"]) == 2
     and load("chain-z")["status"] == "IMPLEMENTING",
 ))
 results.append((
     "supersede cycle is refused: y cannot be superseded by x after x points at y",
-    run(["supersede", "chain-y", "--by", "chain-x", "--reason", "cycle"]) != 0
+    run(["supersede", "chain-y", "--by", "chain-x", "--reason", "cycle"]) == 2
     and load("chain-y")["status"] == "IMPLEMENTING",
 ))
 results.append((
     "a canonical that already has superseded duplicates cannot itself be superseded",
-    run(["supersede", "chain-y", "--by", CANON, "--reason", "reverse chain"]) != 0
+    run(["supersede", "chain-y", "--by", CANON, "--reason", "reverse chain"]) == 2
     and load("chain-y")["status"] == "IMPLEMENTING",
 ))
 
@@ -235,8 +235,118 @@ results.append((
     run(["retriage", "retriage-two", "--expanded-owner-path", OWNER, "--causal-hypothesis", "h5"]) != 0,
 ))
 
+# --- supersede: refusal branches no case above reaches -----------------------
+make_case("dup-noreason", "IMPLEMENTING", [OWNER])
+make_case("dup-badid", "IMPLEMENTING", [OWNER])
+results.append((
+    "supersede of an unknown case id is refused",
+    run(["supersede", "no-such-dup", "--by", CANON, "--reason", "x"]) == 2,
+))
+results.append((
+    "supersede with a blank reason is refused and leaves the case open",
+    run(["supersede", "dup-noreason", "--by", CANON, "--reason", "   "]) == 2
+    and load("dup-noreason")["status"] == "IMPLEMENTING",
+))
+results.append((
+    "supersede by a non-kebab canonical id is refused and leaves the case open",
+    run(["supersede", "dup-badid", "--by", "../escape", "--reason", "x"]) == 2
+    and load("dup-badid")["status"] == "IMPLEMENTING",
+))
+
+# main() exits before supersede_case on a missing case, so probe the function directly:
+# the CLI cannot reach this branch, and its code and message must still be exact.
+missing_code, missing_message = guard.supersede_case(ROOT, "no-such-dup", CANON, "x", "t")
+results.append((
+    "supersede_case on a missing case returns exactly code 2 with the missing-case message",
+    missing_code == 2 and missing_message.startswith("CASE: FAIL - missing "),
+))
+
+# --- validation: SUPERSEDED record checks, each reason exact -----------------
+def probe_call(fn, *args, **kwargs):
+    """A crash is a failed check, not a pass: report it as a value that never equals the expectation."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - any exception means the check did not hold
+        return f"EXC {type(exc).__name__}"
+
+
+def superseded_errors(record, owners=(OWNER,), root=ROOT):
+    case = guard.default_case(ROOT, "probe-sup", "incident", "probe summary", "unscoped")
+    case["status"] = "SUPERSEDED"
+    case["layer"] = {"owner_paths": list(owners)}
+    case["superseded"] = record
+    errors = probe_call(guard.validation_errors, case, root=root)
+    if isinstance(errors, str):
+        return errors
+    return [error for error in errors if "superseded" in error.lower()]
+
+
+GOOD = {"by_case": CANON, "reason": "same cause", "recorded_by": "t", "recorded_at": 1.0}
+results.append(("a valid SUPERSEDED record reports no superseded error", superseded_errors(GOOD) == []))
+results.append((
+    "blank by_case is the one error and is never treated as a valid id",
+    superseded_errors({**GOOD, "by_case": "   "}) == ["SUPERSEDED needs superseded.by_case"],
+))
+results.append((
+    "missing by_case is the one error",
+    superseded_errors({k: v for k, v in GOOD.items() if k != "by_case"}) == ["SUPERSEDED needs superseded.by_case"],
+))
+results.append((
+    "blank reason is the one error (root not needed)",
+    superseded_errors({**GOOD, "reason": "   "}, root=None) == ["SUPERSEDED needs superseded.reason"],
+))
+results.append((
+    "missing recorded_at is the one error (root not needed)",
+    superseded_errors({k: v for k, v in GOOD.items() if k != "recorded_at"}, root=None)
+    == ["SUPERSEDED needs superseded.recorded_at"],
+))
+results.append((
+    "without a root only the record fields are checked and a good record passes",
+    superseded_errors(GOOD, root=None) == [],
+))
+results.append((
+    "a by_case naming a missing case is the one error",
+    superseded_errors({**GOOD, "by_case": "no-such-case"}) == ["superseded.by_case names a missing case"],
+))
+results.append((
+    "a by_case that is not a valid case id is the one error",
+    superseded_errors({**GOOD, "by_case": "../escape"}) == ["superseded.by_case is not a valid case id"],
+))
+results.append((
+    "a canonical that is itself SUPERSEDED is refused as a chain",
+    superseded_errors({**GOOD, "by_case": "chain-x"})
+    == ["superseded chain: the canonical case is itself SUPERSEDED"],
+))
+results.append((
+    "a superseded case with no shared owner path is the one error",
+    superseded_errors(GOOD, owners=("docs/other.md",))
+    == ["superseded case shares no layer.owner_paths entry with its canonical case"],
+))
+results.append((
+    "owner_paths keep only non-blank strings",
+    probe_call(guard.owner_paths_of, {"layer": {"owner_paths": ["", "   ", 5, OWNER]}}) == {OWNER},
+))
+
+# --- retriage: measured correction digest and evidence checks ----------------
+results.append((
+    "a measured correction whose evidence file is missing is reported as missing",
+    probe_call(guard._correction_errors, {"evidence_path": "no/such.txt", "sha256": "0" * 64}, ROOT)
+    == ["retriage.measured_correction evidence is missing on disk"],
+))
+valid_rel = write_repo_file("evidence/valid-correction.txt", "Observed: a measured line\n")
+valid_digest = hashlib.sha256((ROOT / valid_rel).read_bytes()).hexdigest()
+results.append((
+    "a measured correction with a matching digest has no errors",
+    probe_call(guard._correction_errors, {"evidence_path": valid_rel, "sha256": valid_digest}, ROOT) == [],
+))
+results.append((
+    "a measured correction with a wrong digest is reported as stale",
+    probe_call(guard._correction_errors, {"evidence_path": valid_rel, "sha256": "0" * 64}, ROOT)
+    == ["retriage.measured_correction evidence digest is stale"],
+))
+
 os.chdir(ORIGINAL_CWD)
-failures = [label for label, passed in results if not passed]
+failures =[label for label, passed in results if not passed]
 for label, passed in results:
     print(f"  {'ok' if passed else 'FAIL'} {label}")
 shutil.rmtree(TMP, ignore_errors=True)
