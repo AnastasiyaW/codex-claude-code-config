@@ -204,7 +204,7 @@ def _load(now: float) -> list[dict]:
 def _compact(rows: list[dict]) -> None:
     """Keep only the window. simplification: a row another session appends during the rewrite
     is lost; the cost is one missed attempt, not a wrong block."""
-    tmp = STATE.with_suffix(".compact")
+    tmp = STATE.with_suffix(f".compact.{os.getpid()}")
     try:
         tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
         os.replace(tmp, STATE)
@@ -221,13 +221,17 @@ def _append(row: dict) -> None:
         pass
 
 
-def assess(rows: list[dict], key: str) -> tuple[int, bool]:
-    """How many failures for this key, and has anything been read since the last one."""
+def assess(rows: list[dict], key: str, sid: str = "") -> tuple[int, bool]:
+    """How many failures for this key, and has THIS session read anything since the last one.
+
+    A read in a parallel session does not clear another session's block; rows written before
+    reads carried a session id count for everyone."""
     fails = [r for r in rows if r.get("key") == key and r.get("kind") == "fail"]
     if not fails:
         return 0, True
     last = max(float(r["ts"]) for r in fails)
-    consulted = any(r.get("kind") == "read" and float(r.get("ts", 0)) > last for r in rows)
+    consulted = any(r.get("kind") == "read" and float(r.get("ts", 0)) > last
+                    and r.get("sid", sid) == sid for r in rows)
     return len(fails), consulted
 
 
@@ -245,7 +249,7 @@ def record(event: dict) -> int:
     now = time.time()
     sig = error_signature(response)
     if tool in CONSULTING or (not is_failure_event and _shell_read(tool, ti)):
-        _append({"ts": now, "kind": "read", "key": target_key(tool, ti) or tool})
+        _append({"ts": now, "kind": "read", "key": target_key(tool, ti) or tool, "sid": sid})
     # A bare "Exit code 1" (grep found nothing, test -f, a polling probe) is an answer, not a
     # failed attempt: only a failure with error text counts.
     elif tool in ACTING and ((is_failure_event and sig) or (not is_failure_event and failed(response))):
@@ -277,7 +281,12 @@ def _shell_read(tool: str, tool_input: dict) -> bool:
     """`cat file`, `grep x file`, `sed -n 1,40p f`: reading through the shell clears the block too."""
     if tool not in ("Bash", "PowerShell"):
         return False
-    words = (tool_input.get("command") or "").strip().split()
+    command = (tool_input.get("command") or "").strip()
+    # `cat > f <<EOF` writes; a redirect into a file is never a read.
+    if re.search(r"(^|[^>&0-9])>(?!&)", command.replace("2>", " ").replace("&>", " ")):
+        return False
+    command = re.sub(r"^(cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*)+", "", command)
+    words = command.split()
     if not words:
         return False
     verb = words[0].lower()
@@ -302,7 +311,7 @@ def decide(event: dict) -> int:
     if not key:
         return 0
 
-    n, consulted = assess(_load(time.time()), key)
+    n, consulted = assess(_load(time.time()), key, str(event.get("session_id") or ""))
     if consulted or n < WARN_AFTER_FAILURES:
         return 0
 
@@ -481,6 +490,18 @@ def self_test() -> int:
                     "tool_input": {"command": "cat src/resolver.py"}, "tool_response": {"stdout": "x", "stderr": ""}})
             check("reading through the shell counts as reading",
                   [r["kind"] for r in _load(time.time())], ["read"])
+            check("a cd prefix before a read is still a read",
+                  _shell_read("Bash", {"command": 'cd "D:/repo" && cat x.py'}), True)
+            check("cat into a file is a write, not a read",
+                  _shell_read("Bash", {"command": "cat > out.py <<'EOF'"}), False)
+            check("stderr redirect alone keeps a read a read",
+                  _shell_read("Bash", {"command": "grep -n x f.py 2>/dev/null"}), True)
+            fail_row = {"ts": time.time() - 10, "kind": "fail", "key": "cmd:k"}
+            other_read = {"ts": time.time(), "kind": "read", "key": "x", "sid": "other"}
+            check("a read in another session does not clear this session's block",
+                  assess([fail_row, other_read], "cmd:k", "mine")[1], False)
+            check("a read in the same session clears it",
+                  assess([fail_row, dict(other_read, sid="mine")], "cmd:k", "mine")[1], True)
         finally:
             STATE = saved
 
