@@ -223,7 +223,19 @@ def collect_checks(gh: Gh, repo: str, sha: str) -> list[dict]:
     """[{name, state: pass|skip|pending|fail, detail}] from check runs, check suites and
     commit statuses of the exact commit."""
     checks: list[dict] = []
+    # filter=latest keeps one run per check suite, but every re-trigger of a workflow on the same
+    # head (e.g. a PR body edit) is a new suite. Like GitHub, count only the newest run of a name
+    # per app; runs without an id (cannot be ordered) are all kept.
+    newest: dict[tuple, dict] = {}
+    unordered: list[dict] = []
     for run in _paged(gh, f"repos/{repo}/commits/{sha}/check-runs?filter=latest&", "check_runs"):
+        if not isinstance(run.get("id"), int):
+            unordered.append(run)
+            continue
+        key = (((run.get("app") or {}).get("slug") or "?"), run.get("name") or "?")
+        if key not in newest or run["id"] > newest[key]["id"]:
+            newest[key] = run
+    for run in [*newest.values(), *unordered]:
         status = (run.get("status") or "").lower()
         conclusion = (run.get("conclusion") or "").lower()
         if status != "completed":
