@@ -57,5 +57,13 @@ class DeleteFinding(unittest.TestCase):
         self.assertIsNotNone(self.finding("$B"))
 
 
+class NativePath(unittest.TestCase):
+    def test_git_bash_drive_paths(self) -> None:
+        want = ("D:/tmp/x", "D:/") if mgg.os.name == "nt" else ("/d/tmp/x", "/d")
+        self.assertEqual((mgg._native_path("/d/tmp/x"), mgg._native_path("/d")), want)
+        self.assertEqual(mgg._native_path("/dev/null"), "/dev/null")
+        self.assertEqual(mgg._native_path("rel/p"), "rel/p")
+
+
 if __name__ == "__main__":
     unittest.main()

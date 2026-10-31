@@ -695,6 +695,12 @@ def push_finding(args: list[str], ctx: Ctx, inline: dict[str, str] | None = None
     return f"git push to {hit}" if hit else None
 
 
+def _native_path(value: str) -> str:
+    """Git Bash on Windows writes D:\\x as /d/x; without the drive the cwd after `cd` is lost."""
+    m = re.match(r"^/([A-Za-z])(?=/|$)", value) if os.name == "nt" else None
+    return f"{m.group(1).upper()}:/{value[3:]}" if m else value
+
+
 def _delete_finding(specs: list[str], remote: str | None, ctx: Ctx) -> str | None:
     """A delete-only push merges nothing, so only the remote's live default branch is protected here
     (owner 2026-10-31: an old `main` stayed undeletable after the default branch moved).
@@ -849,7 +855,7 @@ def _segment_finding(seg: dict, ctx: Ctx, piped_into_shell: bool) -> str | None:
             value, resolved = expand(dirs[0], ctx)
             if ctx.powershell:
                 value = value.replace("\\", "/")  # PowerShell paths on any OS
-            ctx.cwd = None if not resolved else ctx.cwd / os.path.expanduser(value)
+            ctx.cwd = None if not resolved else ctx.cwd / _native_path(os.path.expanduser(value))
         return None
     rest = tokens[p + 1:]
     if prog == "ssh":
