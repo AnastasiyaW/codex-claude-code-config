@@ -1117,7 +1117,10 @@ def _profile_roots() -> set[str]:
     except (OSError, ValueError):
         return set()
     roots = data.get("roots", []) if isinstance(data, dict) else []
-    return {_norm(r).rstrip("/").lower() for r in roots if isinstance(r, str) and r.strip()}
+    # a listed parent must be a deep existing folder: never a drive root, a home or a home child
+    return {_norm(r).rstrip("/").lower() for r in roots
+            if isinstance(r, str) and _norm(r).rstrip("/").count("/") >= 5 and not _home_child(r)
+            and os.path.isdir(r)}
 
 
 def _worker_profile(target: str) -> bool:

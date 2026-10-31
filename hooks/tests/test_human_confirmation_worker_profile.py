@@ -36,7 +36,7 @@ class RegenerableProfile(unittest.TestCase):
         self.work = Path(tempfile.mkdtemp(prefix="hcg-wp-"))
         self.addCleanup(shutil.rmtree, self.work, ignore_errors=True)
         hcg.APPROVAL_LOG = self.work / "audit.jsonl"
-        base = self.work / "Worker" / "profiles"
+        base = self.work / "Local" / "Vendor" / "Worker" / "profiles"
         roots = self.work / "roots.json"
         roots.write_text(json.dumps({"roots": [os.path.realpath(base)]}), encoding="utf-8")
         hcg.PROFILE_ROOTS_FILE = roots
@@ -73,6 +73,12 @@ class RegenerableProfile(unittest.TestCase):
         self.assertFalse(self.ok(f'rm -rf "{parent}"', f"удали {parent}"))        # the listed root itself
         (self.small / "Default" / "orders.sql.gz").write_bytes(b"x")
         self.assertFalse(self.ok(f'rm -rf "{s}"', f"удали {s}"))                  # a dump is not browser data
+        shallow = self.work / "shallow.json"
+        drive = Path(os.path.realpath(self.work)).anchor
+        shallow.write_text(json.dumps({"roots": [drive, str(Path.home()), str(self.work / "a" / "b" / "c" / "d" / "nope")]}),
+                           encoding="utf-8")
+        hcg.PROFILE_ROOTS_FILE = shallow
+        self.assertEqual(hcg._profile_roots(), set())                             # unsafe or missing roots
         hcg.PROFILE_ROOTS_FILE = self.work / "missing.json"
         s = str(self.big)
         self.assertFalse(self.ok(f'rm -rf "{s}"', f"удали {s}"))                  # no private list
