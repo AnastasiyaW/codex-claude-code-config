@@ -89,6 +89,15 @@ records no intent.
      --causal-hypothesis "a new, evidence-backed explanation"
    ```
 
+   A causal sentence that a measurement shows to be false does not need failed
+   attempts first. Write the measurement into a repository file with a labeled
+   `Observed:` line and pass it as `--measured-correction <file>`; the old
+   hypothesis, new hypothesis, file path, and digest are recorded in the case
+   `history`. A duplicate case for the same cause closes as terminal
+   `SUPERSEDED` with `supersede <case-id> --by <canonical-case-id> --reason "..."`.
+   The canonical case must be in the same repository, must not itself be
+   SUPERSEDED, and must share a `layer.owner_paths` entry; chains are refused.
+
 6. For an incident, run the exact same reproducer after the fix. For a planned
    change, run the frozen `focused_argv` after implementation. In either case,
    use the exact argv written in `plan.focused_argv`:

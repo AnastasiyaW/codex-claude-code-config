@@ -34,6 +34,7 @@ TESTS = [
     "test_powershell_coverage.py",
     "test_powershell_dynamic_execution_guard.py",
     "test_root_cause_proof_executor.py",
+    "test_root_cause_supersede_retriage.py",
     "test_publish_bypass_guard.py",
     "test_handoff_sidecar.py",
     "smoke_hooks_live.py",
