@@ -876,6 +876,32 @@ def main() -> int:
                 pass
         finally:
             mg.scan_text = original
+        # --owner-approved-no-checks passes only on the owner's own request to merge
+        flag_cmd = "python ~/.claude/claude-code-config/scripts/safe_merge.py o/r 5 --owner-approved-no-checks"
+
+        def owner_says(text: str, kind: str = "human") -> str:
+            path = Path(tmp) / f"t-{abs(hash((text, kind)))}.jsonl"
+            path.write_text(json.dumps({"type": "user", "origin": {"kind": kind},
+                                        "message": {"role": "user", "content": text}}, ensure_ascii=False) + "\n",
+                            encoding="utf-8")
+            return str(path)
+
+        flag_cases = [
+            ("ты сама вливать и мерить должна", "human", True),
+            ("что за поведение? вливай, у тебя есть права", "human", True),
+            ("merge the PRs", "human", True),
+            ("не вливай пока", "human", False),
+            ("вливать?", "human", False),
+            ("покажи статус PR", "human", False),
+            ("вливай", "task-notification", False),
+        ]
+        for text, kind, want in flag_cases:
+            got = mg.decide({"tool_name": "Bash", "tool_input": {"command": flag_cmd},
+                             "cwd": str(repos["feature"]), "transcript_path": owner_says(text, kind)})
+            if (got is None) != want:
+                failures.append(f"owner flag with {kind} message {text!r}: want {'allow' if want else 'block'}, got {got!r}")
+        if mg.decide({"tool_name": "Bash", "tool_input": {"command": flag_cmd}, "cwd": str(repos["feature"])}) is None:
+            failures.append("owner flag without a transcript must block")
         for w in ("feature", "tracking", "matching"):
             subprocess.run(["git", "-C", str(repos["repo"]), "worktree", "remove", "--force",
                             str(repos[w])], capture_output=True)

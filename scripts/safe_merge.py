@@ -354,8 +354,11 @@ def _state(obj: dict) -> str:
     return str(obj.get("state") or "").upper()
 
 
-def safe_merge(gh: Gh, repo: str, number: int, lock_dir: Path, receipt: dict) -> None:
-    """Raises Outcome; the caller maps it to an exit code."""
+def safe_merge(gh: Gh, repo: str, number: int, lock_dir: Path, receipt: dict,
+               owner_no_checks: bool = False) -> None:
+    """Raises Outcome; the caller maps it to an exit code. `owner_no_checks` lifts only the
+    no-checks refusal (a repo without CI); merge-gate-guard lets the flag through only when the
+    owner's latest chat message asks to merge (owner 2026-10-31: «ты сама вливать и мерить должна»)."""
     today = dt.date.today()
     pr = gh.json("pr", "view", str(number), "-R", repo, "--json", PR_FIELDS)
     receipt.update(pr=number, url=pr.get("url"), base=pr.get("baseRefName"), head=pr.get("headRefOid"))
@@ -369,8 +372,11 @@ def safe_merge(gh: Gh, repo: str, number: int, lock_dir: Path, receipt: dict) ->
 
     default = gh.json("api", f"repos/{repo}")["default_branch"]
     policy = validate_config(read_config(gh, repo, default), today)
+    if owner_no_checks and not policy["allow_no_checks"]:
+        policy["allow_no_checks"] = "owner asked in chat to merge (--owner-approved-no-checks)"
     receipt["policy"] = {"allowlisted": sorted(policy["allow"]), "required": policy["required"],
-                         "allow_no_checks": bool(policy["allow_no_checks"])}
+                         "allow_no_checks": bool(policy["allow_no_checks"]),
+                         "owner_approved_no_checks": bool(owner_no_checks)}
     base = pr["baseRefName"]
     if base != default and base not in policy["integration"]:
         raise Outcome(REFUSED, "wrong-base",
@@ -431,10 +437,11 @@ def safe_merge(gh: Gh, repo: str, number: int, lock_dir: Path, receipt: dict) ->
         lock.release()
 
 
-def run_gate(gh: Gh, repo: str, number: int, lock_dir: Path, log: Path | None = RECEIPT_LOG) -> int:
+def run_gate(gh: Gh, repo: str, number: int, lock_dir: Path, log: Path | None = RECEIPT_LOG,
+             owner_no_checks: bool = False) -> int:
     receipt: dict = {"ts": dt.datetime.now().isoformat(timespec="seconds"), "repo": repo}
     try:
-        safe_merge(gh, repo, number, lock_dir, receipt)
+        safe_merge(gh, repo, number, lock_dir, receipt, owner_no_checks)
         outcome = Outcome(UNCHECKED, "no-outcome", "internal: safe_merge returned without an outcome")
     except Outcome as exc:
         outcome = exc
@@ -604,13 +611,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--lock-dir", type=Path, default=DEFAULT_LOCK_DIR)
     ap.add_argument("--receipt-log", type=Path, default=RECEIPT_LOG)
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--owner-approved-no-checks", action="store_true",
+                    help="the owner asked in chat to merge; lifts only the no-checks refusal")
     a = ap.parse_args(argv)
     if a.self_test:
         return _self_test()
     if not a.repo or a.pr is None or a.repo.count("/") != 1:
         print("usage: safe_merge.py <owner/repo> <pr>", file=sys.stderr)
         return UNCHECKED
-    return run_gate(Gh(shlex.split(a.gh.replace("\\", "/"))), a.repo, a.pr, a.lock_dir, a.receipt_log)
+    return run_gate(Gh(shlex.split(a.gh.replace("\\", "/"))), a.repo, a.pr, a.lock_dir, a.receipt_log,
+                    a.owner_approved_no_checks)
 
 
 if __name__ == "__main__":
