@@ -123,7 +123,7 @@ BLOCK = [
     ("git push origin +master", "feature", False),
     ("git push --force origin master", "feature", False),
     ("git push -f origin feature:master", "feature", False),
-    ("git push origin :main", "feature", False),
+    ("git push origin :master", "feature", False),
     ("git push origin --delete master", "feature", False),
     ("git push --all origin", "feature", False),
     ("git push --mirror origin", "feature", False),
@@ -389,6 +389,9 @@ class FakeGit:
             return config.get(args[2])
         if args[0] == "for-each-ref":
             return "\n".join(["develop"] if name == "develop" else self.branches)
+        if args[:2] == ("ls-remote", "--symref"):
+            default = "develop" if name == "develop" else "master"
+            return f"ref: refs/heads/{default}\tHEAD\n{'0' * 40}\tHEAD"
         raise AssertionError(f"FakeGit: unexpected git call {args}")
 
 
@@ -600,7 +603,7 @@ def unit(failures: list[str]) -> None:
            ["git push to master", None, "git push to master", "git push to main", "git push to master",
             "git push to main", "git push --all (includes the default branch)",
             "git push --branches (includes the default branch)", "git push --mirror (includes the default branch)",
-            None, "git push to main", None, "git push to master", None,
+            None, None, None, "git push delete of the default branch master", None,
             "git push glob refspec refs/heads/*:refs/heads/* (can reach the default branch)", None,
             "git push to master", "git push to main", None, None, None, None])
         eq("tags and deletes from master push no branch",

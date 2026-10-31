@@ -677,6 +677,8 @@ def push_finding(args: list[str], ctx: Ctx, inline: dict[str, str] | None = None
             return "git push with a configured glob refspec (can reach the default branch)"
         hit = protected_hit(dests) if dests else None
         return f"git push to {hit} (from the current branch)" if hit else None
+    if deleting or all(s.lstrip("+").startswith(":") for s in specs):
+        return _delete_finding(specs, remote, ctx)
     collected: list[str] = []
     for spec in specs:
         if deleting:
@@ -691,6 +693,24 @@ def push_finding(args: list[str], ctx: Ctx, inline: dict[str, str] | None = None
             collected.append(d)
     hit = protected_hit(collected) if collected else None
     return f"git push to {hit}" if hit else None
+
+
+def _delete_finding(specs: list[str], remote: str | None, ctx: Ctx) -> str | None:
+    """A delete-only push merges nothing, so only the remote's live default branch is protected here
+    (owner 2026-10-31: an old `main` stayed undeletable after the default branch moved).
+    Every delete is checked against the remote's live default (one ls-remote; this also covers a default
+    named oss). Unreadable live default: master, main and the locally known default stay blocked."""
+    names = [_short(s.lstrip("+").lstrip(":")) for s in specs]
+    if any(not n or "*" in n or "$" in n or "`" in n for n in names):
+        return "git push delete with an unresolvable or glob name"
+    target = remote or "origin"
+    live = None if (ctx.remote or target.startswith("$")) else _git(ctx.cwd, "ls-remote", "--symref", target, "HEAD")
+    m = re.search(r"^ref:\s+refs/heads/(\S+)\s+HEAD", live or "", re.MULTILINE)
+    if not m:
+        hit = sorted(set(names) & _protected_names(ctx, remote))
+        return f"git push delete of {hit[0]}: the remote's live default branch could not be read" if hit else None
+    default = m.group(1).lower()
+    return f"git push delete of the default branch {default}" if default in names else None
 
 
 def _note_branch_switch(rest: list[str], ctx: Ctx, cwd: Path | None) -> None:
