@@ -175,6 +175,9 @@ DESTRUCTIVE_INTENT = [
     # was blocked, because `--force\b` matches its prefix.
     r"\bgit\s+push\b[^|;&\n]*?\s(?-i:(?:-[a-zA-Z]*f|--force))\b(?!-with-lease)",
     *GIT_FORCE_BRANCH_DELETE_PATTERNS,
+    # owner 2026-10-31: removing a remote branch is a delete and passes only on her request (_branch_rm_approval)
+    r"\bgit\s+push\b[^|;&\n]*\s(?-i:--delete|-d)(?=\s|$)",
+    r"\bgit\s+push(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+[^\s|;&-][^\s|;&]*(?:\s+[^\s|;&]+)*?\s+\+?:[\w./-]+(?=\s|$|[;&|])",
     r"\bgit\s+clean\s+-[fdx]+",
     r"\bgit\s+filter-branch\b",
     r"\bgit\s+filter-repo\b",
@@ -2020,6 +2023,56 @@ def _image_rm_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple
     return True, "docker image removal"
 
 
+# Owner 2026-10-31 («исправь хук, это мешает работе»: «удаляй» five old branches was refused): a remote
+# branch is removed on her request when every branch is named, in her words or in my answer she said a bare yes to.
+# Only `[cd DIR &&] git push [-q] <remote> --delete|-d b...` or `<remote> :b...`, read-only ls-remote beside it.
+# A branch is restorable from its sha (the default branch itself is refused by merge-gate and by GitHub).
+BRANCH_NAME = r"[\w][\w./-]*"
+BRANCH_RM_SEGMENT = re.compile(
+    r"git\s+push\s+(?:-q\s+)?[\w.@:/+-]+\s+(?:(?:--delete|-d)(?:\s+" + BRANCH_NAME + r")+|\+?:" + BRANCH_NAME +
+    r"(?:\s+\+?:" + BRANCH_NAME + r")*)(?:\s+2>&1)?\s*;?")
+BRANCH_RM_COMPANION = re.compile(r"(?:cd\s+(?:/d\s+)?(?:\"[^\"]+\"|'[^']+'|\S+)|git\s+ls-remote(?:\s+[\w.@:/+=-]+)*)\s*;?")
+
+
+def branch_rm_targets(cmd: str) -> list[str] | None:
+    """Branch names when cmd is only remote branch removals (plus cd / ls-remote), else None."""
+    if not _only_segments(cmd, BRANCH_RM_SEGMENT, BRANCH_RM_COMPANION):
+        return None
+    out: list[str] = []
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        if not BRANCH_RM_SEGMENT.fullmatch(seg):
+            continue
+        toks = [t for t in seg.rstrip(";").split() if t not in ("-q", "2>&1")][3:]
+        out += [t.lstrip("+").lstrip(":") for t in toks if t not in ("--delete", "-d")]
+    return out or None
+
+
+def _branch_rm_approval(branches: list[str], cmd: str, prompt: str, answer: str, event: dict) -> tuple[bool, str]:
+    if CONFIRM_ONLY.fullmatch(prompt):
+        if not DELETE_MENTION.search(answer):
+            return False, "a bare 'yes' to an answer that proposed no deletion"
+        source = answer
+    elif NOT_A_GO.search(prompt):
+        return False, "the request negates, hesitates or asks a question"
+    elif DELETE_INTENT.search(prompt):
+        source = prompt
+    else:
+        return False, "the latest request does not ask to remove branches"
+    unnamed = [b for b in branches if not _named(source, b)]
+    if unnamed:
+        return False, f"branches not named in the request or the proposal: {', '.join(unnamed)}"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "action": "branch-rm",
+                                 "request": prompt[:300], "command": cmd[:500]},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, "remote branch removal"
+
+
 # Owner 2026-10-15 ("файлы, которые нельзя удалить, надо переносить внутрь темп", after a list delete hit
 # the root-level limit): a move INTO the system temp keeps the files until the temp sweep, so it is approved
 # on her request, in one shape only: `[cd DIR &&] mv -n SRC... DEST`. -n never overwrites; DEST is an existing
@@ -2211,6 +2264,9 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         return _restart_approval(cmd, prompt, answer, event)
     if image_rm_only(cmd):
         return _image_rm_approval(cmd, prompt, answer, event)
+    branches = branch_rm_targets(cmd)
+    if branches:
+        return _branch_rm_approval(branches, cmd, prompt, answer, event)
     if stop_only(cmd):
         return _stop_approval(cmd, prompt, answer, event)
     if move_to_temp_parts(cmd):
