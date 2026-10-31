@@ -220,8 +220,15 @@ def check_case(name: str, s: dict, want: int, marker: str, code: int, out: str,
     if receipt.get("exit") != code or not receipt.get("reason"):
         failures.append(f"{name}: receipt exit/reason {receipt.get('exit')}")
     prefix = {0: "OK: ", 1: "REFUSED: ", 2: "NOT CHECKED: "}[code]
-    if not lines or not lines[-1].startswith(prefix):
-        failures.append(f"{name}: last line does not start with {prefix!r}: {lines[-1:]}")
+    verdict_lines = [l for l in lines if not l.startswith("NEXT: ")]
+    if not verdict_lines or not verdict_lines[-1].startswith(prefix):
+        failures.append(f"{name}: last line does not start with {prefix!r}: {verdict_lines[-1:]}")
+    result = receipt.get("result")
+    has_next = any(l.startswith("NEXT: ") for l in lines)
+    if code != 0 and result in sm.NEXT_STEP and not has_next:
+        failures.append(f"{name}: refusal {result} printed no NEXT step")
+    if code == 0 and has_next:
+        failures.append(f"{name}: a merge printed a NEXT step")
     if "base_sha" in receipt and f"@{receipt['base_sha'][:12]} " not in scanned[0]:
         failures.append(f"{name}: SCANNED base not 12 chars: {scanned[0]}")
     if "checks" in receipt and f"checks={receipt['checks']['checks']} passed={receipt['checks']['passed']} " \
