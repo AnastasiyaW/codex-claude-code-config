@@ -1103,6 +1103,55 @@ NAMES_FILE = re.compile(r"[\w\-]+\.[A-Za-z0-9]{1,8}\b|[\w\-.]+[\\/][\w\-.]")
 CONTENT_SCAN_CAP = 200_000  # simplification: bounded walk; a bigger folder must be named explicitly
 
 
+# Owner 2026-10-31 (named the full paths of unused browser profiles; refused by R8): a browser profile
+# one of our own programs rebuilds is regenerable, so the owner naming its full path names the browser
+# databases inside it too. The parent folders are listed in a private file (a missing file = no
+# exemption); one level below such a parent, judged by the real path (a junction elsewhere does
+# not qualify).
+PROFILE_ROOTS_FILE = Path.home() / ".claude" / "claude-code-private" / "regenerable-browser-profiles.json"
+
+
+def _profile_roots() -> set[str]:
+    try:
+        data = json.loads(PROFILE_ROOTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    roots = data.get("roots", []) if isinstance(data, dict) else []
+    return {_norm(r).rstrip("/").lower() for r in roots if isinstance(r, str) and r.strip()}
+
+
+def _worker_profile(target: str) -> bool:
+    try:
+        real = _norm(os.path.realpath(target)).rstrip("/").lower()
+    except OSError:
+        return False
+    parent, _, name = real.rpartition("/")
+    return bool(name) and parent in _profile_roots()
+
+
+# Inside a regenerable profile only browser databases (.db, .ldb, extensionless SQLite) are covered:
+# a dump, backup or password vault dropped there still has to be named. Real Chromium/WebView2
+# profiles hold none of these names (checked 2026-10-31 on nine worker profiles).
+NOT_BROWSER_DATA = re.compile(r"\.(?:sql|dump|pgdump|bak|kdbx|mdb|mdf|ibd|rdb)(?:\.(?:gz|zst|xz|bz2|zip|7z))?$|"
+                              r"backup|бэкап|pgdata|postgres|mysql|mongo|redis|dataset|датасет", re.IGNORECASE)
+
+
+def _profile_blocker(target: str) -> str | None:
+    """Why a named regenerable profile still cannot go: unreadable, too big, or foreign data inside."""
+    errors: list[OSError] = []
+    n = 0
+    for root, dirs, files in WALK(target, onerror=errors.append, followlinks=False):
+        for name in dirs + files:
+            n += 1
+            if n > CONTENT_SCAN_CAP:
+                return "too many entries to inspect"
+            if NOT_BROWSER_DATA.search(name):
+                return f"holds {name}, not browser data - the owner must name it herself"
+    if errors:
+        return f"part of the folder cannot be read ({errors[0]})"
+    return None
+
+
 INNER_NAME_CAP = 50  # simplification: more irreplaceable files inside a folder -> name them one by one
 WALK = os.walk  # indirection so the self-test can simulate an unreadable subtree (review R10)
 LSTAT = os.lstat  # same, for a target that cannot be stat'ed (review R11)
@@ -2347,7 +2396,14 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
                 return False, f"{t}: a folder directly in a home folder - the owner must name it in her own message"
         # review 2026-10-11 R7: the irreplaceable counts as named only in the OWNER's own words,
         # never because my answer mentioned it (an answer can mention a path to say "won't touch").
-        why, inner = irreplaceable_info(t, recursive)
+        own_named = prompt.replace("\\", "/").lower()
+        if _worker_profile(t) and _named(own_named, full.lower()):
+            blocker = _profile_blocker(t)
+            if blocker:
+                return False, f"{t}: {blocker}"
+            why, inner = None, []
+        else:
+            why, inner = irreplaceable_info(t, recursive)
         if why:
             own = prompt.replace("\\", "/")
             win = bool(re.match(r"^[a-z]:/", full))
