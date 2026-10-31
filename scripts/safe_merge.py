@@ -66,6 +66,27 @@ PAGE = 100  # GitHub's maximum per_page for these list endpoints
 GH_TIMEOUT, NOT_STARTED = 120, -1  # seconds per gh call; exit code when gh could not start
 PROCESS_QUERY_LIMITED_INFORMATION, NO_HANDLE_INHERIT, STILL_ACTIVE = 0x1000, False, 259  # Win32 API
 PREFIX = {MERGED: "OK: ", REFUSED: "REFUSED: ", UNCHECKED: "NOT CHECKED: "}
+# A refusal is the start of the agent's own repair, not a stop (owner 2026-10-31: «их надо
+# разбирать и решать проблемы»). Each line names the next action the agent takes itself.
+NEXT_STEP = {
+    "checks-failed": "read the failing logs (gh run view <run> --log-failed / gh pr checks), reproduce "
+                     "locally, fix the cause on the PR branch, push, wait for the new head's checks, rerun",
+    "checks-pending": "wait for the head's checks (one wait at most 50 min, rule long-wait-cache-ttl), then rerun; "
+                      "a check stuck queued is a runner problem to diagnose, not a reason to stop",
+    "updated-waiting-ci": "the branch now contains the base tip: run the repo's gates on the new head, wait for "
+                          "its checks, rerun safe_merge",
+    "conflicting": "merge the base into the PR branch in a worktree, resolve the conflicts by the "
+                   "merge-conflict-resolution protocol (verified data, not by logic), run the gates, push, rerun",
+    "head-moved": "someone pushed to the PR while it was checked: rerun on the new head",
+    "base-moved": "the base moved while merging: rerun; safe_merge brings the branch up to date",
+    "mergeable-unknown": "GitHub is still computing mergeability: rerun in a minute",
+    "locked": "another merge holds the lock: rerun after it finishes",
+    "no-checks": "a repo without CI: add allow_no_checks with the local gates to .github/merge-gate.json "
+                 "on the default branch, or merge with --owner-approved-no-checks when the owner asked to merge",
+    "draft": "finish the work and mark the PR ready (gh pr ready) if it is yours; otherwise ask its author",
+    "wrong-base": "retarget the PR to the default branch (gh pr edit --base) or declare the integration branch",
+    "allowlist-expired": "fix the check or renew the allow_unavailable entry with a new reason and date",
+}
 CONFIG_PATH = ".github/merge-gate.json"
 CONFIG_KEYS = {"allow_unavailable", "required", "integration_branches", "allow_no_checks"}
 RECEIPT_LOG = Path.home() / ".claude" / "logs" / "safe-merge.jsonl"
@@ -354,8 +375,11 @@ def _state(obj: dict) -> str:
     return str(obj.get("state") or "").upper()
 
 
-def safe_merge(gh: Gh, repo: str, number: int, lock_dir: Path, receipt: dict) -> None:
-    """Raises Outcome; the caller maps it to an exit code."""
+def safe_merge(gh: Gh, repo: str, number: int, lock_dir: Path, receipt: dict,
+               owner_no_checks: bool = False) -> None:
+    """Raises Outcome; the caller maps it to an exit code. `owner_no_checks` lifts only the
+    no-checks refusal (a repo without CI); merge-gate-guard lets the flag through only when the
+    owner's latest chat message asks to merge (owner 2026-10-31: «ты сама вливать и мерить должна»)."""
     today = dt.date.today()
     pr = gh.json("pr", "view", str(number), "-R", repo, "--json", PR_FIELDS)
     receipt.update(pr=number, url=pr.get("url"), base=pr.get("baseRefName"), head=pr.get("headRefOid"))
@@ -369,8 +393,11 @@ def safe_merge(gh: Gh, repo: str, number: int, lock_dir: Path, receipt: dict) ->
 
     default = gh.json("api", f"repos/{repo}")["default_branch"]
     policy = validate_config(read_config(gh, repo, default), today)
+    if owner_no_checks and not policy["allow_no_checks"]:
+        policy["allow_no_checks"] = "owner asked in chat to merge (--owner-approved-no-checks)"
     receipt["policy"] = {"allowlisted": sorted(policy["allow"]), "required": policy["required"],
-                         "allow_no_checks": bool(policy["allow_no_checks"])}
+                         "allow_no_checks": bool(policy["allow_no_checks"]),
+                         "owner_approved_no_checks": bool(owner_no_checks)}
     base = pr["baseRefName"]
     if base != default and base not in policy["integration"]:
         raise Outcome(REFUSED, "wrong-base",
@@ -431,10 +458,11 @@ def safe_merge(gh: Gh, repo: str, number: int, lock_dir: Path, receipt: dict) ->
         lock.release()
 
 
-def run_gate(gh: Gh, repo: str, number: int, lock_dir: Path, log: Path | None = RECEIPT_LOG) -> int:
+def run_gate(gh: Gh, repo: str, number: int, lock_dir: Path, log: Path | None = RECEIPT_LOG,
+             owner_no_checks: bool = False) -> int:
     receipt: dict = {"ts": dt.datetime.now().isoformat(timespec="seconds"), "repo": repo}
     try:
-        safe_merge(gh, repo, number, lock_dir, receipt)
+        safe_merge(gh, repo, number, lock_dir, receipt, owner_no_checks)
         outcome = Outcome(UNCHECKED, "no-outcome", "internal: safe_merge returned without an outcome")
     except Outcome as exc:
         outcome = exc
@@ -450,6 +478,8 @@ def run_gate(gh: Gh, repo: str, number: int, lock_dir: Path, log: Path | None = 
           f"allowlisted={len(checks.get('allowlisted', []))} result={outcome.result}")
     print("RECEIPT: " + json.dumps(receipt))
     print(PREFIX[outcome.code] + outcome.reason)
+    if outcome.code != MERGED and outcome.result in NEXT_STEP:
+        print("NEXT: " + NEXT_STEP[outcome.result])
     if log is not None:
         try:
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -604,13 +634,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--lock-dir", type=Path, default=DEFAULT_LOCK_DIR)
     ap.add_argument("--receipt-log", type=Path, default=RECEIPT_LOG)
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--owner-approved-no-checks", action="store_true",
+                    help="the owner asked in chat to merge; lifts only the no-checks refusal")
     a = ap.parse_args(argv)
     if a.self_test:
         return _self_test()
     if not a.repo or a.pr is None or a.repo.count("/") != 1:
         print("usage: safe_merge.py <owner/repo> <pr>", file=sys.stderr)
         return UNCHECKED
-    return run_gate(Gh(shlex.split(a.gh.replace("\\", "/"))), a.repo, a.pr, a.lock_dir, a.receipt_log)
+    return run_gate(Gh(shlex.split(a.gh.replace("\\", "/"))), a.repo, a.pr, a.lock_dir, a.receipt_log,
+                    a.owner_approved_no_checks)
 
 
 if __name__ == "__main__":

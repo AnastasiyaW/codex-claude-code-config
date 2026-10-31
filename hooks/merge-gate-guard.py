@@ -950,12 +950,49 @@ def _reason(finding: str, command: str) -> str:
     )
 
 
+# Owner 2026-10-31 («вливай у тебя есть права», «ты сама вливать и мерить должна»): on a repo
+# without CI safe_merge refuses with no-checks; --owner-approved-no-checks lifts only that refusal,
+# and only when her latest chat message asks to merge. Failing or pending checks and a head that
+# lacks the base tip still refuse inside safe_merge.
+OWNER_FLAG = "--owner-approved-no-checks"
+MERGE_ASK = re.compile(r"влей(?:те)?\b|влива\w*|влить\b|смерж\w*|мерж\w*|мердж\w*|\bmerge\w*", re.I)
+NEGATION = re.compile(r"(?:^|\s)(?:не|нельзя|никогда|стоп|don'?t|do not|never|not)(?:\s|$)", re.I)
+
+
+def _owner_asks_to_merge(transcript_path: str) -> bool:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "human_confirmation_guard", Path(__file__).resolve().parent / "human-confirmation-guard.py")
+    hcg = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hcg)
+    req = hcg.owner_request(transcript_path or "")
+    if not req:
+        return False
+    own = req[0]
+    for sentence in re.findall(r"[^.!?\n]+[.!?]?", own):
+        m = MERGE_ASK.search(sentence)
+        if m and not sentence.rstrip().endswith("?") and not NEGATION.search(sentence[:m.start()] + " "):
+            return True
+    return False
+
+
 def decide(event: dict) -> str | None:
     """The block reason for a PreToolUse event, or None to allow."""
     tool = str(event.get("tool_name") or "")
     command = sc.bash_command(event.get("tool_input") or {})
     if not command:
         return None
+    if OWNER_FLAG in command:
+        try:
+            approved = _owner_asks_to_merge(str(event.get("transcript_path") or ""))
+        except Exception as exc:  # noqa: BLE001 - cannot read the approval: fail closed
+            sc.log("WARN", HOOK, "block", "owner-approval-unreadable", command)
+            return f"merge-gate: {OWNER_FLAG} требует просьбы владелицы влить, а журнал не прочитан ({exc})."
+        if not approved:
+            sc.log("BLOCK", HOOK, "block", "owner-flag-without-request", command)
+            return (f"merge-gate: {OWNER_FLAG} проходит, только когда последнее сообщение владелицы "
+                    "просит влить (без отрицания и вопроса).")
+        sc.log("ALLOW", HOOK, "owner-approved-no-checks", "owner asked to merge", command)
     cwd = event.get("cwd")  # absent: a refspec-less push cannot be resolved and blocks
     try:
         found = verdict(command, Path(cwd) if cwd else None, powershell=tool.lower() == "powershell")
