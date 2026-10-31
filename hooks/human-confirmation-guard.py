@@ -2189,6 +2189,18 @@ def _claude_limit(path: str) -> str | None:
 ROOT_FILE = "a file directly in a drive root - the owner must name its full path herself"
 
 
+def _is_long_windows_path(t: str) -> bool:
+    """Owner 2026-10-31 (profiles\\local~2 refused after «удали» with full paths): a "~digit" name is
+    an 8.3 alias only if Windows expands it. An existing local path that GetLongPathNameW returns
+    unchanged is its real long name, so the protected-location checks below see the true path."""
+    if sys.platform != "win32" or not re.match(r"^[A-Za-z]:/", t) or not os.path.lexists(t):
+        return False
+    import ctypes
+    buf = ctypes.create_unicode_buffer(32768)
+    n = ctypes.windll.kernel32.GetLongPathNameW(t.replace("/", "\\"), buf, len(buf))
+    return 0 < n < len(buf) and _norm(buf.value).rstrip("/").lower() == t.rstrip("/").lower()
+
+
 def target_hard_limit(target: str, recursive: bool = False) -> str | None:
     """Why a target may never be deleted on request, or None."""
     t = _norm(target)
@@ -2202,7 +2214,9 @@ def target_hard_limit(target: str, recursive: bool = False) -> str | None:
         return "provider"
     if not (t.startswith("/") or re.match(r"^[A-Za-z]:/", t)):
         return "relative path (cwd unknown to the owner)"
-    if any(c not in {".", ".."} and (c.endswith((".", " ")) or re.search(r"~\d", c)) for c in t.split("/")):
+    comps = [c for c in t.split("/") if c not in {".", ".."}]
+    if any(c.endswith((".", " ")) for c in comps) or (
+            any(re.search(r"~\d", c) for c in comps) and not _is_long_windows_path(t)):
         return "ambiguous Windows name (trailing dot/space or 8.3 short name)"
     wsl = re.match(r"^/mnt/([a-zA-Z])(/.*)?$", t)
     # review 2026-10-11 F3: on Windows a drive-less "/<home>/AppData/Roaming" is "<current drive>:/<home>/...";
