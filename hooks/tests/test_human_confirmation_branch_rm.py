@@ -49,6 +49,16 @@ class BranchRmApproval(unittest.TestCase):
         self.assertTrue(self.go("удали ветки ops/org-runner и main"))
         self.assertTrue(self.go("удаляй", "Можно ли удалить ветки ops/org-runner и main?"))
 
+    def test_yes_with_pasted_list_approves(self) -> None:
+        # owner 2026-11-01: «да» + the pasted list was refused, "no" inside finish-no-join read as a negation
+        names = ("port/bootstrap-finish-no-join-master", "claude/keep-source-icc-20261017")
+        pasted = "да \n\n<pasted_content id=\"9b9b\">\n" + "\n".join(names) + "\n</pasted_content id=\"9b9b\">"
+        self.assertTrue(self.go(pasted, branches=names))
+        self.assertTrue(self.go("да\n" + "\n".join(names), branches=names))
+        self.assertFalse(self.go("нет\n" + "\n".join(names), branches=names))
+        self.assertFalse(self.go("да?\n" + "\n".join(names), branches=names))
+        self.assertFalse(self.go("да\n" + names[0], branches=names))
+
     def test_unnamed_or_negated_does_not_approve(self) -> None:
         self.assertFalse(self.go("удали ветку ops/org-runner"))
         self.assertFalse(self.go("не удаляй ops/org-runner и main"))

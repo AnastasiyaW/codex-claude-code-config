@@ -2075,12 +2075,22 @@ def branch_rm_targets(cmd: str) -> list[str] | None:
     return out or None
 
 
+PASTED_TAG = re.compile(r"</?pasted_content\b[^>\n]*>", re.IGNORECASE)
+
+
 def _branch_rm_approval(branches: list[str], cmd: str, prompt: str, answer: str, event: dict) -> tuple[bool, str]:
-    if CONFIRM_ONLY.fullmatch(prompt):
+    # The names being removed are not her words: "no" inside finish-no-join-master is not a refusal
+    # (owner 2026-11-01, «да» + the pasted list was refused).
+    words = PASTED_TAG.sub(" ", prompt)
+    for b in sorted(branches, key=len, reverse=True):
+        words = re.sub(r"(?<![\w/.-])" + re.escape(b) + r"(?![\w/.-])", " ", words)
+    if CONFIRM_ONLY.fullmatch(words) and words.strip() != prompt.strip():
+        source = prompt
+    elif CONFIRM_ONLY.fullmatch(prompt):
         if not DELETE_MENTION.search(answer):
             return False, "a bare 'yes' to an answer that proposed no deletion"
         source = answer
-    elif NOT_A_GO.search(prompt):
+    elif NOT_A_GO.search(words):
         return False, "the request negates, hesitates or asks a question"
     elif DELETE_INTENT.search(prompt):
         source = prompt
