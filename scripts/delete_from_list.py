@@ -11,6 +11,9 @@ comments and blank lines are ignored). human-confirmation-guard lets the delete 
 owner's latest message is a bare go-ahead to my answer that showed
 `deletion-list: <path> sha256:<hex>`. This script checks the digest again (the file must be the one
 the owner saw) and refuses every path the guard's target_hard_limit refuses.
+Owner 2026-11-01: her own request to delete that pastes every listed path also approves the list
+(it need not have been shown); the guard then marks the record "owner_named", and only then may
+the list hold drive-root entries and the irreplaceable. --show tags those OWNER-MUST-PASTE.
 
 Exit codes: 0 every listed path is gone; 1 something was refused or is still there;
 2 could not check (list outside the folder, digest mismatch, guard not loadable).
@@ -120,27 +123,36 @@ def main() -> int:
         print(f"UNKNOWN: cannot load the guard's hard limits: {exc}", file=sys.stderr)
         return 2
 
-    def refusal(e: str) -> str | None:
+    # Owner 2026-11-01: a list whose every path the owner pasted into her own request to delete may hold
+    # these; the guard checked her message and marks its approval record "owner_named".
+    owner_only = {getattr(guard, n, None) for n in ("ROOT_FILE", "DRIVE_CHILD")} - {None}
+
+    def refusal(e: str, owner_named: bool = False) -> str | None:
         # review 2026-10-11 F3: on Windows a drive-less path means "current drive"; refuse it
         if os.name == "nt" and not re.match(r"^[A-Za-z]:[\\/]", e):
             return "a path needs a drive letter on Windows"
         why = guard.target_hard_limit(e, literal=True)  # entries go to rmtree/unlink as written
-        if why:
+        if why and not (owner_named and why in owner_only):
             return why
-        why = guard.irreplaceable_reason(e, True)  # review R2: never via a list
+        if owner_named:
+            return None
+        why = guard.irreplaceable_reason(e, True)  # review R2: a bare yes never covers these
         return f"irreplaceable ({why}) - name it in the chat" if why else None
 
     if args.show:
         refused = [(e, refusal(e)) for e in entries if refusal(e)]
+        hard = [(e, why) for e, why in refused if refusal(e, owner_named=True)]
         present = [Path(e) for e in entries if Path(e).exists()]
         total = sum(size_of(p) for p in present)
         print(f"deletion-list: {path.as_posix()} sha256:{digest[:16]}")
-        print(f"entries={len(entries)} present={len(present)} size={total / 2**30:.2f} GiB refused={len(refused)}")
+        print(f"entries={len(entries)} present={len(present)} size={total / 2**30:.2f} GiB "
+              f"refused={len(hard)} owner_must_paste={len(refused) - len(hard)}")
         for e in entries:  # review F4/R3: the owner sees every name, not only counts
             print(f"  {e}")
         for e, why in refused:
-            print(f"REFUSED {e}: {why}")
-        return 1 if refused else 0
+            tag = "REFUSED" if (e, why) in hard else "OWNER-MUST-PASTE"
+            print(f"{tag} {e}: {why}")
+        return 1 if hard else 0
 
     if not digest.startswith(args.sha.lower()) or len(args.sha) < 16:
         print("UNKNOWN: the list changed after it was shown (sha256 mismatch)", file=sys.stderr)
@@ -158,8 +170,9 @@ def main() -> int:
         return 2
 
     results = []
+    owner_named = approval.get("owner_named") is True
     for e in entries:
-        why = refusal(e)
+        why = refusal(e, owner_named)
         p = Path(e)
         if why:
             results.append({"path": e, "status": "refused", "reason": why})
