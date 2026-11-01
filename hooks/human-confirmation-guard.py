@@ -2201,10 +2201,12 @@ def _is_long_windows_path(t: str) -> bool:
     return 0 < n < len(buf) and _norm(buf.value).rstrip("/").lower() == t.rstrip("/").lower()
 
 
-def target_hard_limit(target: str, recursive: bool = False) -> str | None:
-    """Why a target may never be deleted on request, or None."""
+def target_hard_limit(target: str, recursive: bool = False, literal: bool = False) -> str | None:
+    """Why a target may never be deleted on request, or None. literal: the caller removes the path
+    as given, with no shell or glob expansion (delete_from_list), so [ ] ( ) @ are plain name
+    characters (owner 2026-11-01: course folders "[SW.BAND] … (2023)" could never be deleted)."""
     t = _norm(target)
-    if not t or re.search(r"[$%`*?\[\]{}@()]", t):
+    if not t or re.search(r"[$%`*?{}]" if literal else r"[$%`*?\[\]{}@()]", t):
         return "glob/variable/expression"
     if t.startswith("//"):
         return "UNC/network path"

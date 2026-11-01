@@ -124,7 +124,7 @@ def main() -> int:
         # review 2026-10-11 F3: on Windows a drive-less path means "current drive"; refuse it
         if os.name == "nt" and not re.match(r"^[A-Za-z]:[\\/]", e):
             return "a path needs a drive letter on Windows"
-        why = guard.target_hard_limit(e)
+        why = guard.target_hard_limit(e, literal=True)  # entries go to rmtree/unlink as written
         if why:
             return why
         why = guard.irreplaceable_reason(e, True)  # review R2: never via a list
