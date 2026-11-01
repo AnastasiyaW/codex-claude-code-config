@@ -743,7 +743,7 @@ def decide(cmd: str) -> tuple[bool, str | None]:
     # review round 11: shell quoting splits a name ('' "" \ `) - match on the de-quoted text too
     dequoted = re.sub(r"[\"'`\\]", "", cmd)
     if (LIST_MENTION.search(cmd) or LIST_MENTION.search(dequoted)) and not _benign_list_mention(cmd):
-        return False, "delete_from_list run"
+        return False, "list script run"
     if INLINE_PY_DELETE.search(cmd):
         return False, "inline python delete"
     if GLOB_SCRIPT.search(cmd):  # review round 10: the script name hidden behind a shell glob
@@ -1081,6 +1081,18 @@ LIST_SCRIPT = (Path(__file__).resolve().parent.parent / "scripts" / "delete_from
 # review 2026-10-11 F1: no separators, substitutions or redirects anywhere in a list-delete call
 LIST_CALL_FORBIDDEN = re.compile(r"[;|`$()<>\n\r{}]|&(?!\s)|\s&\s*\S.*&")
 PYTHON_NAMES = {"python", "python3", "py", "python.exe", "python3.exe", "py.exe"}
+# Owner 2026-11-01 («поправь хук»: the course layout by topic stopped at Move-Item, which this guard
+# reads as a delete). A rename list lives in ~/.claude/state/relocate-lists/<name>.txt, one
+# `SRC => DST` per line; my answer shows `relocate-list: <path> sha256:<hex>`, and her bare go-ahead
+# or her «переноси» to that answer approves exactly that file. Only scripts/relocate_from_list.py acts
+# on it: same volume, never over an existing target, both ends inside relocate_problem() limits.
+RELOCATE_LIST_DIR = Path.home() / ".claude" / "state" / "relocate-lists"
+RELOCATE_REF = re.compile(r"relocate-list:\s*(\S+?\.txt)\s+sha256:([0-9a-fA-F]{16,64})")
+RELOCATE_SCRIPT = LIST_SCRIPT.parent / "relocate_from_list.py"
+RELOCATE_INTENT = re.compile(r"перен[её]с|перенос|перемест|разлож|раскладыва|relocate|\bmove\b", re.IGNORECASE)
+RELOCATE_SEP = " => "
+RELOCATE_NOT = re.compile(r"(?<!\w)(?:не|нет|ни|стоп|погоди|подожди|оставь|not|no|don'?t|wait)(?!\w)|\?",
+                          re.IGNORECASE)
 
 
 # Owner decision 2026-10-11: "a general yes, without naming files, works for everything
@@ -1215,7 +1227,7 @@ def irreplaceable_reason(target: str, recursive: bool) -> str | None:
     return irreplaceable_info(target, recursive)[0]
 
 
-LIST_MENTION = re.compile(r"(?<![\w])delete_from_list|deletion-approvals", re.IGNORECASE)
+LIST_MENTION = re.compile(r"(?<![\w])(?:delete|relocate)_from_list|deletion-approvals", re.IGNORECASE)
 # a .py path built by a glob, a variable or a substitution (review rounds 10-11)
 GLOB_SCRIPT = re.compile(r"\b(?:python3?|py)(?:\.exe)?[\"']?\s+[\"']?[^\s\"']*[*?\[\]$%{}`][^\s\"']*\.py\b",
                          re.IGNORECASE)
@@ -1363,7 +1375,7 @@ def _benign_list_mention(cmd: str) -> bool:
             or not argv[2].lower().endswith(".txt"):
         return False
     try:
-        return Path(argv[1]).expanduser().resolve(strict=True) == LIST_SCRIPT
+        return Path(argv[1]).expanduser().resolve(strict=True) in (LIST_SCRIPT, RELOCATE_SCRIPT)
     except OSError:
         return False
 
@@ -2371,6 +2383,89 @@ def _named(text: str, needle: str) -> bool:
     return re.search(r"(?<![\w.\-/~:])" + re.escape(needle) + r"(?![\w.\-/])", text) is not None
 
 
+def relocate_problem(src: str, dst: str) -> str | None:
+    """Why src may not be renamed to dst, or None. A rename on one volume loses nothing, so a folder
+    two levels below a Windows drive root (D:/АНАЛИТИКА/<course>) may go; every other delete hard
+    limit still holds for both ends (drive roots and their direct folders, homes, system, .claude)."""
+    if not (re.match(r"^[A-Za-z]:[\\/]", src) and re.match(r"^[A-Za-z]:[\\/]", dst)):
+        return "both paths need a drive letter"
+    if src[0].lower() != dst[0].lower():
+        return "different volumes: copy, verify, then a deletion list"
+    for side, p in (("source", src), ("target", dst)):
+        why = target_hard_limit(p, True, literal=True)
+        parts = [x for x in _norm(p)[2:].split("/") if x]
+        if why and not (len(parts) == 2 and parts[0].lower() not in {"users", "home"}
+                        and why in {"root-level path", ROOT_FILE, globals().get("DRIVE_CHILD")}):
+            return f"{side}: {why}"
+    s, d = _norm(src).rstrip("/").lower(), _norm(dst).rstrip("/").lower()
+    if d == s or d.startswith(s + "/"):
+        return "target inside the source"
+    return None
+
+
+def read_relocate_list(path: str, sha: str) -> tuple[list[tuple[str, str]] | None, str]:
+    """(src, dst) pairs of a shown relocate list, or (None, why)."""
+    try:
+        p = Path(path.replace("\\", "/")).expanduser().resolve(strict=True)
+        p.relative_to(RELOCATE_LIST_DIR.resolve())
+        data = p.read_bytes()
+    except (OSError, ValueError):
+        return None, f"{path}: the list must be an existing file in {RELOCATE_LIST_DIR}"
+    if not hashlib.sha256(data).hexdigest().startswith(sha.lower()):
+        return None, f"{path}: the list changed after it was shown (sha256 mismatch)"
+    pairs = []
+    for ln in data.decode("utf-8-sig", errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        if ln.count(RELOCATE_SEP) != 1:
+            return None, f"line without exactly one '{RELOCATE_SEP.strip()}': {ln}"
+        src, dst = (x.strip() for x in ln.split(RELOCATE_SEP))
+        pairs.append((src, dst))
+    return pairs, ""
+
+
+def relocate_list_request(cmd: str, prompt: str, answer: str) -> tuple[bool | None, str, dict]:
+    """(True, "", record) for an approved relocate_from_list.py run, (False, why, {}) if refused,
+    (None, "", {}) if the command is not one."""
+    if "relocate_from_list.py" not in cmd:
+        return None, "", {}
+    raw = cmd.strip()
+    raw = raw[1:].lstrip() if raw.startswith("&") else raw
+    if LIST_CALL_FORBIDDEN.search(raw):
+        return False, "relocate_from_list.py must be the whole command (no separators or substitutions)", {}
+    try:
+        argv = shlex.split(raw.replace("\\", "/"), posix=True)
+    except ValueError:
+        return False, "relocate_from_list.py call cannot be parsed", {}
+    if (len(argv) != 5 or argv[0].lower() not in PYTHON_NAMES or argv[3] != "--sha"
+            or not re.fullmatch(r"[0-9a-fA-F]{16,64}", argv[4]) or not argv[2].lower().endswith(".txt")):
+        return False, "expected exactly: python <relocate_from_list.py> <list.txt> --sha <hex>", {}
+    try:
+        same = Path(argv[1]).expanduser().resolve(strict=True) == RELOCATE_SCRIPT
+    except OSError:
+        same = False
+    if not same:
+        return False, f"only {RELOCATE_SCRIPT.as_posix()} may act on a relocate list", {}
+    if (NOT_A_GO.search(prompt) or RELOCATE_NOT.search(prompt)
+            or not (CONFIRM_ONLY.fullmatch(prompt) or RELOCATE_INTENT.search(prompt))):
+        return False, "a relocate list needs a bare go-ahead or «переноси» to the answer that showed it", {}
+    path, sha = argv[2], argv[4]
+    if (_list_key(path), sha.lower()) not in {(_list_key(p), s.lower()) for p, s in RELOCATE_REF.findall(answer)}:
+        return False, "this relocate list and digest were not shown in my last answer", {}
+    pairs, why = read_relocate_list(path, sha)
+    if pairs is None:
+        return False, why, {}
+    if not pairs:
+        return False, "the list is empty", {}
+    for src, dst in pairs:
+        why = relocate_problem(src, dst)
+        if why:
+            return False, f"{src}: {why}", {}
+    return True, "", {"action": "relocate", "list": _list_key(path), "sha": sha.lower(),
+                      "targets": [s for s, _ in pairs]}
+
+
 def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     req = owner_request(event.get("transcript_path") or "")
     if not req:
@@ -2387,6 +2482,19 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         return _stop_approval(cmd, prompt, answer, event)
     if move_to_temp_parts(cmd):
         return _move_temp_approval(cmd, prompt, answer, event)
+    moved, why, rec = relocate_list_request(cmd, prompt, answer)
+    if moved is False:
+        return False, why
+    if moved:
+        try:  # the record is the script's one-shot approval, as for a deletion list
+            APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                     "session": event.get("session_id"), "request": prompt[:300],
+                                     "command": cmd[:500], **rec}, ensure_ascii=False) + "\n")
+        except OSError:
+            return False, "cannot write the approval audit record"
+        return True, f"relocate list ({len(rec['targets'])} entries)"
     listed, why = list_delete_request(cmd, prompt, answer)
     if listed is None:
         return False, why
@@ -2614,6 +2722,11 @@ def main() -> None:
         "(deletion-list: <путь> sha256:<хэш>) и после его «да» выполни "
         "`python ~/.claude/claude-code-config/scripts/delete_from_list.py <список> --sha <хэш>`. "
         "Маркеры в команде, env и файлы агента не являются одобрением.\n\n"
+        "Перенос папок (Move-Item/mv) внутри одного диска: строки `ИСТОЧНИК => НАЗНАЧЕНИЕ` в "
+        "~/.claude/state/relocate-lists/<имя>.txt, покажи владельцу строку из "
+        "`python ~/.claude/claude-code-config/scripts/relocate_from_list.py <список> --show` "
+        "(relocate-list: <путь> sha256:<хэш>) и после её «да»/«переноси» выполни "
+        "`python ~/.claude/claude-code-config/scripts/relocate_from_list.py <список> --sha <хэш>`.\n\n"
         "Перезапуск (reboot, systemctl reboot, shutdown -r, virsh reboot <vm>, Restart-Computer) "
         "проходит, если последнее сообщение владельца просит перезапустить или отвечает «да» на мой "
         "ответ с предложением перезапуска, и в команде нет ничего разрушительного, кроме перезапуска.\n"
