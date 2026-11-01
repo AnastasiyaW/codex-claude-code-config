@@ -1386,6 +1386,25 @@ def read_deletion_list(path: str, sha: str) -> tuple[list[str] | None, str]:
     return [e for e in entries if e and not e.startswith("#")], ""
 
 
+def list_pasted_by_owner(prompt: str) -> bool:
+    """Owner 2026-11-01 («ты мне даёшь список, я его копирую, пишу там же удали — и ты всё удаляешь»):
+    her own message asks to delete, without negation or question. Whether it pastes every listed path
+    is checked per entry; then the list need not have been shown first."""
+    return (bool(DELETE_INTENT.search(prompt)) and not NOT_A_GO.search(prompt)
+            and not CONFIRM_ONLY.fullmatch(prompt))
+
+
+def _pasted_lines(prompt: str) -> set[str]:
+    """Her message as whole-line paths: a pasted block holds one path per line. A whole line, not a
+    substring, so "D:/x/a b" is not found inside a pasted "D:/x/a b old"."""
+    out = set()
+    for line in prompt.splitlines():
+        line = line.strip().strip("`'\"").strip()
+        line = re.sub(r"^(?:удали(?:те)?|удаляй|delete|remove)[\s:,]+", "", line, flags=re.IGNORECASE)
+        out.add(line.replace("\\", "/").rstrip("/").lower())
+    return out
+
+
 def list_delete_request(cmd: str, prompt: str, answer: str) -> tuple[list[tuple[str, bool]] | None, str]:
     """(targets, "") for an approved delete_from_list.py call; (None, why) if refused; ([], "") if not one."""
     if "delete_from_list.py" not in cmd:
@@ -1409,10 +1428,12 @@ def list_delete_request(cmd: str, prompt: str, answer: str) -> tuple[list[tuple[
     if not same:
         return None, f"only {LIST_SCRIPT.as_posix()} may act on a deletion list"
     path, sha = argv[2], argv[4]
-    if not CONFIRM_ONLY.fullmatch(prompt):
-        return None, "a list delete needs a bare go-ahead to the answer that showed the list"
+    pasted = list_pasted_by_owner(prompt)
+    if not pasted and not CONFIRM_ONLY.fullmatch(prompt):
+        return None, ("a list delete needs a bare go-ahead to the answer that showed the list, "
+                      "or her own request to delete that pastes every listed path")
     shown = {(_list_key(p), s.lower()) for p, s in LIST_REF.findall(answer)}
-    if (_list_key(path), sha.lower()) not in shown:
+    if not pasted and (_list_key(path), sha.lower()) not in shown:
         return None, "this list and digest were not shown in my last answer"
     entries, why = read_deletion_list(path, sha)
     if entries is None:
@@ -1423,8 +1444,13 @@ def list_delete_request(cmd: str, prompt: str, answer: str) -> tuple[list[tuple[
         driveless = [e for e in entries if not re.match(r"^[A-Za-z]:[\\/]", e)]
         if driveless:
             return None, f"{driveless[0]}: a listed path needs a drive letter on Windows"
-    for e in entries:  # review R2: a list is a general go-ahead; the irreplaceable must be named in chat
-        why = irreplaceable_reason(e, True)
+    lines = _pasted_lines(prompt)
+    for e in entries:
+        if pasted:  # every entry, letter for letter, is a line of her own message; that names the irreplaceable too
+            if _norm(e).rstrip("/").lower() not in lines:
+                return None, f"{e}: not pasted in her message - every listed path must be"
+            continue
+        why = irreplaceable_reason(e, True)  # review R2: a bare yes is general; the irreplaceable needs her words
         if why:
             return None, f"{e}: irreplaceable ({why}) - name it in the chat, not in a list"
     return [(e, True) for e in entries], ""
@@ -2354,7 +2380,11 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         # script no longer depends on the hook recognising how it was invoked).
         argv = shlex.split(cmd.strip().lstrip("&").strip().replace("\\", "/"), posix=True)
         extra = {"list": _list_key(argv[2]), "sha": argv[4].lower()}
-        return _approve(listed, "\n".join(t for t, _ in listed), False, prompt, cmd, event, extra=extra)
+        if list_pasted_by_owner(prompt):
+            # the script skips the drive-root and irreplaceable refusals only on this record field
+            extra["owner_named"] = True
+        return _approve(listed, "\n".join(t for t, _ in listed), False, prompt, cmd, event, extra=extra,
+                        shown=answer if extra.get("owner_named") else "")
     bare, with_paths = CONFIRM_ONLY.fullmatch(prompt), CONFIRM_PATHS.fullmatch(prompt)
     if bare or with_paths:
         allow_delete, allow_move = bool(DELETE_MENTION.search(answer)), bool(REPLACE_MENTION.search(answer))
@@ -2384,9 +2414,11 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
 
 def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
              prompt: str, cmd: str, event: dict, general: bool = False,
-             extra: dict | None = None, remote: set[str] = frozenset()) -> tuple[bool, str]:
+             extra: dict | None = None, remote: set[str] = frozenset(),
+             shown: str = "") -> tuple[bool, str]:
     """Every target passes the hard limits and is named in named_in (or, with a general go-ahead,
-    is regenerable); then one audit record."""
+    is regenerable); then one audit record. shown: my proposal the owner pasted a list from; the
+    irreplaceable files inside a pasted folder count as named when they were listed there."""
     text = named_in.replace("\\", "/")
     for t, recursive in targets:
         # extra["list"]: a delete_from_list.py run, which removes each entry literally
@@ -2425,7 +2457,10 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
             if inner:
                 # review R8: naming a folder does not name the databases inside it; each one must be
                 # named by the owner herself, then the folder goes through the usual checks below.
-                missing = [n for n in inner if not _named(own, n.lower() if win else n)]
+                seen = shown.replace("\\", "/")
+                seen = seen.lower() if win else seen
+                missing = [n for n in inner
+                           if not (_named(own, n.lower() if win else n) or _named(seen, n.lower() if win else n))]
                 if missing:
                     return False, (f"{t}: holds irreplaceable files the owner did not name herself: "
                                    f"{', '.join(missing)}")
