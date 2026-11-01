@@ -102,6 +102,26 @@ class DeleteFromListTests(unittest.TestCase):
         self.assertTrue(Path(protected).exists())
         self.assertFalse((self.data / "a.txt").exists())
 
+    def test_brackets_and_parentheses_are_literal_names(self) -> None:
+        # owner 2026-11-01: course folders are named "[SW.BAND] Course (2023)"; a list entry is removed
+        # literally, so these characters are part of the name, not a glob
+        course = self.data / "[SW.BAND] Course (2023) @home"
+        (course / "lesson").mkdir(parents=True)
+        (course / "lesson" / "1.mp4").write_text("v")
+        lst, sha = self.make_list([course.as_posix()])
+        self.assertEqual(0, self.run_main(str(lst), "--show"))
+        self.assertEqual(0, self.run_main(str(lst), "--sha", sha))
+        self.assertFalse(course.exists())
+        self.assertTrue(self.keep.exists())
+
+    def test_wildcards_and_variables_stay_refused(self) -> None:
+        for entry in [(self.data / "*.txt").as_posix(), (self.data / "a?.txt").as_posix(),
+                      f"{self.data.as_posix()}/$HOME", f"{self.data.as_posix()}/%TEMP%",
+                      f"{self.data.as_posix()}/{{a,b}}"]:
+            lst, _ = self.make_list([entry], approve=False)
+            self.assertEqual(1, self.run_main(str(lst), "--show"), entry)
+        self.assertTrue((self.data / "a.txt").exists())
+
     def test_show_deletes_nothing(self) -> None:
         lst, _ = self.make_list([(self.data / "a.txt").as_posix()])
         self.assertEqual(0, self.run_main(str(lst), "--show"))

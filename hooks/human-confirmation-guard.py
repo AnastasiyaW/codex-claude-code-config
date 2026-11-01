@@ -2201,10 +2201,12 @@ def _is_long_windows_path(t: str) -> bool:
     return 0 < n < len(buf) and _norm(buf.value).rstrip("/").lower() == t.rstrip("/").lower()
 
 
-def target_hard_limit(target: str, recursive: bool = False) -> str | None:
-    """Why a target may never be deleted on request, or None."""
+def target_hard_limit(target: str, recursive: bool = False, literal: bool = False) -> str | None:
+    """Why a target may never be deleted on request, or None. literal: the caller removes the path
+    as given, with no shell or glob expansion (delete_from_list), so [ ] ( ) @ are plain name
+    characters (owner 2026-11-01: course folders "[SW.BAND] … (2023)" could never be deleted)."""
     t = _norm(target)
-    if not t or re.search(r"[$%`*?\[\]{}@()]", t):
+    if not t or re.search(r"[$%`*?{}]" if literal else r"[$%`*?\[\]{}@()]", t):
         return "glob/variable/expression"
     if t.startswith("//"):
         return "UNC/network path"
@@ -2328,7 +2330,8 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
     is regenerable); then one audit record."""
     text = named_in.replace("\\", "/")
     for t, recursive in targets:
-        why = target_hard_limit(t, recursive)
+        # extra["list"]: a delete_from_list.py run, which removes each entry literally
+        why = target_hard_limit(t, recursive, literal=bool(extra and extra.get("list")))
         if why == ROOT_FILE:
             own = prompt.replace("\\", "/").lower()
             if not _named(own, _norm(t).rstrip("/").lower()):
@@ -3003,6 +3006,17 @@ def self_test() -> int:
     dbdig = hashlib.sha256(dbl.read_bytes()).hexdigest()[:16]
     refuse.append(("database inside a list (R2)", f"python {LIST_SCRIPT.as_posix()} {dbl.as_posix()} --sha {dbdig}",
                    transcript("да", f"Удалю. deletion-list: {dbl.as_posix()} sha256:{dbdig}")))
+    # owner 2026-11-01: list entries are removed literally, so brackets in a course name are not a glob
+    brl = DELETION_LIST_DIR / "brackets.txt"
+    brl.write_text("D:/tmp/work/[SW.BAND] Course (2023)\n", encoding="utf-8")
+    brdig = hashlib.sha256(brl.read_bytes()).hexdigest()[:16]
+    approve.append(("bracketed course folder in a shown list", f"python {LIST_SCRIPT.as_posix()} {brl.as_posix()} --sha {brdig}",
+                    transcript("да", f"Удалю. deletion-list: {brl.as_posix()} sha256:{brdig}")))
+    gl = DELETION_LIST_DIR / "glob.txt"
+    gl.write_text("D:/tmp/work/*.mp4\n", encoding="utf-8")
+    gdig = hashlib.sha256(gl.read_bytes()).hexdigest()[:16]
+    refuse.append(("wildcard in a shown list", f"python {LIST_SCRIPT.as_posix()} {gl.as_posix()} --sha {gdig}",
+                   transcript("да", f"Удалю. deletion-list: {gl.as_posix()} sha256:{gdig}")))
     for ext in ("vault.kdbx", "export.sql.gz", "app.db-journal", "dump.rdb", "orders.ibd", "erp.mdf"):
         refuse.append((f"general yes, database-like {ext} (R4)", f"rm /srv/a/b/{ext}", transcript("да", "Удалю мусор")))
     pg = gdir / "proj" / "pgd"
