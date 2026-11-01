@@ -851,7 +851,9 @@ TEST_VM_WINDOWS_RESTART = re.compile(
 # rebuildable from git, so asking to clean images approves removing images named by tag or digest.
 # No flags: without -f docker refuses an image a container still uses, so a live service is safe.
 IMAGE_INTENT = re.compile(
-    r"\b(?:почисти(?:те)?|почистить|очисти(?:те)?|удали(?:те)?|удалить|убери(?:те)?|снеси(?:те)?)\b"
+    # imperfective imperatives too: owner 2026-10-24 «удаляй старые образы на контабо» was refused
+    r"\b(?:почисти(?:те)?|почистить|очисти(?:те)?|чисти(?:те)?|удали(?:те)?|удалить|удаляй(?:те)?|"
+    r"убери(?:те)?|убирай(?:те)?|снеси(?:те)?|сноси(?:те)?)\b"
     r"|\bclean\b|\bremove\b|\bdelete\b|\bprune\b", re.IGNORECASE)
 IMAGE_MENTION = re.compile(r"образ|\bimages?\b", re.IGNORECASE)
 IMAGE_REF = r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})"
@@ -2201,10 +2203,13 @@ def _is_long_windows_path(t: str) -> bool:
     return 0 < n < len(buf) and _norm(buf.value).rstrip("/").lower() == t.rstrip("/").lower()
 
 
-def target_hard_limit(target: str, recursive: bool = False, literal: bool = False) -> str | None:
+def target_hard_limit(target: str, recursive: bool = False, literal: bool = False,
+                      server: bool = False) -> str | None:
     """Why a target may never be deleted on request, or None. literal: the caller removes the path
     as given, with no shell or glob expansion (delete_from_list), so [ ] ( ) @ are plain name
-    characters (owner 2026-11-01: course folders "[SW.BAND] … (2023)" could never be deleted)."""
+    characters (owner 2026-11-01: course folders "[SW.BAND] … (2023)" could never be deleted).
+    server: the target sits in an `ssh host '...'` command, so a direct child of /root or
+    /home/<user> is not a hard limit."""
     t = _norm(target)
     if not t or re.search(r"[$%`*?{}]" if literal else r"[$%`*?\[\]{}@()]", t):
         return "glob/variable/expression"
@@ -2244,6 +2249,8 @@ def target_hard_limit(target: str, recursive: bool = False, literal: bool = Fals
     if (len(parts) == 1 and not recursive and re.match(r"^[A-Za-z]:/", t)
             and os.path.isfile(t) and not os.path.islink(t)):
         return ROOT_FILE
+    if server and _server_home_child(t):
+        return None
     if len(parts) < 3 and not depth2_file:
         return "root-level path"
     if low[0] in {"home", "users"} and len(parts) < 3:
@@ -2264,6 +2271,57 @@ HOME_SYSTEM = {"desktop", "documents", "downloads", "pictures", "music", "videos
 def _home_child(target: str) -> bool:
     parts = [p for p in re.sub(r"^[A-Za-z]:", "", _norm(target)).split("/") if p]
     return len(parts) == 3 and parts[0].lower() in {"home", "users"}
+
+
+# Owner 2026-10-24 («поправь хук»: «разрешить удалять восполнимые папки прямо внутри /root на серверах,
+# если вы явно согласились на конкретный список»): inside `ssh host '...'` an ordinary entry directly
+# in /root or /home/<user> is deletable when its full path is in the approved message (her request, or
+# my answer she said a bare yes to). Hidden/standard folders, the home itself and the irreplaceable stay
+# as before; local homes (C:/Users/<u>/<dir>) keep the owner-names-it rule above.
+def _server_home_child(target: str) -> bool:
+    t = _norm(target)
+    if not t.startswith("/") or t.startswith("//"):
+        return False
+    parts = [p for p in t.split("/") if p]
+    if not ((len(parts) == 2 and parts[0] == "root") or (len(parts) == 3 and parts[0] == "home")):
+        return False
+    return not parts[-1].startswith(".") and parts[-1].lower() not in HOME_SYSTEM
+
+
+def _remote_targets(cmd: str) -> set[str]:
+    """Delete targets that sit only inside an ssh-wrapped (remote) command, never also run locally."""
+    out: set[str] = set()
+    local: set[str] = set()
+    _collect_remote(cmd, out, local)
+    return out - local
+
+
+def _collect_remote(cmd: str, out: set[str], local: set[str]) -> None:
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        remote = remote_command(seg) if seg else None
+        if remote and remote != UNPARSED and _is_ssh_segment(seg):
+            out |= {t for t, _ in (_delete_targets_in(remote, False, True) or [])}
+        elif remote and remote != UNPARSED:
+            _collect_remote(remote, out, local)  # review 2026-10-24: bash -c / pwsh -c run here, not on a server
+        elif seg:
+            local |= set(delete_targets(seg) or [])
+
+
+def _is_ssh_segment(seg: str) -> bool:
+    try:
+        toks = shlex.split(seg, posix=True)
+    except ValueError:
+        return False
+    i = 0
+    while i < len(toks):
+        if toks[i] == "timeout" and i + 1 < len(toks) and re.fullmatch(r"\d+[smhd]?", toks[i + 1]):
+            i += 2
+        elif toks[i] in REMOTE_WRAPPERS or re.fullmatch(r"\w+=\S*", toks[i]):
+            i += 1
+        else:
+            break
+    word = toks[i].rsplit("/", 1)[-1].lower().removesuffix(".exe") if i < len(toks) else ""
+    return word == "ssh" or (word == "tailscale" and toks[i + 1:i + 2] == ["ssh"])
 
 
 def _named(text: str, needle: str) -> bool:
@@ -2320,18 +2378,20 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     # A general go-ahead is a bare yes to my proposal, or a request that names no file itself
     # ("удали временные"). When the owner names a file, unnamed others are not covered.
     general = named_in is answer or not NAMES_FILE.search(prompt)
-    return _approve(targets, named_in, from_phrase, prompt, cmd, event, general=general)
+    return _approve(targets, named_in, from_phrase, prompt, cmd, event, general=general,
+                    remote=_remote_targets(cmd))
 
 
 def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
              prompt: str, cmd: str, event: dict, general: bool = False,
-             extra: dict | None = None) -> tuple[bool, str]:
+             extra: dict | None = None, remote: set[str] = frozenset()) -> tuple[bool, str]:
     """Every target passes the hard limits and is named in named_in (or, with a general go-ahead,
     is regenerable); then one audit record."""
     text = named_in.replace("\\", "/")
     for t, recursive in targets:
         # extra["list"]: a delete_from_list.py run, which removes each entry literally
-        why = target_hard_limit(t, recursive, literal=bool(extra and extra.get("list")))
+        server = t in remote and _server_home_child(t)
+        why = target_hard_limit(t, recursive, literal=bool(extra and extra.get("list")), server=server)
         if why == ROOT_FILE:
             own = prompt.replace("\\", "/").lower()
             if not _named(own, _norm(t).rstrip("/").lower()):
@@ -2343,7 +2403,11 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
         if re.match(r"^[A-Za-z]:/", full):  # Windows: case-insensitive filesystem
             full, hay = full.lower(), text.lower()
         base = full.rsplit("/", 1)[-1]
-        if _home_child(t):
+        if server and _named(hay, full):
+            extra = {**(extra or {}), "action": "server-home-child"}
+        elif server and not _home_child(t):
+            return False, f"{t}: a folder directly in a server home - its full path must be in the approved message"
+        elif _home_child(t):
             own = prompt.replace("\\", "/")
             own = own.lower() if re.match(r"^[a-z]:/", full) else own
             if not (_named(own, full) or _named(own, base)):
@@ -2810,7 +2874,45 @@ def self_test() -> int:
         ("files in a drive-root folder", "ssh h \"del E:\\Firefox-setup\\FirefoxSetup.exe E:\\Firefox-setup\\FirefoxSession.tmp\"",
          transcript("удали установщик и архив из E:\\Firefox-setup")),
     ]
-    refuse = [
+    # owner 2026-10-24: a direct child of a server home (/root, /home/<u>) inside ssh, full path listed
+    sroot = "/" + "root"
+    srv_a, srv_b = sroot + "/run-build-118abcf7", sroot + "/run-a1bed2e2-increment.bundle"
+    srv_rm = f"ssh srv-host 'rm -r {srv_a} {srv_b}'"
+    srv_list = f"Удалю на srv-host 2 записи:\n{srv_a}\n{srv_b}\nОставляю .json. Подтверди."
+    approve += [
+        ("server home child: bare yes on my listed paths", srv_rm, transcript("да, удаляй", srv_list)),
+        ("server home child: ssh inside a local bash -c", f"bash -c \"ssh srv-host 'rm -r {srv_a}'\"",
+         transcript("да, удаляй", srv_list)),
+        ("server home child: owner names the full path",f"ssh srv-host 'rm -r {srv_a}'",
+         transcript(f"удали {srv_a} на srv-host")),
+        ("server /home/<u> child: bare yes on listed path", "ssh h 'rm -r /" + "home/ws/run-20260811'",
+         transcript("да", "Удалю /" + "home/ws/run-20260811 (2 GB), подтверди")),
+        # was a refusal until 2026-10-24: a bare yes on my message listing the full server path now covers it
+        ("server home child by a bare yes on the listed path", "ssh h 'rm -rf /" + "home/someuser/lora-cache-20260823'",
+         transcript("да, удаляй", "Удалю /" + "home/someuser/lora-cache-20260823 - подтверди")),
+    ]
+    srv_refuse = [
+        ("server home child without approval", srv_rm, transcript("посмотри, что лежит в /root", srv_list)),
+        ("server home child: one path not listed", srv_rm, transcript("да, удаляй", f"Удалю {srv_a}. Подтверди.")),
+        ("server home child: general yes, paths not listed", srv_rm,
+         transcript("да, удаляй", "Удалю старые run-* в /root, подтверди")),
+        ("server home itself", f"ssh srv-host 'rm -r {sroot}'", transcript("да, удаляй", f"Удалю {sroot}")),
+        ("server home .ssh", f"ssh srv-host 'rm -r {sroot}/.ssh'", transcript(f"удали {sroot}/.ssh")),
+        ("server home mask", f"ssh srv-host 'rm -r {sroot}/run-*'",
+         transcript("да, удаляй", f"Удалю {sroot}/run-*")),
+        ("server home backup named only by me", f"ssh srv-host 'rm -r {sroot}/pg-backup-20260820'",
+         transcript("да, удаляй", f"Удалю {sroot}/pg-backup-20260820")),
+        ("server home dump named only by me", f"ssh srv-host 'rm {sroot}/run.dump'",
+         transcript("да, удаляй", f"Удалю {sroot}/run.dump")),
+        ("server home child run locally", f"rm -r {srv_a}", transcript("да, удаляй", f"Удалю {srv_a}")),
+        ("server home child via local bash -c", f"bash -c 'rm -r {srv_a}'", transcript("да, удаляй", f"Удалю {srv_a}")),
+        ("server home child via local sh -c", f"sh -c 'rm -r {srv_a}'", transcript("да, удаляй", f"Удалю {srv_a}")),
+        ("server home child via local pwsh -c", f"pwsh -c 'rm -r {srv_a}'", transcript("да, удаляй", f"Удалю {srv_a}")),
+        ("server home child via env bash -c", f"env bash -c 'rm -r {srv_a}'", transcript("да, удаляй", f"Удалю {srv_a}")),
+        ("local home child by a bare yes stays owner-named", "rm -rf " + HOME_FIX + "/lora-run",
+         transcript("да, удаляй", "Удалю " + HOME_FIX + "/lora-run")),
+    ]
+    refuse = srv_refuse + [
         ("no transcript", sft, {}),
         ("negated", sft, transcript("не удаляй flux1-dev.sft")),
         ("not a delete request", sft, transcript("посмотри flux1-dev.sft")),
@@ -2844,8 +2946,6 @@ def self_test() -> int:
         # paths split as "/" + "home/..." so the public-repo PII scanner sees no home path
         ("hidden home child even when named", "ssh h 'rm -rf /" + "home/someuser/.ssh'",
          transcript("удали /" + "home/someuser/.ssh")),
-        ("home child by general yes only", "ssh h 'rm -rf /" + "home/someuser/lora-cache-20260823'",
-         transcript("да, удаляй", "Удалю /" + "home/someuser/lora-cache-20260823 - подтверди")),
         ("standard home folder named", "ssh h 'rm -rf /" + "home/someuser/Downloads'",
          transcript("удали /" + "home/someuser/Downloads")),
         ("the guard itself", "rm " + HOME_FIX + "/.claude/claude-code-config/hooks/human-confirmation-guard.py",
@@ -3435,6 +3535,8 @@ def self_test() -> int:
             fails.append(f"owner request should refuse ({name})")
     if not APPROVAL_LOG.exists() or len(APPROVAL_LOG.read_text(encoding="utf-8").splitlines()) != len(approve):
         fails.append("every owner-approved delete must leave exactly one audit record")
+    elif sum('"action": "server-home-child"' in r for r in APPROVAL_LOG.read_text(encoding="utf-8").splitlines()) != 5:
+        fails.append("each server-home-child approval must be logged with action server-home-child")
     APPROVAL_LOG = saved_log
     DELETION_LIST_DIR = saved_list_dir
     if decide(call)[0]:
