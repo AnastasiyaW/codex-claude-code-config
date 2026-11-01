@@ -982,7 +982,9 @@ def _reason(finding: str, command: str) -> str:
 # lacks the base tip still refuse inside safe_merge.
 OWNER_FLAG = "--owner-approved-no-checks"
 # «ыливай» (2026-10-31): her typo, ы sits next to в on the keyboard; \b keeps «выливай» out.
-MERGE_ASK = re.compile(r"влей(?:те)?\b|влива\w*|\bылива\w*|влить\b|смерж\w*|мерж\w*|мердж\w*|\bmerge\w*", re.I)
+# «сливай все все и на стейджинг» (2026-11-01): «слей/сливай/слить» is her other word for merge.
+MERGE_ASK = re.compile(r"влей(?:те)?\b|влива\w*|\bылива\w*|влить\b|\bслей(?:те)?\b|\bслива\w*|\bслить\b"
+                       r"|смерж\w*|мерж\w*|мердж\w*|\bmerge\w*", re.I)
 NEGATION = re.compile(r"(?:^|\s)(?:не|нельзя|никогда|стоп|don'?t|do not|never|not)(?:\s|$)", re.I)
 
 
