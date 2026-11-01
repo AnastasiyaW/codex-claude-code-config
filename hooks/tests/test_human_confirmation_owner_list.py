@@ -85,6 +85,11 @@ class OwnerPastedList(unittest.TestCase):
         ok, why = self.run_list(lst, sha, f"удали\n{self.withdata}",
                                 "Удаление — 1 путь, внутри датасеты: lesson_dataset.csv")
         self.assertTrue(ok, why)
+        ok, why = self.run_list(lst, sha, f"удали\n{self.withdata}",       # a sentence's closing dot after it
+                                "Внутри датасеты: a.ipynb, lesson_dataset.csv.")
+        self.assertTrue(ok, why)
+        self.assertFalse(self.run_list(lst, sha, f"удали\n{self.withdata}",  # a longer name is another file
+                                       "Внутри датасеты: lesson_dataset.csv.zip")[0])
 
     def test_refused(self) -> None:
         lst, sha = self.write_list(self.plain, self.db)

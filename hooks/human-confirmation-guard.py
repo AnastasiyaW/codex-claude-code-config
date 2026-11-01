@@ -2360,6 +2360,12 @@ def _is_ssh_segment(seg: str) -> bool:
     return word == "ssh" or (word == "tailscale" and toks[i + 1:i + 2] == ["ssh"])
 
 
+def _listed(text: str, needle: str) -> bool:
+    """needle is an item of a prose list in text: like _named, but a sentence's closing dot may follow it
+    ("..., Ноутбуки и датасеты." was refused 2026-11-01); a dot that starts an extension still may not."""
+    return re.search(r"(?<![\w.\-/~:])" + re.escape(needle) + r"(?![\w\-/]|\.\w)", text) is not None
+
+
 def _named(text: str, needle: str) -> bool:
     """needle appears in text as a whole token (not as part of a longer name or path)."""
     return re.search(r"(?<![\w.\-/~:])" + re.escape(needle) + r"(?![\w.\-/])", text) is not None
@@ -2470,7 +2476,7 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
                 seen = shown.replace("\\", "/")
                 seen = seen.lower() if win else seen
                 missing = [n for n in inner
-                           if not (_named(own, n.lower() if win else n) or _named(seen, n.lower() if win else n))]
+                           if not (_named(own, n.lower() if win else n) or _listed(seen, n.lower() if win else n))]
                 if missing:
                     return False, (f"{t}: holds irreplaceable files the owner did not name herself: "
                                    f"{', '.join(missing)}")
