@@ -253,6 +253,17 @@ images/ps), в том числе за ssh. Без флагов (`-f` — бло�
 что папка на два уровня ниже корня диска (`D:\АНАЛИТИКА\<курс>`) допустима. Тест:
 `hooks/tests/test_relocate_list.py`.
 
+## База данных по просьбе владелицы (директива 2026-11-02)
+> «Да, поправь хук» («соглашаюсь на удаление пробной базы» было отказано: DROP не проходил никогда)
+
+База невосполнима, поэтому `DROP DATABASE` проходит только по **её собственному** последнему сообщению:
+она просит удалить и сама называет каждую базу точным именем. Моё предложение и голое «да» не считаются.
+Форма одна: `[ssh host '][docker exec [-i] КОНТЕЙНЕР] psql [-U u] [-d db] [-h h] [-p n] [-X] [-q] -c "DROP DATABASE [IF EXISTS] имя"`,
+рядом только echo/grep/head/tail/wc; `postgres`, `template0`, `template1` — никогда. Слой 1
+(`destructive-command-guard`) по-прежнему требует в конце команды `# claude-bypass: destructive`.
+Запись — `"action": "db-drop"`. После — `select datname from pg_database` (базы нет). Хук:
+`_db_drop_approval()` в `human-confirmation-guard.py`, тест `hooks/tests/test_human_confirmation_db_drop.py`.
+
 ## Правило — после удаления (anti-fabrication)
 - **Перепроверить, что объект РЕАЛЬНО исчез**: `Test-Path`/`ls` (файл/папка), `docker ps -a`/
   `docker images` (контейнер/образ), `git branch`/`ls-remote` (ветка), API GET → 404 (облако),

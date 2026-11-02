@@ -2063,6 +2063,58 @@ def _image_rm_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple
     return True, "docker image removal"
 
 
+# Owner 2026-11-02 («Да, поправь хук»: «соглашаюсь на удаление пробной базы» was refused, DROP never passed):
+# a database is irreplaceable, so DROP DATABASE passes only when her own latest message asks to delete and
+# names every database itself; my proposal and a bare yes never count. Only one shape:
+# `[docker exec [-i] CONTAINER] psql [-U u] [-d db] [-h h] [-p n] [-X] [-q] -c "DROP DATABASE [IF EXISTS] name"`.
+DB_NAME = r"[A-Za-z_][A-Za-z0-9_]{2,62}"
+DB_DROP_SQL = r"DROP\s+DATABASE\s+(?:IF\s+EXISTS\s+)?(" + DB_NAME + r")\s*;?"
+DB_DROP_SEGMENT = re.compile(
+    r"(?:docker\s+exec\s+(?:-i\s+)?[\w.-]+\s+)?psql"
+    r"(?:\s+(?:-U\s*[\w-]+|-d\s*[\w-]+|-h\s*[\w.-]+|-p\s*\d+|-X|-q|-v\s+ON_ERROR_STOP=1))*"
+    r"\s+-c\s+(?:\"" + DB_DROP_SQL + r"\"|'" + DB_DROP_SQL + r"')(?:\s+2>&1)?\s*;?", re.IGNORECASE)
+DB_DROP_COMPANION = re.compile(r"(?:echo\s+[\w=.:-]*|grep(?:\s+-[A-Za-z]+)*\s+[\w.:-]+|head(?:\s+-n?\s*\d+)?|"
+                               r"tail(?:\s+-n?\s*\d+)?|wc\s+-l)\s*;?")
+DB_DROP_INTENT = re.compile(IMAGE_INTENT.pattern + r"|\bdrop\b|удалени[еяю]|снос\w*", re.IGNORECASE)
+DB_PROTECTED = {"postgres", "template0", "template1"}
+
+
+def db_drop_targets(cmd: str) -> list[str] | None:
+    """Database names when every destructive part of cmd (ssh unwrapped) is one psql DROP DATABASE, else None."""
+    # destructive-command-guard (layer 1) still wants its own trailing `# claude-bypass: destructive` marker
+    cmd = re.sub(r"\s+#\s*claude-bypass\s*:\s*destructive\s*$", "", cmd, flags=re.IGNORECASE)
+    if not _only_segments(cmd, DB_DROP_SEGMENT, DB_DROP_COMPANION):
+        return None
+    names = [a or b for a, b in re.findall(r"-c\s+(?:\"" + DB_DROP_SQL + r"\"|'" + DB_DROP_SQL + r"')",
+                                           executable_text(cmd), re.IGNORECASE)]
+    return names or None
+
+
+def _db_drop_approval(names: list[str], cmd: str, prompt: str, event: dict) -> tuple[bool, str]:
+    if CONFIRM_ONLY.fullmatch(prompt):
+        return False, "a bare 'yes' does not drop a database; the request must name it"
+    if NOT_A_GO.search(prompt):
+        return False, "the request negates, hesitates or asks a question"
+    if not DB_DROP_INTENT.search(prompt):
+        return False, "the latest request does not ask to delete a database"
+    system = [n for n in names if n.lower() in DB_PROTECTED]
+    if system:
+        return False, f"system database: {', '.join(system)}"
+    unnamed = [n for n in names if not re.search(r"(?<![\w])" + re.escape(n) + r"(?![\w])", prompt)]
+    if unnamed:
+        return False, f"databases not named in the request: {', '.join(unnamed)}"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "action": "db-drop", "databases": names,
+                                 "request": prompt[:300], "command": cmd[:500]},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, "database drop"
+
+
 # Owner 2026-10-31 («исправь хук, это мешает работе»: «удаляй» five old branches was refused): a remote
 # branch is removed on her request when every branch is named, in her words or in my answer she said a bare yes to.
 # Only `[cd DIR &&] git push [-q] <remote> --delete|-d b...` or `<remote> :b...`, read-only ls-remote beside it.
@@ -2475,6 +2527,9 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         return _restart_approval(cmd, prompt, answer, event)
     if image_rm_only(cmd):
         return _image_rm_approval(cmd, prompt, answer, event)
+    databases = db_drop_targets(cmd)
+    if databases:
+        return _db_drop_approval(databases, cmd, prompt, event)
     branches = branch_rm_targets(cmd)
     if branches:
         return _branch_rm_approval(branches, cmd, prompt, answer, event)
