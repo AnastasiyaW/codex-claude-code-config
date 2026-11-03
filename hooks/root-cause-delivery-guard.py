@@ -362,6 +362,7 @@ def record_intent(root: Path, kind: str, prompt: str, session_id: str = "unscope
         "prompt_sha256": prompt_hash,
         "recorded_at": now,
         "expires_at": now + 8 * 60 * 60,
+        "missing_at_intent": missing_source_files(root),
     }
     _write_json(intent_path(root, session_id), value)
     return value
@@ -1190,7 +1191,13 @@ def git_source_changes(root: Path) -> list[str]:
     return changed
 
 
-def changes_after(root: Path, changed: list[str], since: float) -> list[str]:
+def missing_source_files(root: Path) -> list[str]:
+    """Changed source paths that are absent from disk (deleted, or renamed away)."""
+    return [rel for rel in git_source_changes(root) if not (root / rel).exists()]
+
+
+def changes_after(root: Path, changed: list[str], since: float,
+                  missing_at_intent: list[str] | None = None) -> list[str]:
     """Keep only changed files last written at or after ``since``.
 
     A file whose last write predates the intent cannot be that intent's product.
@@ -1199,14 +1206,19 @@ def changes_after(root: Path, changed: list[str], since: float) -> list[str]:
     holds a session for deliveries it never opened — the same collateral the
     foreign-case branch above already refuses to inflict.
 
-    Doubt stays fail-closed: an unreadable mtime counts as attributable.
+    A deleted file has no mtime, so it is attributable unless it was already
+    missing when the intent was recorded (measured 2026-11-03: a deletion made by
+    another session before a letter-writing prompt held that session's Stop).
+    Doubt stays fail-closed: any other unreadable mtime counts as attributable.
     """
+    before = set(missing_at_intent or [])
     attributable: list[str] = []
     for rel in changed:
         try:
             mtime = (root / rel).stat().st_mtime
         except OSError:
-            attributable.append(rel)
+            if rel not in before:
+                attributable.append(rel)
             continue
         if mtime >= since:
             attributable.append(rel)
@@ -1251,7 +1263,8 @@ def stop(event: dict[str, Any]) -> None:
         # usual answer to collateral is that the gate gets disabled. A session
         # that owns an unresolved intent is still held, immediately below.
         return
-    attributable = changes_after(root, changed, float(intent.get("recorded_at", 0) or 0))
+    attributable = changes_after(root, changed, float(intent.get("recorded_at", 0) or 0),
+                                 intent.get("missing_at_intent"))
     if not attributable:
         # Owning an intent is not the same as having changed anything under it.
         print(f"[root-cause-delivery] not blocking: none of {len(changed)} changed source "

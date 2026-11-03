@@ -141,6 +141,39 @@ out_stop_mine = ran(g.stop, {"session_id": "session-mine"})
 results.append(("my Stop while I own an intent, source written after it and no case",
                 True, blocked(out_stop_mine)))
 
+# 4. A deleted file has no mtime. Measured 2026-11-03: another session's deletion,
+# made before a letter-writing prompt, held that session's Stop. A file already
+# missing when the intent was recorded is not the intent's product; a file deleted
+# after it still is, and an intent recorded before this field existed stays fail-closed.
+(REPO / "thing.py").unlink()
+subprocess.run(["git", "-C", str(REPO), "add", "-A"], check=True, capture_output=True)
+(REPO / "gone.py").write_text("x = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "gone.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"],
+               check=True, capture_output=True)
+(REPO / "gone.py").unlink()
+record("session-mine")
+out_deleted_before = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, source deleted before it",
+                False, blocked(out_deleted_before)))
+
+(REPO / "late.py").write_text("y = 2\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "late.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "late"],
+               check=True, capture_output=True)
+record("session-mine")
+(REPO / "late.py").unlink()
+out_deleted_after = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, source deleted after it and no case",
+                True, blocked(out_deleted_after)))
+
+legacy = json.loads(g.intent_path(REPO, "session-mine").read_text(encoding="utf-8"))
+legacy.pop("missing_at_intent", None)
+g._write_json(g.intent_path(REPO, "session-mine"), legacy)
+out_legacy = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop with an intent recorded before missing_at_intent existed, a deleted source",
+                True, blocked(out_legacy)))
+
 failures = [r for r in results if r[1] != r[2]]
 for label, expected, got in results:
     print(f"  {'ok  ' if expected == got else 'FAIL'} expected={'block' if expected else 'pass':<5} "
