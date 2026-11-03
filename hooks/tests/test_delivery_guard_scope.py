@@ -141,6 +141,130 @@ out_stop_mine = ran(g.stop, {"session_id": "session-mine"})
 results.append(("my Stop while I own an intent, source written after it and no case",
                 True, blocked(out_stop_mine)))
 
+# 4. A deleted file has no mtime. Measured 2026-11-03: another session's deletion,
+# made before a letter-writing prompt, held that session's Stop. A file already
+# missing when the intent was recorded is not the intent's product; a file deleted
+# after it still is, and an intent recorded before this field existed stays fail-closed.
+(REPO / "thing.py").unlink()
+subprocess.run(["git", "-C", str(REPO), "add", "-A"], check=True, capture_output=True)
+(REPO / "gone.py").write_text("x = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "gone.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"],
+               check=True, capture_output=True)
+(REPO / "gone.py").unlink()
+record("session-mine")
+out_deleted_before = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, source deleted before it",
+                False, blocked(out_deleted_before)))
+
+(REPO / "late.py").write_text("y = 2\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "late.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "late"],
+               check=True, capture_output=True)
+record("session-mine")
+(REPO / "late.py").unlink()
+out_deleted_after = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, source deleted after it and no case",
+                True, blocked(out_deleted_after)))
+
+legacy = json.loads(g.intent_path(REPO, "session-mine").read_text(encoding="utf-8"))
+legacy.pop("status_at_intent", None)
+g._write_json(g.intent_path(REPO, "session-mine"), legacy)
+out_legacy = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop with an intent recorded before status_at_intent existed, a deleted source",
+                True, blocked(out_legacy)))
+
+# 5. A non-ASCII source file present at intent and edited after it must block.
+# Independent review 2026-11-03: porcelain without -z C-quotes the path, the quoted
+# string is not on disk, so the file was recorded as "missing" and its edit skipped.
+cyr = REPO / "тест.py"
+cyr.write_text("a = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "-A"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "cyr"],
+               check=True, capture_output=True)
+cyr.write_text("a = 2\n", encoding="utf-8")
+old = time.time() - 2 * 86400
+os.utime(cyr, (old, old))
+record("session-mine")
+cyr.write_text("a = 3\n", encoding="utf-8")
+out_cyr = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, non-ASCII source present at intent and edited after it",
+                True, blocked(out_cyr)))
+
+# 6. Renames (second independent review 2026-11-03): the source path of a rename
+# is a change. `git mv` keeps the mtime, so a rename after the intent was only
+# visible through the renamed-away source path.
+cyr.write_text("a = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "-A"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "clean"],
+               check=True, capture_output=True)
+(REPO / "keep.py").write_text("k = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "keep.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "keep"],
+               check=True, capture_output=True)
+os.utime(REPO / "keep.py", (old, old))
+record("session-mine")
+subprocess.run(["git", "-C", str(REPO), "mv", "keep.py", "moved.py"], check=True, capture_output=True)
+os.utime(REPO / "moved.py", (old, old))
+out_renamed = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, source renamed after it (old mtime kept)",
+                True, blocked(out_renamed)))
+results.append(("git_source_changes lists both sides of a staged rename",
+                True, {"keep.py", "moved.py"} <= set(g.git_source_changes(REPO))))
+
+subprocess.run(["git", "-C", str(REPO), "mv", "moved.py", "keep.py"], check=True, capture_output=True)
+(REPO / "ita.py").write_text("i = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "-N", "ita.py"], check=True, capture_output=True)
+(REPO / "keep.py").rename(REPO / "renamed.py")
+subprocess.run(["git", "-C", str(REPO), "add", "-N", "renamed.py"], check=True, capture_output=True)
+listed = set(g.git_source_changes(REPO))
+results.append(("git_source_changes parses an intent-to-add rename without garbage paths",
+               True, listed <= {"ita.py", "renamed.py", "keep.py"} and "renamed.py" in listed))
+
+# 7. Third independent review 2026-11-03: a case-only rename keeps the old mtime and
+# on Windows both names stat to the same file, so mtime alone saw nothing. Against
+# the intent's status snapshot both sides are new entries. A corrupt snapshot falls
+# back to the fail-closed mtime rule instead of raising.
+subprocess.run(["git", "-C", str(REPO), "reset", "-q"], check=True, capture_output=True)
+for name in ("renamed.py", "ita.py"):
+    if (REPO / name).exists():
+        (REPO / name).rename(REPO / ("keep.py" if name == "renamed.py" else "ita_kept.txt"))
+subprocess.run(["git", "-C", str(REPO), "add", "-A"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "clean2"],
+               check=True, capture_output=True)
+(REPO / "Case.py").write_text("c = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "Case.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "case"],
+               check=True, capture_output=True)
+os.utime(REPO / "Case.py", (old, old))
+record("session-mine")
+subprocess.run(["git", "-C", str(REPO), "mv", "Case.py", "tmpcase.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "mv", "tmpcase.py", "case.py"], check=True, capture_output=True)
+os.utime(REPO / "case.py", (old, old))
+out_caserename = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, case-only rename after it (old mtime kept)",
+                True, blocked(out_caserename)))
+
+# Fourth independent review: a plain filesystem case-only rename (no git mv) is
+# invisible to git status under core.ignorecase=true (the Windows default).
+subprocess.run(["git", "-C", str(REPO), "config", "core.ignorecase", "true"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "case2"],
+               check=True, capture_output=True)
+os.utime(REPO / "case.py", (old, old))
+record("session-mine")
+(REPO / "case.py").rename(REPO / "CASE.py")
+os.utime(REPO / "CASE.py", (old, old))
+out_fs_case = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, filesystem case-only rename with core.ignorecase=true",
+                True, blocked(out_fs_case)))
+
+try:
+    corrupt_ok =g.changes_after(REPO, ["nowhere.py"], time.time(), 5, {}) == ["nowhere.py"]
+except Exception:
+    corrupt_ok = False
+results.append(("changes_after with a corrupt snapshot stays fail-closed on a missing file",
+                True, corrupt_ok))
+
 failures = [r for r in results if r[1] != r[2]]
 for label, expected, got in results:
     print(f"  {'ok  ' if expected == got else 'FAIL'} expected={'block' if expected else 'pass':<5} "

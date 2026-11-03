@@ -362,6 +362,7 @@ def record_intent(root: Path, kind: str, prompt: str, session_id: str = "unscope
         "prompt_sha256": prompt_hash,
         "recorded_at": now,
         "expires_at": now + 8 * 60 * 60,
+        "status_at_intent": git_source_status(root),
     }
     _write_json(intent_path(root, session_id), value)
     return value
@@ -1167,9 +1168,18 @@ def pretool(event: dict[str, Any]) -> None:
 
 
 def git_source_changes(root: Path) -> list[str]:
+    return list(git_source_status(root))
+
+
+def git_source_status(root: Path) -> dict[str, str]:
+    """Changed source paths mapped to their two-letter porcelain status."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
+            # -z: paths are raw, not C-quoted; a quoted non-ASCII path does not exist
+            # on disk and would read as "deleted" (independent review 2026-11-03)
+            # ignorecase=false: a case-only rename on Windows is invisible otherwise
+            ["git", "-C", str(root), "-c", "core.ignorecase=false",
+             "status", "--porcelain=v1", "-z", "--untracked-files=all"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -1178,35 +1188,56 @@ def git_source_changes(root: Path) -> list[str]:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return []
-    changed: list[str] = []
-    for line in result.stdout.splitlines():
-        raw = line[3:] if len(line) >= 4 else ""
-        if " -> " in raw:
-            raw = raw.rsplit(" -> ", 1)[-1]
-        rel = _normal(raw.strip().strip('"'))
-        if rel and is_source_path(rel) and not is_case_path(rel):
-            changed.append(rel)
+        return {}
+    changed: dict[str, str] = {}
+    entries = iter(result.stdout.split("\0"))
+    for entry in entries:
+        if len(entry) < 4:
+            continue
+        paths = [entry[3:]]
+        if entry[0] in "RC" or entry[1] in "RC":
+            # rename/copy (staged, or intent-to-add " R"): the source path is the next
+            # entry and is a change too; a renamed-away file must still be attributable
+            paths.append(next(entries, ""))
+        for raw in paths:
+            rel = _normal(raw)
+            if rel and is_source_path(rel) and not is_case_path(rel):
+                changed[rel] = entry[:2]
     return changed
 
 
-def changes_after(root: Path, changed: list[str], since: float) -> list[str]:
-    """Keep only changed files last written at or after ``since``.
+def changes_after(root: Path, changed: list[str], since: float,
+                  status_at_intent: object = None,
+                  current_status: dict[str, str] | None = None) -> list[str]:
+    """Keep only the changes this intent could have produced.
 
-    A file whose last write predates the intent cannot be that intent's product.
     On a shared repository the tree permanently carries other sessions' work in
     progress, so pairing "this session owns an intent" with "the tree is dirty"
     holds a session for deliveries it never opened — the same collateral the
     foreign-case branch above already refuses to inflict.
 
-    Doubt stays fail-closed: an unreadable mtime counts as attributable.
+    With the intent's status snapshot: a path that is new in `git status`, or whose
+    status changed, is attributable whatever its mtime (a rename keeps the mtime;
+    three reviews on 2026-11-03 found mtime-only escapes). A path with the same
+    status as at the intent is attributable only if it exists and was written after
+    it, so a deletion made before the intent no longer holds the Stop.
+    Without a usable snapshot (older intent): mtime only, and a missing file counts.
+    A change that leaves no entry in `git status` (edits reverted, an untracked file
+    removed, work committed) is not a pending delivery and does not block: counting
+    vanished snapshot paths would hold the owner whenever another session commits.
     """
+    snapshot = status_at_intent if isinstance(status_at_intent, dict) else None
+    current = current_status or {}
     attributable: list[str] = []
     for rel in changed:
+        if snapshot is not None and snapshot.get(rel) != current.get(rel):
+            attributable.append(rel)
+            continue
         try:
             mtime = (root / rel).stat().st_mtime
         except OSError:
-            attributable.append(rel)
+            if snapshot is None:
+                attributable.append(rel)
             continue
         if mtime >= since:
             attributable.append(rel)
@@ -1236,7 +1267,8 @@ def stop(event: dict[str, Any]) -> None:
               "and either verify the candidate or record a measured external blocker."
         )
         return
-    changed = git_source_changes(root)
+    current = git_source_status(root)
+    changed = list(current)
     if not changed:
         return
     pending = unresolved_intents(root)
@@ -1251,7 +1283,8 @@ def stop(event: dict[str, Any]) -> None:
         # usual answer to collateral is that the gate gets disabled. A session
         # that owns an unresolved intent is still held, immediately below.
         return
-    attributable = changes_after(root, changed, float(intent.get("recorded_at", 0) or 0))
+    attributable = changes_after(root, changed, float(intent.get("recorded_at", 0) or 0),
+                                 intent.get("status_at_intent"), current)
     if not attributable:
         # Owning an intent is not the same as having changed anything under it.
         print(f"[root-cause-delivery] not blocking: none of {len(changed)} changed source "
