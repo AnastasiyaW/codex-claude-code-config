@@ -2175,6 +2175,80 @@ def _branch_rm_approval(branches: list[str], cmd: str, prompt: str, answer: str,
     return True, "remote branch removal"
 
 
+# Owner 2026-11-03 («Да, удаляй» to a block naming two dead runner volumes and unused images was refused,
+# then «Поправь хук»): docker containers, volumes and images are removed when each one is named in my
+# «Удаление» block she answered with a bare yes, or in her own delete request. Only
+# `docker rm|container rm|volume rm <name>...` and `docker rmi|image rm <name:tag|@digest>...` without flags:
+# docker itself then refuses a running container and a volume or image still in use. Plain `ssh host '...'`.
+# A volume whose name looks like a data store must be named in her own words, never via the block.
+DOCKER_OBJ = r"[A-Za-z0-9][\w.-]*"
+DOCKER_RM_SEGMENT = re.compile(
+    r"(?:sudo\s+)?docker\s+(?:(?:rm|container\s+rm|volume\s+rm)(?:\s+" + DOCKER_OBJ + r")+|"
+    r"(?:rmi|image\s+rm)(?:\s+" + IMAGE_REF + r")+)(?:\s+2>&1)?\s*;?")
+DOCKER_RM_COMPANION = re.compile(r"(?:" + IMAGE_RM_COMPANION.pattern + r"|docker\s+volume\s+ls(?:\s+-q)?\s*;?)")
+# The one delete proposal format (owner 2026-11-01): a line starting «Удаление», then a fenced block.
+DOCKER_DELETE_BLOCK = re.compile(r"^[ \t>*_#]*удаление\b[^\n]*\n[ \t]*```[^\n]*\n(.*?)\n[ \t]*```",
+                                 re.IGNORECASE | re.MULTILINE | re.DOTALL)
+DOCKER_DATA_VOLUME = re.compile(r"postgres|pgdata|mysql|maria|mongo|redis|minio|backup|бэкап|dataset|датасет|"
+                                r"(?<![a-z])db(?![a-z])", re.IGNORECASE)
+
+
+def docker_rm_targets(cmd: str) -> list[tuple[str, str]] | None:
+    """(kind, name) for every object when cmd is only named docker removals (plus read-only checks)."""
+    if not _only_segments(cmd, DOCKER_RM_SEGMENT, DOCKER_RM_COMPANION):
+        return None
+    out: list[tuple[str, str]] = []
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        remote = remote_command(seg)
+        for part in ([seg] if remote in (None, UNPARSED) else split_segments(remote)):
+            part = part.strip()
+            if not DOCKER_RM_SEGMENT.fullmatch(part):
+                continue
+            toks = [t for t in part.rstrip(";").split() if t not in ("sudo", "2>&1")][1:]
+            verb = toks[:2] if toks[0] in ("container", "volume", "image") else toks[:1]
+            kind = {"rm": "container", "container": "container", "volume": "volume"}.get(verb[0], "image")
+            out += [(kind, t.rstrip(";")) for t in toks[len(verb):]]
+    return out or None
+
+
+def _docker_rm_approval(targets: list[tuple[str, str]], cmd: str, prompt: str, answer: str,
+                        event: dict) -> tuple[bool, str]:
+    names = [n for _, n in targets]
+    words = PASTED_TAG.sub(" ", prompt)
+    for n in sorted(names, key=len, reverse=True):
+        words = re.sub(r"(?<![\w/.:-])" + re.escape(n) + r"(?![\w/.-])", " ", words)
+    if CONFIRM_ONLY.fullmatch(prompt):
+        blocks = DOCKER_DELETE_BLOCK.findall(answer or "")
+        block = blocks[-1] if blocks else None
+        if block is None:
+            return False, "a bare 'yes' approves docker objects only from an «Удаление» block in my answer"
+        source, own = block, False
+    elif NOT_A_GO.search(words):
+        return False, "the request negates, hesitates or asks a question"
+    elif DELETE_INTENT.search(prompt) or IMAGE_INTENT.search(prompt):
+        source, own = prompt, True
+    else:
+        return False, "the latest request does not ask to remove docker objects"
+    # a volume may be listed by its folder, /var/lib/docker/volumes/<name>
+    unnamed = [n for k, n in targets if not _named(source, n) and not (
+        k == "volume" and re.search(r"/volumes/" + re.escape(n) + r"(?![\w.\-/])", source))]
+    if unnamed:
+        return False, f"docker objects not named in the request or the «Удаление» block: {', '.join(unnamed)}"
+    data = [n for k, n in targets if k == "volume" and DOCKER_DATA_VOLUME.search(n)]
+    if data and not own:
+        return False, f"volumes that may hold data need the owner's own words: {', '.join(data)}"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "action": "docker-rm", "targets": names,
+                                 "request": prompt[:300], "command": cmd[:500]},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, "named docker objects removal"
+
+
 # Owner 2026-10-15 ("файлы, которые нельзя удалить, надо переносить внутрь темп", after a list delete hit
 # the root-level limit): a move INTO the system temp keeps the files until the temp sweep, so it is approved
 # on her request, in one shape only: `[cd DIR &&] mv -n SRC... DEST`. -n never overwrites; DEST is an existing
@@ -2526,7 +2600,12 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     if restart_only(cmd):
         return _restart_approval(cmd, prompt, answer, event)
     if image_rm_only(cmd):
-        return _image_rm_approval(cmd, prompt, answer, event)
+        ok, why = _image_rm_approval(cmd, prompt, answer, event)
+        if ok:
+            return ok, why
+    docker_targets = docker_rm_targets(cmd)
+    if docker_targets:
+        return _docker_rm_approval(docker_targets, cmd, prompt, answer, event)
     databases = db_drop_targets(cmd)
     if databases:
         return _db_drop_approval(databases, cmd, prompt, event)
