@@ -174,6 +174,23 @@ out_legacy = ran(g.stop, {"session_id": "session-mine"})
 results.append(("my Stop with an intent recorded before missing_at_intent existed, a deleted source",
                 True, blocked(out_legacy)))
 
+# 5. A non-ASCII source file present at intent and edited after it must block.
+# Independent review 2026-11-03: porcelain without -z C-quotes the path, the quoted
+# string is not on disk, so the file was recorded as "missing" and its edit skipped.
+cyr = REPO / "тест.py"
+cyr.write_text("a = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "-A"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "cyr"],
+               check=True, capture_output=True)
+cyr.write_text("a = 2\n", encoding="utf-8")
+old = time.time() - 2 * 86400
+os.utime(cyr, (old, old))
+record("session-mine")
+cyr.write_text("a = 3\n", encoding="utf-8")
+out_cyr = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, non-ASCII source present at intent and edited after it",
+                True, blocked(out_cyr)))
+
 failures = [r for r in results if r[1] != r[2]]
 for label, expected, got in results:
     print(f"  {'ok  ' if expected == got else 'FAIL'} expected={'block' if expected else 'pass':<5} "

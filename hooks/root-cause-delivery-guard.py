@@ -1170,7 +1170,9 @@ def pretool(event: dict[str, Any]) -> None:
 def git_source_changes(root: Path) -> list[str]:
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
+            # -z: paths are raw, not C-quoted; a quoted non-ASCII path does not exist
+            # on disk and would read as "deleted" (independent review 2026-11-03)
+            ["git", "-C", str(root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -1181,11 +1183,13 @@ def git_source_changes(root: Path) -> list[str]:
     except (OSError, subprocess.SubprocessError):
         return []
     changed: list[str] = []
-    for line in result.stdout.splitlines():
-        raw = line[3:] if len(line) >= 4 else ""
-        if " -> " in raw:
-            raw = raw.rsplit(" -> ", 1)[-1]
-        rel = _normal(raw.strip().strip('"'))
+    entries = iter(result.stdout.split("\0"))
+    for entry in entries:
+        if len(entry) < 4:
+            continue
+        if entry[0] in "RC":
+            next(entries, None)  # rename/copy: the source path follows as its own entry
+        rel = _normal(entry[3:])
         if rel and is_source_path(rel) and not is_case_path(rel):
             changed.append(rel)
     return changed
