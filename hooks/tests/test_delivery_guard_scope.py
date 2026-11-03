@@ -168,10 +168,10 @@ results.append(("my Stop while I own an intent, source deleted after it and no c
                 True, blocked(out_deleted_after)))
 
 legacy = json.loads(g.intent_path(REPO, "session-mine").read_text(encoding="utf-8"))
-legacy.pop("missing_at_intent", None)
+legacy.pop("status_at_intent", None)
 g._write_json(g.intent_path(REPO, "session-mine"), legacy)
 out_legacy = ran(g.stop, {"session_id": "session-mine"})
-results.append(("my Stop with an intent recorded before missing_at_intent existed, a deleted source",
+results.append(("my Stop with an intent recorded before status_at_intent existed, a deleted source",
                 True, blocked(out_legacy)))
 
 # 5. A non-ASCII source file present at intent and edited after it must block.
@@ -220,6 +220,37 @@ subprocess.run(["git", "-C", str(REPO), "add", "-N", "renamed.py"], check=True, 
 listed = set(g.git_source_changes(REPO))
 results.append(("git_source_changes parses an intent-to-add rename without garbage paths",
                True, listed <= {"ita.py", "renamed.py", "keep.py"} and "renamed.py" in listed))
+
+# 7. Third independent review 2026-11-03: a case-only rename keeps the old mtime and
+# on Windows both names stat to the same file, so mtime alone saw nothing. Against
+# the intent's status snapshot both sides are new entries. A corrupt snapshot falls
+# back to the fail-closed mtime rule instead of raising.
+subprocess.run(["git", "-C", str(REPO), "reset", "-q"], check=True, capture_output=True)
+for name in ("renamed.py", "ita.py"):
+    if (REPO / name).exists():
+        (REPO / name).rename(REPO / ("keep.py" if name == "renamed.py" else "ita_kept.txt"))
+subprocess.run(["git", "-C", str(REPO), "add", "-A"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "clean2"],
+               check=True, capture_output=True)
+(REPO / "Case.py").write_text("c = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "Case.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "case"],
+               check=True, capture_output=True)
+os.utime(REPO / "Case.py", (old, old))
+record("session-mine")
+subprocess.run(["git", "-C", str(REPO), "mv", "Case.py", "tmpcase.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "mv", "tmpcase.py", "case.py"], check=True, capture_output=True)
+os.utime(REPO / "case.py", (old, old))
+out_caserename = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, case-only rename after it (old mtime kept)",
+                True, blocked(out_caserename)))
+
+try:
+    corrupt_ok = g.changes_after(REPO, ["nowhere.py"], time.time(), 5, {}) == ["nowhere.py"]
+except Exception:
+    corrupt_ok = False
+results.append(("changes_after with a corrupt snapshot stays fail-closed on a missing file",
+                True, corrupt_ok))
 
 failures = [r for r in results if r[1] != r[2]]
 for label, expected, got in results:
