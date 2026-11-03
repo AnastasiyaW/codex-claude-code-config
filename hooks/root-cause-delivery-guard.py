@@ -1177,7 +1177,9 @@ def git_source_status(root: Path) -> dict[str, str]:
         result = subprocess.run(
             # -z: paths are raw, not C-quoted; a quoted non-ASCII path does not exist
             # on disk and would read as "deleted" (independent review 2026-11-03)
-            ["git", "-C", str(root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            # ignorecase=false: a case-only rename on Windows is invisible otherwise
+            ["git", "-C", str(root), "-c", "core.ignorecase=false",
+             "status", "--porcelain=v1", "-z", "--untracked-files=all"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -1220,6 +1222,9 @@ def changes_after(root: Path, changed: list[str], since: float,
     status as at the intent is attributable only if it exists and was written after
     it, so a deletion made before the intent no longer holds the Stop.
     Without a usable snapshot (older intent): mtime only, and a missing file counts.
+    A change that leaves no entry in `git status` (edits reverted, an untracked file
+    removed, work committed) is not a pending delivery and does not block: counting
+    vanished snapshot paths would hold the owner whenever another session commits.
     """
     snapshot = status_at_intent if isinstance(status_at_intent, dict) else None
     current = current_status or {}

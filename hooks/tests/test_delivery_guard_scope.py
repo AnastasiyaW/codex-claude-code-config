@@ -245,8 +245,21 @@ out_caserename = ran(g.stop, {"session_id": "session-mine"})
 results.append(("my Stop while I own an intent, case-only rename after it (old mtime kept)",
                 True, blocked(out_caserename)))
 
+# Fourth independent review: a plain filesystem case-only rename (no git mv) is
+# invisible to git status under core.ignorecase=true (the Windows default).
+subprocess.run(["git", "-C", str(REPO), "config", "core.ignorecase", "true"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "case2"],
+               check=True, capture_output=True)
+os.utime(REPO / "case.py", (old, old))
+record("session-mine")
+(REPO / "case.py").rename(REPO / "CASE.py")
+os.utime(REPO / "CASE.py", (old, old))
+out_fs_case = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, filesystem case-only rename with core.ignorecase=true",
+                True, blocked(out_fs_case)))
+
 try:
-    corrupt_ok = g.changes_after(REPO, ["nowhere.py"], time.time(), 5, {}) == ["nowhere.py"]
+    corrupt_ok =g.changes_after(REPO, ["nowhere.py"], time.time(), 5, {}) == ["nowhere.py"]
 except Exception:
     corrupt_ok = False
 results.append(("changes_after with a corrupt snapshot stays fail-closed on a missing file",
