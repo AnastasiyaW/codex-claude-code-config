@@ -1187,11 +1187,15 @@ def git_source_changes(root: Path) -> list[str]:
     for entry in entries:
         if len(entry) < 4:
             continue
-        if entry[0] in "RC":
-            next(entries, None)  # rename/copy: the source path follows as its own entry
-        rel = _normal(entry[3:])
-        if rel and is_source_path(rel) and not is_case_path(rel):
-            changed.append(rel)
+        paths = [entry[3:]]
+        if entry[0] in "RC" or entry[1] in "RC":
+            # rename/copy (staged, or intent-to-add " R"): the source path is the next
+            # entry and is a change too; a renamed-away file must still be attributable
+            paths.append(next(entries, ""))
+        for raw in paths:
+            rel = _normal(raw)
+            if rel and is_source_path(rel) and not is_case_path(rel):
+                changed.append(rel)
     return changed
 
 

@@ -191,6 +191,36 @@ out_cyr = ran(g.stop, {"session_id": "session-mine"})
 results.append(("my Stop while I own an intent, non-ASCII source present at intent and edited after it",
                 True, blocked(out_cyr)))
 
+# 6. Renames (second independent review 2026-11-03): the source path of a rename
+# is a change. `git mv` keeps the mtime, so a rename after the intent was only
+# visible through the renamed-away source path.
+cyr.write_text("a = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "-A"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "clean"],
+               check=True, capture_output=True)
+(REPO / "keep.py").write_text("k = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "keep.py"], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(REPO), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "keep"],
+               check=True, capture_output=True)
+os.utime(REPO / "keep.py", (old, old))
+record("session-mine")
+subprocess.run(["git", "-C", str(REPO), "mv", "keep.py", "moved.py"], check=True, capture_output=True)
+os.utime(REPO / "moved.py", (old, old))
+out_renamed = ran(g.stop, {"session_id": "session-mine"})
+results.append(("my Stop while I own an intent, source renamed after it (old mtime kept)",
+                True, blocked(out_renamed)))
+results.append(("git_source_changes lists both sides of a staged rename",
+                True, {"keep.py", "moved.py"} <= set(g.git_source_changes(REPO))))
+
+subprocess.run(["git", "-C", str(REPO), "mv", "moved.py", "keep.py"], check=True, capture_output=True)
+(REPO / "ita.py").write_text("i = 1\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(REPO), "add", "-N", "ita.py"], check=True, capture_output=True)
+(REPO / "keep.py").rename(REPO / "renamed.py")
+subprocess.run(["git", "-C", str(REPO), "add", "-N", "renamed.py"], check=True, capture_output=True)
+listed = set(g.git_source_changes(REPO))
+results.append(("git_source_changes parses an intent-to-add rename without garbage paths",
+               True, listed <= {"ita.py", "renamed.py", "keep.py"} and "renamed.py" in listed))
+
 failures = [r for r in results if r[1] != r[2]]
 for label, expected, got in results:
     print(f"  {'ok  ' if expected == got else 'FAIL'} expected={'block' if expected else 'pass':<5} "
