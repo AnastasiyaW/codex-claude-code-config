@@ -2211,6 +2211,43 @@ DOCKER_DATA_VOLUME = re.compile(r"postgres|pgdata|mysql|maria|mongo|redis|minio|
                                 r"(?<![a-z])db(?![a-z])", re.IGNORECASE)
 
 
+# Owner 2026-11-04 («поправь хук. это будет восполнимое, если мы их перенесли и они работают в другом месте»):
+# a volume that looks like a data store is replaceable once a transfer contract in the session folder
+# (.claude|.agent|.codex/transfers/*.json) has verification performed with result PASS and lists it under
+# verified_copies as {"host": <ssh alias of the source>, "kind": "volume", "name": <volume>}. The host must be
+# the one the command runs on, so a same-named volume elsewhere stays protected.
+TRANSFER_DIRS = (".claude/transfers", ".agent/transfers", ".codex/transfers")
+
+
+def _ssh_host(cmd: str) -> str | None:
+    try:
+        toks = shlex.split(cmd.strip(), posix=True)
+    except ValueError:
+        return None
+    return toks[1] if len(toks) == 3 and toks[0] == "ssh" and not toks[1].startswith("-") else None
+
+
+def _verified_copy(name: str, host: str | None, event: dict) -> str | None:
+    """The contract that proves a verified copy of volume `name` from `host`, or None."""
+    cwd = event.get("cwd")
+    if not host or not cwd:
+        return None
+    for d in TRANSFER_DIRS:
+        for path in sorted(Path(cwd, d).glob("*.json")):
+            try:
+                c = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            v = c.get("verification") if isinstance(c, dict) else None
+            if not (isinstance(v, dict) and v.get("performed") is True and v.get("result") == "PASS"):
+                continue
+            for item in c.get("verified_copies") or []:
+                if (isinstance(item, dict) and item.get("kind") == "volume" and item.get("name") == name
+                        and item.get("host") == host):
+                    return str(path)
+    return None
+
+
 def docker_rm_targets(cmd: str) -> list[tuple[str, str]] | None:
     """(kind, name) for every object when cmd is only named docker removals (plus read-only checks)."""
     if not _only_segments(cmd, DOCKER_RM_SEGMENT, DOCKER_RM_COMPANION):
@@ -2252,7 +2289,9 @@ def _docker_rm_approval(targets: list[tuple[str, str]], cmd: str, prompt: str, a
         k == "volume" and re.search(r"/volumes/" + re.escape(n) + r"(?![\w.\-/])", source))]
     if unnamed:
         return False, f"docker objects not named in the request or the «Удаление» block: {', '.join(unnamed)}"
-    data = [n for k, n in targets if k == "volume" and DOCKER_DATA_VOLUME.search(n)]
+    host = _ssh_host(cmd)
+    copies = {n: _verified_copy(n, host, event) for k, n in targets if k == "volume" and DOCKER_DATA_VOLUME.search(n)}
+    data = [n for n, proof in copies.items() if not proof]
     if data and not own:
         return False, f"volumes that may hold data need the owner's own words: {', '.join(data)}"
     try:
@@ -2260,6 +2299,7 @@ def _docker_rm_approval(targets: list[tuple[str, str]], cmd: str, prompt: str, a
         with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
                                  "session": event.get("session_id"), "action": "docker-rm", "targets": names,
+                                 "verified_copies": {n: p for n, p in copies.items() if p},
                                  "request": prompt[:300], "command": cmd[:500]},
                                 ensure_ascii=False) + "\n")
     except OSError:
