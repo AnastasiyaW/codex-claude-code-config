@@ -333,6 +333,8 @@ def _local_config() -> dict:
 
 _CFG = _local_config()
 WORKSHOP_VM_SSH_TARGET = str(_CFG.get("ephemeral_docker_ssh_target") or "")
+SSH_WRAPPER_SCRIPTS = frozenset(
+    c for c in (_CFG.get("ssh_wrapper_scripts") or []) if isinstance(c, str) and c.strip("/\\"))
 WORKSHOP_VM_APPROVED_DOCKER_CONTAINERS = frozenset(
     c for c in (_CFG.get("ephemeral_docker_containers") or []) if isinstance(c, str) and c)
 
@@ -590,6 +592,19 @@ UNPARSED = "\x00unparsed-ssh"
 INNER_SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 
 
+def _probe_cmd(toks: list[str], i: int) -> str | None:
+    """Owner 2026-11-04 («поправь хук»): a password-only server takes its commands through
+    `python <wrapper> --cmd '<remote command>'` (paramiko). The wrappers are listed by path suffix in
+    the local config (`ssh_wrapper_scripts`), so private script names stay out of this file. That form
+    is ssh for the rules here; `<wrapper> <file>` hides the command and stays unreadable for deletes."""
+    word = toks[i].replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe") if i < len(toks) else ""
+    script = toks[i + 1].replace("\\", "/").lower() if i + 1 < len(toks) else ""
+    if (word in {"python", "python3", "py"} and len(toks) == i + 4 and toks[i + 2] == "--cmd"
+            and any(script.endswith(s.replace("\\", "/").lower()) for s in SSH_WRAPPER_SCRIPTS)):
+        return toks[i + 3]
+    return None
+
+
 def remote_command(segment: str) -> str | None:
     """The command a `[timeout N] ssh [opts] host CMD` / `tailscale ssh host CMD` segment runs remotely.
 
@@ -622,6 +637,9 @@ def remote_command(segment: str) -> str | None:
             j += 1
         if j + 1 < len(toks):
             return UNPARSED if toks[j].lower() in {"-encodedcommand", "-ec"} else " ".join(toks[j + 1:])
+    probe = _probe_cmd(toks, i)
+    if probe is not None:
+        return probe
     if i < len(toks) and toks[i] == "tailscale" and toks[i + 1:i + 2] == ["ssh"]:
         i += 2
     elif i < len(toks) and toks[i].rsplit("/", 1)[-1].removesuffix(".exe") == "ssh":
@@ -2363,6 +2381,10 @@ def _claude_limit(path: str) -> str | None:
 
 
 ROOT_FILE = "a file directly in a drive root - the owner must name its full path herself"
+SERVER_CHILD = "a folder one level below / on a server - the owner must name its full path herself"
+# top-level folders whose direct children belong to the OS, not to us: they stay a hard limit
+SERVER_SYSTEM_TOP = {"bin", "boot", "dev", "etc", "lib", "lib32", "lib64", "libx32", "proc", "run", "sbin",
+                     "sys", "usr", "var", "root", "home", "snap", "lost+found", "tmp", "media", "mnt"}
 
 
 def _is_long_windows_path(t: str) -> bool:
@@ -2378,7 +2400,7 @@ def _is_long_windows_path(t: str) -> bool:
 
 
 def target_hard_limit(target: str, recursive: bool = False, literal: bool = False,
-                      server: bool = False) -> str | None:
+                      server: bool = False, remote: bool = False) -> str | None:
     """Why a target may never be deleted on request, or None. literal: the caller removes the path
     as given, with no shell or glob expansion (delete_from_list), so [ ] ( ) @ are plain name
     characters (owner 2026-11-01: course folders "[SW.BAND] … (2023)" could never be deleted).
@@ -2425,6 +2447,11 @@ def target_hard_limit(target: str, recursive: bool = False, literal: bool = Fals
         return ROOT_FILE
     if server and _server_home_child(t):
         return None
+    # Owner 2026-11-04 («поправь хук»: a /srv/<x> folder she named was refused):
+    # inside ssh, /srv/<x>, /opt/<x>, /data/<x> go when she names the full path herself, like DRIVE_CHILD
+    # on Windows. / itself, the folders in it and the children of the OS folders stay a hard limit.
+    if remote and len(parts) == 2 and t.startswith("/") and low[0] not in SERVER_SYSTEM_TOP:
+        return SERVER_CHILD
     if len(parts) < 3 and not depth2_file:
         return "root-level path"
     if low[0] in {"home", "users"} and len(parts) < 3:
@@ -2495,7 +2522,8 @@ def _is_ssh_segment(seg: str) -> bool:
         else:
             break
     word = toks[i].rsplit("/", 1)[-1].lower().removesuffix(".exe") if i < len(toks) else ""
-    return word == "ssh" or (word == "tailscale" and toks[i + 1:i + 2] == ["ssh"])
+    return (word == "ssh" or (word == "tailscale" and toks[i + 1:i + 2] == ["ssh"])
+            or _probe_cmd(toks, i) is not None)
 
 
 def _listed(text: str, needle: str) -> bool:
@@ -2681,8 +2709,13 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
     for t, recursive in targets:
         # extra["list"]: a delete_from_list.py run, which removes each entry literally
         server = t in remote and _server_home_child(t)
-        why = target_hard_limit(t, recursive, literal=bool(extra and extra.get("list")), server=server)
-        if why == ROOT_FILE:
+        why = target_hard_limit(t, recursive, literal=bool(extra and extra.get("list")), server=server,
+                                remote=t in remote)
+        if why == SERVER_CHILD:
+            if not _named(prompt.replace("\\", "/"), _norm(t).rstrip("/")):
+                return False, f"{t}: hard limit ({why})"
+            extra = {**(extra or {}), "action": "server-child"}
+        elif why == ROOT_FILE:
             own = prompt.replace("\\", "/").lower()
             if not _named(own, _norm(t).rstrip("/").lower()):
                 return False, f"{t}: hard limit ({why})"
