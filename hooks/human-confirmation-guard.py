@@ -228,11 +228,11 @@ DESTRUCTIVE_INTENT = [
     r"\bip\s+link\s+(delete|del)\b",
     r"\bip\s+route\s+(flush|delete|del)\b",
 
-    # Communication APIs. `gh pr close` without `-d` / `--delete-branch`
-    # preserves the branch and GitHub supports reopening the pull request, so it
-    # is reversible project state, not deletion.
+    # Communication APIs. `gh pr close` without `-d` / `--delete-branch` and
+    # `gh issue close` are reversible project state (both reopen), not deletion;
+    # `gh issue delete` is permanent.
     r"\bgh\s+pr\s+close\b[^|;&\n]*\s(?:-d|--delete-branch)\b",
-    r"\bgh\s+issue\s+close\b",
+    r"\bgh\s+issue\s+delete\b",
 
     # IAM / permissions
     r"\baws\s+iam\s+(delete|remove)-\w+",
