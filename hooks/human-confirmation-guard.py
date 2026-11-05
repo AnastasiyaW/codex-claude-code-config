@@ -2422,6 +2422,10 @@ def _claude_limit(path: str) -> str | None:
 
 ROOT_FILE = "a file directly in a drive root - the owner must name its full path herself"
 SERVER_CHILD = "a folder one level below / on a server - the owner must name its full path herself"
+REMOTE_DRIVE_ROOT = "a folder directly in a drive root of a remote Windows host - the owner must name its full path herself"
+# Windows folders directly in a drive root that belong to the OS, not to us: they stay a hard limit
+WIN_SYSTEM_TOP = {"users", "home", "recovery", "boot", "system volume information", "perflogs", "documents and settings",
+                  "msocache", "config.msi", "intel", "amd", "nvidia", "drivers", "efi", "inetpub", "onedrivetemp"}
 # top-level folders whose direct children belong to the OS, not to us: they stay a hard limit
 SERVER_SYSTEM_TOP = {"bin", "boot", "dev", "etc", "lib", "lib32", "lib64", "libx32", "proc", "run", "sbin",
                      "sys", "usr", "var", "root", "home", "snap", "lost+found", "tmp", "media", "mnt"}
@@ -2492,6 +2496,12 @@ def target_hard_limit(target: str, recursive: bool = False, literal: bool = Fals
     # on Windows. / itself, the folders in it and the children of the OS folders stay a hard limit.
     if remote and len(parts) == 2 and t.startswith("/") and low[0] not in SERVER_SYSTEM_TOP:
         return SERVER_CHILD
+    # Owner 2026-11-05 («поправь хук»: two folders she named in a Windows drive root over ssh were refused): inside ssh
+    # a folder directly in a Windows drive root goes when she names its full path herself. The drive root and
+    # the OS folders in it ($-names, WIN_SYSTEM_TOP, PROTECTED above) stay a hard limit.
+    if (remote and len(parts) == 1 and re.match(r"^[A-Za-z]:/", t) and low[0] not in WIN_SYSTEM_TOP
+            and not low[0].startswith("$")):
+        return REMOTE_DRIVE_ROOT
     if len(parts) < 3 and not depth2_file:
         return "root-level path"
     if low[0] in {"home", "users"} and len(parts) < 3:
@@ -2751,7 +2761,11 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
         server = t in remote and _server_home_child(t)
         why = target_hard_limit(t, recursive, literal=bool(extra and extra.get("list")), server=server,
                                 remote=t in remote)
-        if why == SERVER_CHILD:
+        if why == REMOTE_DRIVE_ROOT:
+            if not _named(prompt.replace("\\", "/").lower(), _norm(t).rstrip("/").lower()):
+                return False, f"{t}: hard limit ({why})"
+            extra = {**(extra or {}), "action": "remote-drive-root"}
+        elif why == SERVER_CHILD:
             if not _named(prompt.replace("\\", "/"), _norm(t).rstrip("/")):
                 return False, f"{t}: hard limit ({why})"
             extra = {**(extra or {}), "action": "server-child"}
