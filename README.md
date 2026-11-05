@@ -13,6 +13,7 @@ what is inference, and what the fix does not cover.
 
 | | |
 |---|---|
+| **New - [Crossweft: a guard on every hand-written seam](https://github.com/AnastasiyaW/crossweft)** | Our companion tool, now at [v0.4.0](https://github.com/AnastasiyaW/crossweft/releases/tag/v0.4.0). A product in several languages is held together by values copied by hand: a route, a header, an API version, DTO fields, env vars. Crossweft keeps a map of components and the links between them and checks both sides of each link. It fails the build when one side changes alone, and after an edit it tells the agent which file on the other side to re-read. Its Stop hook does not let the agent say "done" while a seam disagrees. 0.4.0 adds `report` (the map with what the check found on it), `signals` (an alarm rule for every seam: errors, queues, health, heartbeat) and `doctor`. Pure Python stdlib, works with Claude Code and Codex. We run it as a Stop gate in nine of our own repositories. Project page: [happyin.work/crossweft](https://happyin.work/crossweft/). |
 | **New - [Token overspend: interim measures](docs/token-overspend-interim.md)** | Measured: each fresh general-purpose subagent reloads the whole `CLAUDE.md` and rules (99-164k tokens on its first request), and background agents in auto mode woke the main conversation until Claude Code 2.1.311. Until official fixes cover it, the plugin ships Benjamin-Plus and a hash-verified RTK hook. Also: the 1% skill-list ceiling, always-loaded rules, linked-chat reports that cost a main-chat turn, and the [`pult`](mods/pult/README.md) mod that offers "compact or new chat" and writes a handoff before compaction. Each measure names the fix that retires it. |
 | **New - [Long waits and the 1-hour cache](rules/long-wait-cache-ttl.md)** | An agent waiting on CI, pipeline tests or training waits at most 50 minutes, then checks live progress. The 1-hour prompt cache never goes cold, and a hung job gets noticed as a side effect. Also sets `subagentPromptCacheTtl: "1h"`: subagents default to 5 minutes, and sessions that spawn dozens of agents burned usage on repeated cache writes. Source and cost trade-off included. |
 | **New - [Evidence-backed visual workflow](docs/harness-improvement-pilot.md#candidate-evidence-backed-visual-workflow)** | What we take from [OpenVLHarness](https://github.com/uclanlp/OpenVLHarness) and what we leave. We take typed evidence with addressable crops and masks, degradation as a receipt rather than a silent fallback, and a run manifest. We leave host-side execution of model-written Python ("execution timeout is not a sandbox") and the GPU stack. Value gets proved through the bounded pilot, not taken from benchmark numbers. |
@@ -416,6 +417,7 @@ python scripts/generate_skills_lock.py --check
 
 These work well alongside the principles:
 
+- **[Crossweft](https://github.com/AnastasiyaW/crossweft)** - ours: guards the hand-written seams between languages and components (routes, versions, DTO fields, env vars), tells the agent which file on the other side to fix, and blocks "done" while a seam disagrees. Claude Code and Codex plugins; [project page](https://happyin.work/crossweft/)
 - **[gstack](https://github.com/nichochar/gstack)** - dev workflow skills: /review, /qa, /ship, /investigate, /design-review
 - **[hookify](https://github.com/AstroMined/hookify)** - git hooks generator for Claude Code
 - **[Semgrep](https://semgrep.dev/)** - static analysis, pairs with deep-review
@@ -458,6 +460,8 @@ Freshness is mechanical, not aspirational: [scripts/sync_public_config.py](scrip
 - 跨 harness 支持：每个项目一个 `AGENTS.md`，同时供 Claude Code、Gemini CLI、Codex 读取（无需符号链接），见 `rules/cross-harness-agents-md.md`
 - **新增：开发技能交叉路由。** 代码相关技能会互相移交任务：四个按“时刻”划分的技能（开始、能否承载、编写单元、已经过大）在描述中互相指向，交付链把缺陷或变更从冻结计划带到经过验证的候选版本，路由还会通过技能契约传递给每个子代理，见 `docs/development-skill-routing.md`
 
+- **新增：[Crossweft](https://github.com/AnastasiyaW/crossweft)** - 我们的配套工具：守护跨语言、跨组件手工复制的“接缝”（路由、API 版本、DTO 字段、环境变量）。一侧单独改动时构建失败，并告诉智能体需要重读另一侧的哪个文件；接缝不一致时 Stop hook 不让智能体宣布完成。0.4.0 新增 `report`、`signals`、`doctor`。项目页：[happyin.work/crossweft](https://happyin.work/crossweft/)
+
 **安装:** `claude plugin install https://github.com/AnastasiyaW/codex-claude-code-config` 或直接复制所需文件。
 
 **灵感来源:** 部分设计理念受到中国工程社区的启发，包括红线(红线)模式、规范驱动开发(OpenSpec)、经验库模式。
@@ -478,6 +482,8 @@ Freshness is mechanical, not aspirational: [scripts/sync_public_config.py](scrip
 - `skills/` - доменные навыки (AI/ML, видео, фронтенд, iOS, письмо, код-ревью, верификация, операционные инструменты, включая `harness-audit`, `workflow-orchestration` и `gemini-delegate` — делегирование в Gemini CLI с мульти-аккаунтом)
 - Кросс-harness: один `AGENTS.md` на проект читают Claude Code, Gemini CLI и Codex (без симлинков) — `rules/cross-harness-agents-md.md`
 - **Новое: кросс-маршрутизация навыков разработки.** Навыки для кода передают задачу друг другу: четыре навыка «по моменту» (начинаем, выдержит ли, пишем юнит, уже слишком большое) в своих описаниях называют друг друга, цепочка доставки ведёт баг или изменение от замороженного плана к проверенному кандидату, а маршрут доходит до каждого сабагента через контракт навыка — `docs/development-skill-routing.md`
+
+- **Новое: [Crossweft](https://github.com/AnastasiyaW/crossweft)** — наш инструмент к этой системе. Он охраняет «швы»: значения, которые вручную продублированы между языками и компонентами (маршруты, версии API, поля DTO, переменные окружения). Если одна сторона поменялась без другой, сборка падает, а агент узнаёт, какой файл на другой стороне перечитать. Пока шов не сходится, Stop-хук не даёт агенту написать «готово». Версия [0.4.0](https://github.com/AnastasiyaW/crossweft/releases/tag/v0.4.0) добавила `report`, `signals` (правило тревоги на каждый шов) и `doctor`. Страница проекта: [happyin.work/crossweft](https://happyin.work/crossweft/)
 
 **Установка:** `claude plugin install https://github.com/AnastasiyaW/codex-claude-code-config` или копирование нужных файлов.
 
