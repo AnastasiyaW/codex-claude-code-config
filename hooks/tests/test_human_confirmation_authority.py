@@ -86,6 +86,15 @@ class HumanConfirmationAuthorityTests(unittest.TestCase):
         self.assert_blocked("gh pr close 6 -d --repo owner/repo", session_id="session-a")
         self.assert_blocked("gh pr delete 6 --repo owner/repo", session_id="session-a")
 
+    def test_issue_close_is_reversible_but_issue_delete_is_not(self) -> None:
+        # owner 2026-11-05: "Yes, close all" on seven resolved issues was refused; a closed issue reopens
+        for command in ("gh issue close 3 -R owner/repo --reason completed",
+                        "gh issue close 11 --repo owner/repo --comment done"):
+            decision, output = invoke(command, session_id="session-a")
+            self.assertIsNone(decision, output)
+        self.assert_blocked("gh issue delete 3 -R owner/repo --yes", session_id="session-a")
+        self.assert_blocked("gh issue close 3 -R owner/repo && rm -rf C:\\data\\keep", session_id="session-a")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
