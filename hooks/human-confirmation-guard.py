@@ -1403,6 +1403,15 @@ def _git_restorable(p: Path) -> set[str] | None:
     common = os.path.normcase(str(real.parent.parent))
     if common == target or common.startswith(target.rstrip("\\/") + os.sep):
         return None
+    # git reads config from <gitdir>/commondir when it exists: it must name that same repository.
+    try:
+        named = (real / "commondir").read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        named = None
+    except (OSError, UnicodeDecodeError):
+        return None
+    if named is not None and os.path.normcase(os.path.realpath(os.path.join(str(real), named))) != common:
+        return None
     try:
         back = (real / "gitdir").read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):

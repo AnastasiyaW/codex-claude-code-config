@@ -106,6 +106,13 @@ class GitWorktree(unittest.TestCase):
             fh.truncate()
         self.assertEqual(self.info(self.wt), ("too many databases/backups inside", None))
 
+    def test_commondir_elsewhere_is_not_trusted(self) -> None:
+        commondir = self.main / ".git" / "worktrees" / "wt" / "commondir"
+        with open(commondir, "r+", encoding="utf-8") as fh:
+            fh.write(str(self.wt / "evil-common") + "\n")
+            fh.truncate()
+        self.assertEqual(self.info(self.wt), ("too many databases/backups inside", None))
+
     def test_repo_fsmonitor_is_not_run(self) -> None:
         marker = self.work / "ran.txt"
         script = self.work / "monitor.py"
