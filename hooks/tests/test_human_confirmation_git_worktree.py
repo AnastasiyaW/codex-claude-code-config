@@ -80,6 +80,21 @@ class GitWorktree(unittest.TestCase):
     def test_subfolder_of_worktree_is_not_exempt(self) -> None:
         self.assertEqual(self.info(self.wt / "migrations"), ("too many databases/backups inside", None))
 
+    def test_gitdir_outside_worktrees_is_not_trusted(self) -> None:
+        fake = self.main / ".git"  # a working gitdir, but not one of .git/worktrees
+        with open(self.wt / ".git", "r+", encoding="utf-8") as fh:  # hidden on Windows: "w" is refused
+            fh.write(f"gitdir: {fake}\n")
+            fh.truncate()
+        self.assertEqual(self.info(self.wt), ("too many databases/backups inside", None))
+
+    def test_repo_fsmonitor_is_not_run(self) -> None:
+        marker = self.work / "ran.txt"
+        script = self.work / "monitor.py"
+        script.write_text(f"open({str(marker)!r}, 'w').write('x')\n", encoding="utf-8")
+        git(self.main, "config", "core.fsmonitor", f'python "{script}"')
+        self.assertEqual(self.info(self.wt), (None, []))
+        self.assertFalse(marker.exists(), "hook ran a command from the repository config")
+
     def test_broken_git_means_no_exemption(self) -> None:
         hcg.GIT = str(self.work / "no-such-git")
         self.assertEqual(self.info(self.wt), ("too many databases/backups inside", None))

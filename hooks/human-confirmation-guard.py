@@ -1386,10 +1386,24 @@ def _git_restorable(p: Path) -> set[str] | None:
 
     if _kind(p / ".git") != "file":
         return None
+    # The folder is the one being deleted, so its git config is not trusted: the .git file must
+    # lead into <repo>/.git/worktrees/<name>, and settings that run commands are switched off.
+    try:
+        gitdir = (p / ".git").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not gitdir.startswith("gitdir:"):
+        return None
+    real = Path(os.path.realpath(os.path.join(str(p), gitdir[len("gitdir:"):].strip())))
+    if real.parent.name != "worktrees" or real.parent.parent.name != ".git" or not (real / "HEAD").is_file():
+        return None
+    safe = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=", "-c", "diff.external=",
+            "-c", "core.sshCommand=", "-c", "core.pager=cat", "-c", "protocol.allow=never"]
 
     def git(*args: str) -> str | None:
         try:
-            r = subprocess.run([GIT, "-C", str(p), *args], capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
+            r = subprocess.run([GIT, *safe, "-C", str(p), *args], capture_output=True, stdin=subprocess.DEVNULL,
+                               timeout=30, env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"})
         except (OSError, subprocess.SubprocessError):
             return None
         return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
@@ -1397,7 +1411,7 @@ def _git_restorable(p: Path) -> set[str] | None:
     if not (git("for-each-ref", "--contains", "HEAD", "--format=%(refname)", "refs/remotes") or "").strip():
         return None
     tracked = git("ls-files", "-z", "--cached")
-    changed = git("diff", "--name-only", "-z", "HEAD")
+    changed = git("diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "HEAD")
     if tracked is None or changed is None:
         return None
     root = _norm(str(p)).rstrip("/").lower()
