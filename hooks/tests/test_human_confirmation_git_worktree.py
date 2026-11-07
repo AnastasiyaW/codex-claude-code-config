@@ -32,8 +32,10 @@ class GitWorktree(unittest.TestCase):
         self.remote = self.work / "remote.git"
         self.main = self.work / "main"
         self.wt = self.work / "wt"
-        subprocess.run(["git", "init", "-q", "--bare", str(self.remote)], check=True, stdin=subprocess.DEVNULL)
-        subprocess.run(["git", "init", "-q", "-b", "main", str(self.main)], check=True, stdin=subprocess.DEVNULL)
+        subprocess.run(["git", "init", "-q", "--bare", str(self.remote)], check=True, capture_output=True,
+                       stdin=subprocess.DEVNULL)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.main)], check=True, capture_output=True,
+                       stdin=subprocess.DEVNULL)
         mig = self.main / "migrations"
         mig.mkdir()
         for i in range(MIGRATIONS):
@@ -84,6 +86,23 @@ class GitWorktree(unittest.TestCase):
         fake = self.main / ".git"  # a working gitdir, but not one of .git/worktrees
         with open(self.wt / ".git", "r+", encoding="utf-8") as fh:  # hidden on Windows: "w" is refused
             fh.write(f"gitdir: {fake}\n")
+            fh.truncate()
+        self.assertEqual(self.info(self.wt), ("too many databases/backups inside", None))
+
+    def test_gitdir_inside_target_is_not_trusted(self) -> None:
+        inner = self.wt / "evil" / ".git" / "worktrees" / "x"
+        inner.mkdir(parents=True)
+        (inner / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (inner / "gitdir").write_text(str(self.wt / ".git") + "\n", encoding="utf-8")
+        with open(self.wt / ".git", "r+", encoding="utf-8") as fh:
+            fh.write(f"gitdir: {inner}\n")
+            fh.truncate()
+        self.assertEqual(self.info(self.wt), ("too many databases/backups inside", None))
+
+    def test_worktree_not_listed_by_its_repository(self) -> None:
+        gitdir = self.main / ".git" / "worktrees" / "wt" / "gitdir"
+        with open(gitdir, "r+", encoding="utf-8") as fh:
+            fh.write(str(self.work / "elsewhere" / ".git") + "\n")
             fh.truncate()
         self.assertEqual(self.info(self.wt), ("too many databases/backups inside", None))
 

@@ -1397,6 +1397,18 @@ def _git_restorable(p: Path) -> set[str] | None:
     real = Path(os.path.realpath(os.path.join(str(p), gitdir[len("gitdir:"):].strip())))
     if real.parent.name != "worktrees" or real.parent.parent.name != ".git" or not (real / "HEAD").is_file():
         return None
+    # The repository whose config git will read must lie outside the folder being deleted, and it must
+    # list this folder as its worktree: a forged .git inside the target cannot vouch for the target.
+    target = os.path.normcase(os.path.realpath(str(p)))
+    common = os.path.normcase(str(real.parent.parent))
+    if common == target or common.startswith(target.rstrip("\\/") + os.sep):
+        return None
+    try:
+        back = (real / "gitdir").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if os.path.normcase(os.path.realpath(back)) != os.path.normcase(os.path.realpath(str(p / ".git"))):
+        return None
     safe = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=", "-c", "diff.external=",
             "-c", "core.sshCommand=", "-c", "core.pager=cat", "-c", "protocol.allow=never"]
 
