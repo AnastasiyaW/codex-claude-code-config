@@ -1372,6 +1372,39 @@ def temp_location_ok(target: str) -> bool:
             or is_temp_target(parent) or low.endswith("/.claude/tmp"))
 
 
+# Owner 2026-11-07 («поправь хук»): her pasted list of four linked worktrees was refused as "too many
+# databases" because ops/migrations holds 92 schema .sql files. Inside a linked worktree (.git is a file,
+# so history lives in the main repository and survives) a file git tracks, unchanged from a HEAD that a
+# remote-tracking branch already contains, is restorable. Modified, untracked and ignored files, the main
+# repository itself and an unpushed HEAD are judged as before. git failing = no exemption.
+GIT = "git"
+
+
+def _git_restorable(p: Path) -> set[str] | None:
+    """Lower-case posix paths of files in worktree root p that git can give back exactly, or None."""
+    import subprocess
+
+    if _kind(p / ".git") != "file":
+        return None
+
+    def git(*args: str) -> str | None:
+        try:
+            r = subprocess.run([GIT, "-C", str(p), *args], capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
+
+    if not (git("for-each-ref", "--contains", "HEAD", "--format=%(refname)", "refs/remotes") or "").strip():
+        return None
+    tracked = git("ls-files", "-z", "--cached")
+    changed = git("diff", "--name-only", "-z", "HEAD")
+    if tracked is None or changed is None:
+        return None
+    root = _norm(str(p)).rstrip("/").lower()
+    dirty = {f.lower() for f in changed.split("\0") if f}
+    return {f"{root}/{f.lower()}" for f in tracked.split("\0") if f and f.lower() not in dirty}
+
+
 def irreplaceable_info(target: str, recursive: bool,
                        remote: bool = False) -> tuple[str | None, list[str] | None]:
     """(why the target needs the owner's own naming, irreplaceable file names inside a folder).
@@ -1402,6 +1435,7 @@ def irreplaceable_info(target: str, recursive: bool,
         inner: list[str] = []
         walk_errors: list[OSError] = []
         n = 0
+        restorable = _git_restorable(p) or set()
         # review R10: os.walk with onerror, not rglob (which silently skips unreadable subtrees)
         for root, dirs, files in WALK(p, onerror=walk_errors.append, followlinks=False):
             for name in dirs + files:
@@ -1410,6 +1444,8 @@ def irreplaceable_info(target: str, recursive: bool,
                     return "too many entries to inspect", None
                 f = Path(root) / name
                 fk = _kind(f)
+                if fk == "file" and _norm(str(f)).lower() in restorable:
+                    continue
                 if fk == "error":
                     return f"cannot check {f.as_posix()} (access denied)", None
                 header = _sqlite_header(f) if fk == "file" else False
