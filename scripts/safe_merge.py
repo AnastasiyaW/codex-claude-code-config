@@ -638,7 +638,8 @@ def _self_test() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    # no prefix matching: merge-gate-guard looks for the full --owner-approved-no-checks, so «--owner» must not reach it
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0], allow_abbrev=False)
     ap.add_argument("repo", nargs="?", help="owner/repo")
     ap.add_argument("pr", nargs="?", type=int)
     ap.add_argument("--gh", default=os.environ.get("SAFE_MERGE_GH", "gh"),

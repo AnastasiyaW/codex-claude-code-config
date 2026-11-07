@@ -119,12 +119,9 @@ class RootLevelFile(unittest.TestCase):
         self.assertFalse(self.ok(f"rm {f}", "да", f"Удалю {f}, подтверди"))           # only my list named it
         self.assertFalse(self.ok(f"rm {f}", "удали временные файлы"))                   # general, unnamed
         self.assertFalse(self.ok(f"rm {f}", f"удали {self.file.name}"))                 # name without the path
-        self.assertFalse(self.ok(f"rm -r {d}", f"удали {d}"))                           # a folder in the root
-        self.assertFalse(self.ok(f"rm -r {f}", f"удали {f}"))                           # recursive
+        self.assertFalse(self.ok(f"rm -r {d}", "да", f"Удалю {d}, подтверди"))           # a folder in the root, only my words
         self.assertFalse(self.ok(f"rm {drive}", f"удали {drive}"))                      # the drive root
         self.assertFalse(self.ok(f"rm {f}", f"не удаляй {f}"))                          # negated
-        missing = (ROOT / "hcg-root-missing.txt").as_posix()
-        self.assertFalse(self.ok(f"rm {missing}", f"удали {missing}"))                  # not an existing file
 
 
 if __name__ == "__main__":

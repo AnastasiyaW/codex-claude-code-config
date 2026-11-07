@@ -125,7 +125,7 @@ def main() -> int:
 
     # Owner 2026-11-01: a list whose every path the owner pasted into her own request to delete may hold
     # these; the guard checked her message and marks its approval record "owner_named".
-    owner_only = {getattr(guard, n, None) for n in ("ROOT_FILE", "DRIVE_CHILD")} - {None}
+    owner_only = {getattr(guard, n, None) for n in ("ROOT_FILE", "DRIVE_CHILD", "LOCAL_DRIVE_ROOT")} - {None}
 
     def refusal(e: str, owner_named: bool = False) -> str | None:
         # review 2026-10-11 F3: on Windows a drive-less path means "current drive"; refuse it
