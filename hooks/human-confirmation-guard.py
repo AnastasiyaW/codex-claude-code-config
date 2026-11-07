@@ -1165,31 +1165,45 @@ def _sqlite_header(p: Path) -> bool | None:
 
 
 def _temp_target_clear(t: str) -> bool:
-    """Inside temp the location decides, with exceptions (review 2026-10-13), each fail-closed:
-    a real database (extension, server marker or SQLite header - DB_FILE, not a word in a folder
-    name: car_dataset_inventory of jpgs in .claude/tmp is scratch), a link or a path that resolves
-    out of temp, and a folder too big or unreadable to check. A missing path (remote, already
-    gone) is judged by its name alone."""
+    """Inside temp the location decides, contents are not judged (owner 2026-11-07: temp folders
+    must clear without problems, so a database in temp is scratch; to keep one, pin it with
+    temp_registry add). What stays refused protects data OUTSIDE temp from a shell delete: a link,
+    a path that resolves out of temp, and a folder with a link inside or one that cannot be walked,
+    because Remove-Item may follow a junction. temp_registry sweep removes those itself without
+    following links, see temp_location_ok."""
     p = Path(t)
     kind = _kind(p)
     if kind == "missing":
-        return not DB_FILE.search(t)
+        return True
     if kind in ("error", "link") or not is_temp_target(_norm(os.path.realpath(t))):
         return False
     if kind == "file":
-        return not DB_FILE.search(t) and _sqlite_header(p) is False
+        return True
     errors: list[OSError] = []
     n = 0
     for root, dirs, files in WALK(p, onerror=errors.append, followlinks=False):
         for name in dirs + files:
             n += 1
-            f = Path(root) / name
-            fk = _kind(f)
-            if n > CONTENT_SCAN_CAP or fk in ("error", "link") or DB_FILE.search(f.as_posix()):
-                return False
-            if fk == "file" and _sqlite_header(f) is not False:
+            if n > CONTENT_SCAN_CAP or _kind(Path(root) / name) in ("error", "link"):
                 return False
     return not errors
+
+
+def temp_location_ok(target: str) -> bool:
+    """One direct child of a temp folder, for temp_registry sweep, whose removal never follows a
+    link. The location alone decides; the folder holding it must really be inside temp too, so a
+    junction in the path cannot lead the sweep elsewhere."""
+    t = _norm(target).rstrip("/")
+    if not t or re.search(r"[$%`,]", t) or "/../" in f"/{t}/" or re.match(r"^[A-Za-z]{2,}:", t):
+        return False
+    if any(c in ("", ".") or c != c.rstrip(". ") for c in t.split("/")[1:]):
+        return False
+    if not is_temp_target(t):
+        return False
+    parent = _norm(os.path.realpath(os.path.dirname(t))).rstrip("/")
+    low = parent.lower()
+    return (low in _temp_roots() or bool(re.fullmatch(r"[a-z]:/(?:temp|tmp)", low))
+            or is_temp_target(parent) or low.endswith("/.claude/tmp"))
 
 
 def irreplaceable_info(target: str, recursive: bool) -> tuple[str | None, list[str] | None]:
@@ -2968,6 +2982,10 @@ def self_test() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     allow_cases = [
         "rm -rf /tmp/x",
+        # owner 2026-11-07: inside temp the location decides, a database there is scratch
+        "rm -rf C:/tmp/important.sqlite",
+        "rm -rf C:/tmp/pgdata/PG_VERSION",
+        f"rm -rf {_selftest_db_dir().as_posix()}",
         f"rm -rf {tmp}/claude-scratch/abc",
         f'Remove-Item -Recurse -Force "{tmp}\\claude\\x"',
         f"Remove-Item -LiteralPath '{tmp}\\a.txt' -ErrorAction SilentlyContinue",
@@ -3123,12 +3141,9 @@ def self_test() -> int:
         f"rm -rf {repo_root.as_posix()}/.claude/handoffs/x", # other .claude content
         f"rm -rf {repo_root.as_posix()}/.claude/tmp/../handoffs",  # traversal out of the scratch
         # independent review 2026-10-13: each of these passed before the fix
-        "rm -rf C:/tmp/important.sqlite",                    # a database inside temp
-        "rm -rf C:/tmp/pgdata/PG_VERSION",                   # server data inside temp
         "rm -rf C:/.claude/tmp/x",                           # "C:" is not a repo root
         "rm -rf C:/tmp/...",                                 # Windows reads it as C:/tmp itself
         "rm -rf C:/tmp/x./y",                                # trailing-dot component
-        f"rm -rf {_selftest_db_dir().as_posix()}",           # SQLite header, innocent name
         "git commit -m 'ok'; del C:\\data\\x",               # real del after a quoted message
         "docker rm -f bench-a",
         "docker rm production-db",
