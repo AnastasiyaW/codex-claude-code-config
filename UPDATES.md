@@ -4,6 +4,27 @@ Changelog for codex-claude-code-config. Newest first.
 
 ---
 
+## 2026-10-30 (capability registry: one line per capability, one owner per number)
+
+- New `scripts/capability_registry.py` (stdlib, GitHub API over HTTPS; token from
+  `GH_TOKEN`, `GITHUB_TOKEN` or `gh auth token`). `check` reads open PRs and branches
+  ahead of the default branch without a PR and answers 0 clear / 1 the same capability
+  (declared `Capability: <id>` line, or words in title, branch name, most commit subjects,
+  or a share of the files) or 10+ files under the given area is in flight elsewhere /
+  2 not checked. Same stack, joined lines and lines that share a commit are not
+  duplicates. `reserve` takes the next ADR/migration number by creating
+  `refs/reservations/<kind>/<n>` (an annotated tag names slug and branch); HTTP 422
+  "already exists" moves on to the next number. `numbers` finds one number held by two
+  slugs; `orphans` lists PR-less branches older than 24 h.
+- Why: a branch lived on origin for days without a PR and was built a second time under
+  other names, and the same ADR/migration numbers were taken twice by "max + 1". Tests
+  replay that start (must exit 1); `scripts/mutation_probe.py` over the named functions
+  leaves no survivor.
+- Projects vendor the file (for example under `.claude/coord/`) when their CI cannot
+  read this repo.
+
+---
+
 ## 2026-10-28 (plugin ships publish-bypass-guard)
 
 - The `harness` plugin now also registers `hooks/publish-bypass-guard.py`
