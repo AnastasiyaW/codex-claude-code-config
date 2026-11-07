@@ -417,9 +417,20 @@ def delete_targets(segment: str) -> list[str] | None:
         return None
     def norm_word(w: str) -> str:  # \rm, r''m, r`m (PowerShell escape) all run `rm`
         return re.sub(r"[\\'\"`]", "", w).lower().rsplit("/", 1)[-1].removesuffix(".exe")
-    while toks and (norm_word(toks[0]) in COMMAND_PREFIXES or toks[0].endswith(("{", "("))
-                    or re.fullmatch(r"\w+=\S*|\d+|-\w+", toks[0])):
-        toks = toks[1:]
+    while toks:
+        if norm_word(toks[0]) == "timeout":
+            # review 2026-10-28: `timeout -s KILL 5 rm F` ran a delete the guard never parsed
+            toks = toks[1:]
+            while toks and toks[0].startswith("-"):
+                if toks.pop(0) in ("-k", "-s") and toks:
+                    toks.pop(0)
+            if toks and re.fullmatch(r"\d+(?:\.\d+)?[smhd]?", toks[0]):
+                toks = toks[1:]
+        elif (norm_word(toks[0]) in COMMAND_PREFIXES or toks[0].endswith(("{", "("))
+              or re.fullmatch(r"\w+=\S*|\d+|-\w+", toks[0])):
+            toks = toks[1:]
+        else:
+            break
     if not toks:
         return None
     verb = norm_word(toks[0])
@@ -669,6 +680,76 @@ def remote_command(segment: str) -> str | None:
     return " ".join(rest) if rest else None
 
 
+SSH_LOCAL_OPTS = ("proxycommand", "localcommand", "knownhostscommand", "match")
+
+
+def _ssh_option_values(segment: str) -> tuple[list[str], bool] | None:
+    """(values of every -o option, whether -F is given), read only between `ssh` and the host the
+    way remote_command reads them (combined flags -4o / -4oKey=v too); None if not splittable."""
+    try:
+        toks = shlex.split(segment, posix=True)
+    except ValueError:
+        return None
+    values: list[str] = []
+    has_config = False
+    # every token named ssh may start the real command (review: `sudo -u ssh ssh -o ...`)
+    for start in [k + 1 for k, t in enumerate(toks)
+                  if t.rsplit("/", 1)[-1].lower().removesuffix(".exe") == "ssh"]:
+        i = start
+        while i < len(toks) and toks[i].startswith("-") and toks[i] != "--":
+            tok = toks[i]
+            i += 1
+            for pos, c in enumerate(tok[1:]):
+                if c not in SSH_OPTS_WITH_ARG:
+                    continue
+                rest = tok[pos + 2:]
+                if not rest and i < len(toks):
+                    rest = toks[i]
+                    i += 1
+                if c == "o":
+                    values.append(rest)
+                has_config = has_config or c == "F"
+                break
+    return values, has_config
+
+
+def ssh_local_commands(segment: str) -> list[str]:
+    """Commands an ssh segment runs on THIS machine through -o ProxyCommand/LocalCommand/
+    KnownHostsCommand/Match exec (review 2026-10-28: `ssh -o ProxyCommand='rm F' h ls` passed)."""
+    if not re.search(r"(?:^|[\s/])ssh(?:\.exe)?\s", segment):
+        return []
+    out: list[str] = []
+    for opt in (_ssh_option_values(segment) or ([], False))[0]:
+        m = re.match(r"\s*(\w+)\s*(?:=|\s)\s*(.*)", opt, re.S)
+        if not m or m.group(1).lower() not in SSH_LOCAL_OPTS or not m.group(2).strip():
+            continue
+        value = m.group(2).strip()
+        if m.group(1).lower() == "match":
+            e = re.search(r"\bexec\s+(.+)", value, re.S)
+            if not e:
+                continue
+            try:
+                value = " ".join(shlex.split(e.group(1), posix=True)) or e.group(1)
+            except ValueError:
+                value = e.group(1)
+        out.append(value)
+    return out
+
+
+def ssh_may_run_local_code(segment: str) -> bool:
+    """An ssh segment whose options can run a command here (-F config with Match exec, any -o
+    other than a few plain transport settings): its deletes are never owner-approvable."""
+    if not re.search(r"(?:^|[\s/])ssh(?:\.exe)?\s", segment):
+        return False
+    parsed = _ssh_option_values(segment)
+    if parsed is None or parsed[1]:
+        return True
+    return any(not SSH_SAFE_OPT.fullmatch(v.strip()) for v in parsed[0])
+
+
+SSH_SAFE_OPT = re.compile(r"(?i)(?:BatchMode=(?:yes|no)|ConnectTimeout=\d+|ServerAliveInterval=\d+|"
+                          r"ServerAliveCountMax=\d+|StrictHostKeyChecking=(?:yes|no|accept-new))")
+
 def split_segments(text: str) -> list[str]:
     """Split on && || ; | newline, but never inside '...' or "..." (a commit
     message saying "step; del old" is not a del command - review round 2)."""
@@ -700,7 +781,10 @@ def split_steps(text: str) -> list[tuple[str, str]]:
             buf, sep = [], text[i:i + 2]
             i += 2
             continue
-        elif c in ";|\n":
+        elif c in ";|\n" or (c == "&" and text[i - 1:i] not in (">", "<")
+                               and text[i + 1:i + 2] != ">"):
+            # a lone & (background) ends a command too; >& <& &> are redirections (review 2026-10-28:
+            # `ssh h rm F&rm F` ran the second rm locally while it was judged as remote)
             out.append(("".join(buf), sep))
             buf, sep = [], c
         else:
@@ -795,6 +879,11 @@ def decide(cmd: str) -> tuple[bool, str | None]:
         remote = remote_command(seg)
         if remote == UNPARSED:
             return False, "unparsed-remote-or-inner-command"
+        for local_cmd in ssh_local_commands(seg):
+            ok, rhit = decide(local_cmd)
+            if not ok:
+                return False, rhit or "ssh-local-command-delete"
+            flagged = flagged or bool(rhit)
         if remote:
             ok, rhit = decide(remote)
             if not ok:
@@ -1287,12 +1376,18 @@ def irreplaceable_info(target: str, recursive: bool,
                        remote: bool = False) -> tuple[str | None, list[str] | None]:
     """(why the target needs the owner's own naming, irreplaceable file names inside a folder).
     (None, []) means regenerable; inner=None means the folder could not be fully inspected and
-    may not be deleted as a whole at all (review R9: fail closed, no naming escape)."""
+    may not be deleted as a whole at all (review R9: fail closed, no naming escape).
+    remote: the path runs inside `ssh <host> '...'`. It is still stat-ed here, because the same
+    text may also run locally in a form the parser does not read as a delete (review 2026-10-28:
+    `; mv`, `; timeout rm`, `-o ProxyCommand=`); only a local stat that fails is judged by path
+    alone (2026-10-28: a server home path with D:/tmp/... in it made the Windows lstat fail as "access denied")."""
     t = _norm(target).rstrip("/")
     if IRREPLACEABLE.search(t):
         return "database/backup/dataset path", []
     p = Path(t)
     kind = _kind(p)
+    if kind == "error" and remote:
+        return None, []
     if kind == "error":
         return "cannot be checked from here (access denied)", None
     if kind == "file":
@@ -1734,6 +1829,8 @@ def _delete_targets_in(cmd: str, allow_move: bool, allow_delete: bool) -> list[t
         remote = remote_command(seg)
         if remote == UNPARSED:
             return None
+        if remote and ssh_may_run_local_code(seg):
+            return None  # review 2026-10-28: -o ProxyCommand='rm F' ran an unnamed local delete
         if remote:
             sub = _delete_targets_in(remote, allow_move, allow_delete)
             if sub is None:
@@ -2139,6 +2236,8 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
             # a pid list may be joined by commas or "и"/"and" (owner 2026-10-13: «да, убей 37116 и 31004»)
             return re.search(r"(?:\bpid|процесс\w*|\bkill(?:\s+-\S+)*|\bубей(?:те)?|\bубивай(?:те)?|\bприбей(?:те)?|"
                              r"\bостанов\w*)"
+                             # owner 2026-11-03: «убей принудительно 61112» - a force adverb may sit before the pids
+                             r"(?:\s+(?:принудительно|насильно|жёстко|жестко|forcefully|force))?"
                              r"\s*[:#№]?\s*(?:\d+(?:[\s,]+|\s+(?:и|and)\s+))*" + t + r"(?!\d)(?![:.,/]\d)"
                              # review 2026-10-13: "убей 37116 и 22 часа" - a number before a time unit is no pid
                              r"(?!\s*(?:час|мин|сек|ч\b|h\b|m\b|s\b|hours?|min|sec))",
@@ -2609,12 +2708,6 @@ def target_hard_limit(target: str, recursive: bool = False, server: bool = False
     # (could be a folder). System folders are already caught by PROTECTED above.
     depth2_file = (len(parts) == 2 and not recursive and re.match(r"^[A-Za-z]:/", t)
                    and "." in parts[1].strip(".") and low[0] not in {"users", "home"})
-    # Owner 2026-10-28 («должно удалять просто по моему разрешению», D:/cw-msg.txt and D:/_x refused):
-    # an existing regular file directly in a Windows drive root goes only when the owner names its full
-    # path herself (_approve checks that). The drive root, folders in it and recursion stay a hard limit.
-    if (len(parts) == 1 and not recursive and re.match(r"^[A-Za-z]:/", t)
-            and os.path.isfile(t) and not os.path.islink(t)):
-        return ROOT_FILE
     if server and _server_home_child(t):
         return None
     # Owner 2026-10-28 («должно удалять просто по моему разрешению», D:/cw-msg.txt and D:/_x refused):
@@ -2915,7 +3008,6 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
     irreplaceable files inside a pasted folder count as named when they were listed there."""
     text = named_in.replace("\\", "/")
     for t, recursive in targets:
-        # extra["list"]: a delete_from_list.py run, which removes each entry literally
         server = t in remote and _server_home_child(t)
         # extra["list"]: a delete_from_list.py run, which removes each entry literally
         why = target_hard_limit(t, recursive, server, literal=bool(extra and extra.get("list")),
