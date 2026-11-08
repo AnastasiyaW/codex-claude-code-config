@@ -79,17 +79,17 @@ class OwnerPastedList(unittest.TestCase):
         ok, why = self.run_list(lst, sha, f"удали {str(self.plain).replace('/', chr(92))}")
         self.assertTrue(ok, why)
 
-    def test_folder_with_datasets_needs_them_listed_in_my_proposal(self) -> None:
+    def test_folder_with_datasets_goes_whole_when_she_pastes_its_path(self) -> None:
         lst, sha = self.write_list(self.withdata)
-        self.assertFalse(self.run_list(lst, sha, f"удали\n{self.withdata}", "Удаление — 1 путь")[0])
+        # owner 2026-11-08: her own pasted full path names the folder whole, datasets inside included
+        ok, why = self.run_list(lst, sha, f"удали\n{self.withdata}", "Удаление — 1 путь")
+        self.assertTrue(ok, why)
         ok, why = self.run_list(lst, sha, f"удали\n{self.withdata}",
                                 "Удаление — 1 путь, внутри датасеты: lesson_dataset.csv")
         self.assertTrue(ok, why)
         ok, why = self.run_list(lst, sha, f"удали\n{self.withdata}",       # a sentence's closing dot after it
                                 "Внутри датасеты: a.ipynb, lesson_dataset.csv.")
         self.assertTrue(ok, why)
-        self.assertFalse(self.run_list(lst, sha, f"удали\n{self.withdata}",  # a longer name is another file
-                                       "Внутри датасеты: lesson_dataset.csv.zip")[0])
 
     def test_refused(self) -> None:
         lst, sha = self.write_list(self.plain, self.db)

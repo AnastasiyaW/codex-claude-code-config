@@ -1761,17 +1761,24 @@ def _split_reply(text: str) -> tuple[str, str]:
 
 def owner_request(transcript_path: str) -> tuple[str, str] | None:
     """(latest owner message, my text it answers) from the host-written transcript."""
+    req = owner_request_at(transcript_path)
+    return req[:2] if req else None
+
+
+def owner_request_at(transcript_path: str) -> tuple[str, str, str] | None:
+    """owner_request plus the host timestamp of her message ("" when the entry has none)."""
     if not transcript_path:
         return None
     p = Path(transcript_path)
     if not p.is_file():
         return None
-    prompt, quoted, answer = None, "", []
+    prompt, quoted, answer, ts = None, "", [], ""
     for e in _tail_entries(p):
         if prompt is None:
             text = _human_text(e)
             if text is not None:
                 prompt, quoted = _split_reply(text)
+                ts = e.get("timestamp") if isinstance(e.get("timestamp"), str) else ""
                 if not prompt:
                     return None
             continue
@@ -1785,7 +1792,67 @@ def owner_request(transcript_path: str) -> tuple[str, str] | None:
                 break  # only my last message is what the owner answered
     if prompt is None:
         return None
-    return prompt, "\n".join(x for x in (quoted, *answer) if x)
+    return prompt, "\n".join(x for x in (quoted, *answer) if x), ts
+
+
+OWNER_LIST_FILE = re.compile(r"(?:[A-Za-z]:[\\/]|/)[^\n\r\"'<>|*?`]*?\.txt\b", re.IGNORECASE)
+OWNER_LIST_WORD = re.compile(r"списк|из\s+файла|по\s+файлу|в\s+файле|\blist\b|\bfrom\s+(?:the\s+)?file\b",
+                             re.IGNORECASE)
+OWNER_LIST_PATH_LINE = re.compile(r"(?:[A-Za-z]:[\\/]|/)[^\n\r\"'<>|*?`;&$]+")
+OWNER_LIST_MAX_BYTES = 1 << 20
+OWNER_LIST_MTIME_SLACK_S = 2.0  # host timestamp and file mtime come from two clocks of one machine
+
+
+def expand_owner_list_files(prompt: str, ts: str) -> tuple[str, str]:
+    """Owner 2026-11-08 («поправь хук, чтобы ему можно было дать текстовый файл со ссылками на
+    удаление»): a request to delete that names a .txt file counts as pasting its lines. The file must
+    exist and be unchanged since her message (mtime not after its timestamp), so a list edited after
+    she pointed at it names nothing. Only absolute paths are taken; a database or backup in the file still
+    needs her own typed words. The mtime check catches an accidental edit, not deliberate forgery (the
+    boundary stated in rules/deletion-confirm-and-verify.md). Returns (prompt with the lines appended,
+    why a named file or line was not used); the caller feeds that only to the path-deletion branches."""
+    # «удали C:\x\notes.txt» deletes that file; only «по списку / из файла» reads it as a list
+    words = OWNER_LIST_FILE.sub(" ", prompt)  # «list» inside a path name is not her wording
+    if not DELETE_INTENT.search(words) or NOT_A_GO.search(words) or not OWNER_LIST_WORD.search(words):
+        return prompt, ""
+    sent = parse_ts(ts)
+    extra, why = [], ""
+    for m in OWNER_LIST_FILE.finditer(prompt):
+        name = m.group(0).strip()
+        try:
+            raw = Path(name.replace("\\", "/")).expanduser()
+            if raw.is_symlink():
+                why = f"{name}: a deletion list must not be a link"
+                continue
+            p = raw.resolve(strict=True)
+            st = p.stat()
+            if not p.is_file() or st.st_size > OWNER_LIST_MAX_BYTES:
+                why = f"{name}: a deletion list must be a text file under 1 MB"
+                continue
+            if sent is None or st.st_mtime > sent + OWNER_LIST_MTIME_SLACK_S:
+                why = f"{name}: the list changed after her message (or the message has no time)"
+                continue
+            for ln in p.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+                ln = ln.strip()
+                if not ln or ln.startswith("#"):
+                    continue
+                if not OWNER_LIST_PATH_LINE.fullmatch(ln):
+                    why = f"{name}: {ln[:80]!r} is not an absolute path - lines of a list are paths only"
+                    continue
+                if irreplaceable_reason(ln, True):
+                    why = f"{ln}: irreplaceable - name it in the chat, not in a list file"
+                    continue
+                extra.append(ln)
+        except OSError:
+            why = f"{name}: no such list file"
+    return ("\n".join([prompt, *extra]) if extra else prompt), why
+
+
+def parse_ts(ts: str) -> float | None:
+    try:
+        return __import__("datetime").datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, AttributeError):
+        return None
 
 
 def _is_recursive(verb: str, seg: str) -> bool:
@@ -2912,6 +2979,17 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     if not req:
         return False, "no human prompt in the transcript"
     prompt, answer = req
+    paths_prompt, list_why = prompt, ""
+    if OWNER_LIST_FILE.search(prompt):  # the timestamp costs a second transcript read; only for a named .txt
+        full = owner_request_at(event.get("transcript_path") or "")
+        paths_prompt, list_why = expand_owner_list_files(prompt, full[2] if full else "")
+    ok, why = _approved_by_owner(cmd, event, prompt, answer, paths_prompt)
+    return (ok, f"{why}; {list_why}" if list_why and not ok else why)
+
+
+def _approved_by_owner(cmd: str, event: dict, prompt: str, answer: str, paths_prompt: str) -> tuple[bool, str]:
+    """paths_prompt = her message plus the lines of a list file she named; it reaches only the
+    path-deletion branches, never restart, docker, database, branch, stop or relocate."""
     if restart_only(cmd):
         return _restart_approval(cmd, prompt, answer, event)
     if image_rm_only(cmd):
@@ -2944,6 +3022,8 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
         except OSError:
             return False, "cannot write the approval audit record"
         return True, f"relocate list ({len(rec['targets'])} entries)"
+    own_words = prompt  # her message without list-file lines: only it can name a folder whole
+    prompt = paths_prompt  # from here on only path deletion is judged
     listed, why = list_delete_request(cmd, prompt, answer)
     if listed is None:
         return False, why
@@ -2957,7 +3037,7 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
             # the script skips the drive-root and irreplaceable refusals only on this record field
             extra["owner_named"] = True
         return _approve(listed, "\n".join(t for t, _ in listed), False, prompt, cmd, event, extra=extra,
-                        shown=answer if extra.get("owner_named") else "")
+                        shown=answer if extra.get("owner_named") else "", own_words=own_words)
     bare, with_paths = CONFIRM_ONLY.fullmatch(prompt), CONFIRM_PATHS.fullmatch(prompt)
     if bare or with_paths:
         allow_delete, allow_move = bool(DELETE_MENTION.search(answer)), bool(REPLACE_MENTION.search(answer))
@@ -2969,7 +3049,7 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
             listed_targets = plain_delete_targets(cmd, allow_move, allow_delete)
             if not listed_targets:
                 return False, "not a plain file delete"
-            return _approve(listed_targets, block, False, prompt, cmd, event, owner_list=True,
+            return _approve(listed_targets, block, False, prompt, cmd, event, owner_list=True, own_words=own_words,
                             remote=_remote_targets(cmd))
     elif NOT_A_GO.search(prompt):
         return False, "the request negates, hesitates or asks a question"
@@ -2995,14 +3075,14 @@ def approved_by_owner(cmd: str, event: dict) -> tuple[bool, str]:
     # A general go-ahead is a bare yes to my proposal, or a request that names no file itself
     # ("удали временные"). When the owner names a file, unnamed others are not covered.
     general = named_in is answer or not NAMES_FILE.search(prompt)
-    return _approve(targets, named_in, from_phrase, prompt, cmd, event, general=general,
+    return _approve(targets, named_in, from_phrase, prompt, cmd, event, general=general, own_words=own_words,
                     remote=_remote_targets(cmd))
 
 
 def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
              prompt: str, cmd: str, event: dict, general: bool = False,
              extra: dict | None = None, remote: set[str] = frozenset(),
-             owner_list: bool = False, shown: str = "") -> tuple[bool, str]:
+             owner_list: bool = False, shown: str = "", own_words: str | None = None) -> tuple[bool, str]:
     """Every target passes the hard limits and is named in named_in (or, with a general go-ahead,
     is regenerable); then one audit record. shown: my proposal the owner pasted a list from; the
     irreplaceable files inside a pasted folder count as named when they were listed there."""
@@ -3064,6 +3144,13 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
             own = prompt.replace("\\", "/")
             win = bool(re.match(r"^[a-z]:/", full))
             own = own.lower() if win else own
+            # Owner 2026-11-08 («поправь хук, чтобы можно было назвать папку просто и все файлы внутри
+            # удалились»): a folder whose full path she typed herself goes whole, databases inside
+            # included. Only her own words count: not my answer, not lines of a list file she named.
+            whole = (prompt if own_words is None else own_words).replace("\\", "/")
+            if recursive and inner != [] and _named(whole.lower() if win else whole, full):
+                extra = {**(extra or {}), "action": "owner-named-folder-whole"}
+                continue
             if inner is None:
                 return False, (f"{t}: {why} - cannot be confirmed as a whole; delete it in parts "
                                f"or through a deletion list")

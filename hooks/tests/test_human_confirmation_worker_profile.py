@@ -67,10 +67,13 @@ class RegenerableProfile(unittest.TestCase):
         s, o = str(self.small), str(self.other)
         self.assertFalse(self.ok(f'rm -rf "{s}"', "удали p~2…p~3"))                # not the full path
         self.assertFalse(self.ok(f'rm -rf "{s}"', f"не удаляй {s}"))              # negated
-        self.assertFalse(self.ok(f'rm -rf "{o}"', f"удали {o}"))                  # not under a listed root
+        self.assertFalse(self.ok(f'rm -rf "{o}"', "удали p1"))                    # not under a listed root
+        # owner 2026-11-08: a folder whose full path she typed goes whole, databases inside included
+        self.assertTrue(self.ok(f'rm -rf "{o}"', f"удали {o}"))
         self.assertFalse(hcg._worker_profile(str(self.junction)))                 # a junction to elsewhere
         parent = str(self.small.parent)
-        self.assertFalse(self.ok(f'rm -rf "{parent}"', f"удали {parent}"))        # the listed root itself
+        self.assertFalse(self.ok(f'rm -rf "{parent}"', "удали p~2"))              # the listed root itself
+        self.assertTrue(self.ok(f'rm -rf "{parent}"', f"удали {parent}"))         # ...unless she typed its path
         (self.small / "Default" / "orders.sql.gz").write_bytes(b"x")
         self.assertFalse(self.ok(f'rm -rf "{s}"', f"удали {s}"))                  # a dump is not browser data
         shallow = self.work / "shallow.json"
@@ -81,7 +84,8 @@ class RegenerableProfile(unittest.TestCase):
         self.assertEqual(hcg._profile_roots(), set())                             # unsafe or missing roots
         hcg.PROFILE_ROOTS_FILE = self.work / "missing.json"
         s = str(self.big)
-        self.assertFalse(self.ok(f'rm -rf "{s}"', f"удали {s}"))                  # no private list
+        self.assertFalse(hcg._worker_profile(s))                                  # no private list
+        self.assertFalse(self.ok(f'rm -rf "{s}"', "удали p~3"))                   # so only the full path names it
 
 
 if __name__ == "__main__":
