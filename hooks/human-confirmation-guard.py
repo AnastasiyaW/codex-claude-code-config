@@ -3022,6 +3022,7 @@ def _approved_by_owner(cmd: str, event: dict, prompt: str, answer: str, paths_pr
         except OSError:
             return False, "cannot write the approval audit record"
         return True, f"relocate list ({len(rec['targets'])} entries)"
+    own_words = prompt  # her message without list-file lines: only it can name a folder whole
     prompt = paths_prompt  # from here on only path deletion is judged
     listed, why = list_delete_request(cmd, prompt, answer)
     if listed is None:
@@ -3036,7 +3037,7 @@ def _approved_by_owner(cmd: str, event: dict, prompt: str, answer: str, paths_pr
             # the script skips the drive-root and irreplaceable refusals only on this record field
             extra["owner_named"] = True
         return _approve(listed, "\n".join(t for t, _ in listed), False, prompt, cmd, event, extra=extra,
-                        shown=answer if extra.get("owner_named") else "")
+                        shown=answer if extra.get("owner_named") else "", own_words=own_words)
     bare, with_paths = CONFIRM_ONLY.fullmatch(prompt), CONFIRM_PATHS.fullmatch(prompt)
     if bare or with_paths:
         allow_delete, allow_move = bool(DELETE_MENTION.search(answer)), bool(REPLACE_MENTION.search(answer))
@@ -3048,7 +3049,7 @@ def _approved_by_owner(cmd: str, event: dict, prompt: str, answer: str, paths_pr
             listed_targets = plain_delete_targets(cmd, allow_move, allow_delete)
             if not listed_targets:
                 return False, "not a plain file delete"
-            return _approve(listed_targets, block, False, prompt, cmd, event, owner_list=True,
+            return _approve(listed_targets, block, False, prompt, cmd, event, owner_list=True, own_words=own_words,
                             remote=_remote_targets(cmd))
     elif NOT_A_GO.search(prompt):
         return False, "the request negates, hesitates or asks a question"
@@ -3074,14 +3075,14 @@ def _approved_by_owner(cmd: str, event: dict, prompt: str, answer: str, paths_pr
     # A general go-ahead is a bare yes to my proposal, or a request that names no file itself
     # ("удали временные"). When the owner names a file, unnamed others are not covered.
     general = named_in is answer or not NAMES_FILE.search(prompt)
-    return _approve(targets, named_in, from_phrase, prompt, cmd, event, general=general,
+    return _approve(targets, named_in, from_phrase, prompt, cmd, event, general=general, own_words=own_words,
                     remote=_remote_targets(cmd))
 
 
 def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
              prompt: str, cmd: str, event: dict, general: bool = False,
              extra: dict | None = None, remote: set[str] = frozenset(),
-             owner_list: bool = False, shown: str = "") -> tuple[bool, str]:
+             owner_list: bool = False, shown: str = "", own_words: str | None = None) -> tuple[bool, str]:
     """Every target passes the hard limits and is named in named_in (or, with a general go-ahead,
     is regenerable); then one audit record. shown: my proposal the owner pasted a list from; the
     irreplaceable files inside a pasted folder count as named when they were listed there."""
@@ -3143,6 +3144,13 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
             own = prompt.replace("\\", "/")
             win = bool(re.match(r"^[a-z]:/", full))
             own = own.lower() if win else own
+            # Owner 2026-11-08 («поправь хук, чтобы можно было назвать папку просто и все файлы внутри
+            # удалились»): a folder whose full path she typed herself goes whole, databases inside
+            # included. Only her own words count: not my answer, not lines of a list file she named.
+            whole = (prompt if own_words is None else own_words).replace("\\", "/")
+            if recursive and inner != [] and _named(whole.lower() if win else whole, full):
+                extra = {**(extra or {}), "action": "owner-named-folder-whole"}
+                continue
             if inner is None:
                 return False, (f"{t}: {why} - cannot be confirmed as a whole; delete it in parts "
                                f"or through a deletion list")
