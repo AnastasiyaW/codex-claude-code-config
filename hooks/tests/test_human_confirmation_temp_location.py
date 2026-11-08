@@ -18,7 +18,8 @@ def load():
 
 
 def junction(link, target):
-    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True,
+                   stdin=subprocess.DEVNULL)  # an inherited invalid stdin handle fails DuplicateHandle (WinError 6)
 
 
 class TempLocation(unittest.TestCase):
