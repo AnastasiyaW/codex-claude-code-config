@@ -3218,8 +3218,11 @@ def _approve(targets: list[tuple[str, bool]], named_in: str, from_phrase: bool,
             # Owner 2026-11-08 («поправь хук, чтобы можно было назвать папку просто и все файлы внутри
             # удалились»): a folder whose full path she typed herself goes whole, databases inside
             # included. Only her own words count: not my answer, not lines of a list file she named.
+            # A folder that could not be inspected (scan cap, unreadable subtree, no stat) still fails
+            # closed even when named (R9-R11); only "too many databases inside" is covered by her words.
             whole = (prompt if own_words is None else own_words).replace("\\", "/")
-            if recursive and inner != [] and _named(whole.lower() if win else whole, full):
+            inspected = inner is not None or why == "too many databases/backups inside"
+            if recursive and inner != [] and inspected and _named(whole.lower() if win else whole, full):
                 extra = {**(extra or {}), "action": "owner-named-folder-whole"}
                 continue
             if inner is None:
@@ -3954,8 +3957,9 @@ def self_test() -> int:
     (prof / "History").write_bytes(b"SQLite format 3\x00" + b"\x00" * 84)
     refuse.append(("general request, folder holds a header-only SQLite (R8)", f"rm -rf {prof.as_posix()}",
                    transcript("удали старый кеш")))
-    refuse.append(("owner names a folder but not the database inside (R8)", f"rm -rf {app_dir}",
-                   transcript(f"удали {app_dir}")))
+    # owner 2026-11-08: a folder whose full path she typed goes whole, databases inside included
+    approve.append(("owner names a folder, the database inside goes with it", f"rm -rf {app_dir}",
+                    transcript(f"удали {app_dir}")))
     approve.append(("owner names the folder and the database inside", f"rm -rf {app_dir}",
                     transcript(f"удали {app_dir} вместе с state.sqlite")))
     # review round 5: R9 (overflowing either cap fails closed even when the owner names the folder)
@@ -3963,8 +3967,10 @@ def self_test() -> int:
     many.mkdir(parents=True)
     for i in range(INNER_NAME_CAP + 1):
         (many / f"s{i}.sqlite").write_text("x")
-    refuse.append(("folder with more databases than the cap, owner names only the folder (R9)",
-                   f"rm -rf {many.as_posix()}", transcript(f"удали {many.as_posix()}")))
+    approve.append(("folder with more databases than the cap, owner names the folder (2026-11-08)",
+                    f"rm -rf {many.as_posix()}", transcript(f"удали {many.as_posix()}")))
+    refuse.append(("folder with more databases than the cap, general yes (R9)",
+                   f"rm -rf {many.as_posix()}", transcript("да, удаляй", "Удалю many-dbs")))
     global CONTENT_SCAN_CAP
     saved_cap = CONTENT_SCAN_CAP
     CONTENT_SCAN_CAP = 3
