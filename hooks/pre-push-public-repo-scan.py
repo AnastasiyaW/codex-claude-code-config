@@ -1174,7 +1174,7 @@ def agent_b_claude(diff: str) -> dict | None:
         r = _agent_b_call(claude, prompt, config_dir, api_key)
         if r.returncode == 0 or not _QUOTA_RE.search((r.stdout or "") + (r.stderr or "")):
             break
-        print(f"[pre-push] Agent B: {label} is out of quota; trying the next configured login",
+        print(f"[pre-push] Agent B: {label} is out of quota or logged out; trying the next configured login",
               file=sys.stderr)
     if r.returncode != 0:
         # Distinguish "found but errored" (e.g. not logged in) from "not found",
@@ -1203,11 +1203,12 @@ def parse_verdict(out: str) -> dict | None:
     return None
 
 
-# A usage limit or an empty API balance is an account state, not a verdict.
+# A usage limit, an empty API balance or an expired login is an account state, not a verdict.
 # Measured 2026-10-15: the main login answered "Your organization has disabled Claude subscription
-# access for Claude Code" while the whiskers login still reviewed fine.
+# access for Claude Code" while the whiskers login still reviewed fine. 2026-11-11: whiskers answered
+# "OAuth session expired" and the loop stopped before blackdesign, which reviewed fine.
 _QUOTA_RE = re.compile(r"hit your (weekly|daily|usage) limit|usage limit|Credit balance is too low"
-                       r"|disabled Claude subscription access", re.I)
+                       r"|disabled Claude subscription access|OAuth session expired|Not logged in", re.I)
 
 
 def fallback_config_dirs() -> list[str]:
@@ -1542,6 +1543,25 @@ def self_test() -> int:
             check("no keys and no logins left -> no verdict (fail-closed)", agent_b_claude("fixture"), None)
             check("org-disabled subscription is an account state",
                   bool(_QUOTA_RE.search("Your organization has disabled Claude subscription access for Claude Code")), True)
+            # 2026-11-11: whiskers answered "OAuth session expired" and the loop stopped there,
+            # though the next login (blackdesign) reviewed fine.
+            calls.clear()
+
+            def expired_then_ok(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+                calls.append(kw["env"])
+                if kw["env"].get("CLAUDE_CONFIG_DIR") == "d-expired":
+                    return subprocess.CompletedProcess(
+                        cmd, 1, "Failed to authenticate: OAuth session expired and could not be refreshed", "")
+                if kw["env"].get("CLAUDE_CONFIG_DIR") == "d-ok":
+                    return subprocess.CompletedProcess(cmd, 0, '{"verdict": "SAFE", "reason": "fixture"}', "")
+                return subprocess.CompletedProcess(cmd, 1, "You've hit your weekly limit", "")
+
+            fallback_config_dirs = lambda: ["d-expired", "d-ok"]
+            run = expired_then_ok
+            check("an expired login moves on to the next login",
+                  agent_b_claude("fixture") or {}, {"verdict": "SAFE", "reason": "fixture"})
+            fallback_config_dirs = lambda: ["d-expired"]
+            check("only an expired login left -> no verdict (fail-closed)", agent_b_claude("fixture"), None)
             check("a real refusal is not an account state",
                   bool(_QUOTA_RE.search('{"verdict": "BLOCK", "reason": "key"}')), False)
         finally:
