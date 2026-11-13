@@ -89,7 +89,30 @@ def append_only(path: Path, repo_root: Path) -> bool:
     return any(marker in rel for marker in APPEND_ONLY)
 
 
-def assess(file_path: str) -> str | None:
+USER_TASKS = ".agent/user-tasks/"
+
+
+def own_user_task(path: Path, repo_root: Path, session: str) -> bool:
+    """True for a file of a task folder whose request.json names this session as its owner.
+
+    A task folder belongs to the one session that recorded the request (user-task-completion-guard),
+    so it is uncontended the way a handoff is. Owner 2026-11-13: the guard refused the owning
+    session its own state script. Another session's task stays protected.
+    """
+    rel = path.relative_to(repo_root).as_posix()
+    if not session or not rel.startswith(USER_TASKS):
+        return False
+    task = rel[len(USER_TASKS):].split("/", 1)[0]
+    if not task or task == rel[len(USER_TASKS):]:
+        return False
+    try:
+        request = json.loads((repo_root / USER_TASKS / task / "request.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(request, dict) and request.get("session_id") == session
+
+
+def assess(file_path: str, session: str = "") -> str | None:
     """None to allow; a reason string to block."""
     try:
         target = Path(file_path)
@@ -109,6 +132,8 @@ def assess(file_path: str) -> str | None:
     except ValueError:
         return None
     if append_only(target, repo_root):
+        return None
+    if own_user_task(target, repo_root, session):
         return None
     if not is_tracked(target, repo_root):
         return None
@@ -143,7 +168,7 @@ def main() -> int:
     path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     if not path:
         return 0
-    reason = assess(str(path))
+    reason = assess(str(path), str(event.get("session_id") or ""))
     if reason:
         log("BLOCK", "live_tree", "deny", "tracked_file_in_primary_tree", str(path))
         print(json.dumps({"decision": "block", "reason": reason}))
@@ -188,6 +213,20 @@ def self_test() -> int:
         check("a handoff is exempt", assess(str(handoff / "note.md")) is None, True)
         check("an untracked new file is allowed",
               assess(str(root / "brand-new.py")) is None, True)
+
+        task = root / ".agent" / "user-tasks" / "REQ-1"
+        (task / "tools").mkdir(parents=True)
+        (task / "request.json").write_text(json.dumps({"session_id": "owner-s"}), encoding="utf-8")
+        own_file = task / "tools" / "write_state.py"
+        own_file.write_text("x = 1\n", encoding="utf-8")
+        run(["add", "-A"], root)
+        run(["commit", "-m", "task"], root)
+        check("the owning session may edit its own task file",
+              assess(str(own_file), "owner-s") is None, True)
+        check("another session may not edit that task file",
+              assess(str(own_file), "other-s") is not None, True)
+        check("no session id: the task file stays protected",
+              assess(str(own_file)) is not None, True)
 
         wt = Path(td) / "wt"
         run(["worktree", "add", str(wt), "-b", "side"], root)

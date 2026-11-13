@@ -148,6 +148,8 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
             "observation_evidence": observation_path.relative_to(task).as_posix(),
             "observation_sha256": hashlib.sha256(observation_path.read_bytes()).hexdigest(),
             "registered_findings": [finding_id],
+            # Stop charges an observation only to its owning session (f167a70).
+            "owner_session_id": "session-a",
         }
         registration_path = task / "evidence" / "reconciliation-release-rollout-20260901-registration.json"
         registration_path.write_text(json.dumps(registration), encoding="utf-8")
@@ -393,6 +395,30 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.assertEqual(receipt["recorded_at"], later)
         self.assertEqual(receipt["state_sha256"], hashlib.sha256(self.state_path().read_bytes()).hexdigest())
 
+    def _waiting_state(self, *, age_minutes: int = 5, child_status: str = "RUNNING", bind: bool = True) -> None:
+        updated = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=age_minutes)).replace(
+            microsecond=0).isoformat().replace("+00:00", "Z")
+        item = {"item_id": "port", "status": "RUNNING", "result": "child porting", "evidence": []}
+        if bind:
+            item["child_id"] = "porter"
+        self.write_state(status="OPEN", updated_at=updated, items=[item],
+                         children=[{"child_id": "porter", "scope": "port step 1", "status": child_status}])
+
+    def test_stop_waits_without_blocking_on_a_fresh_declared_running_child(self) -> None:
+        self.invoke_prompt()
+        self._waiting_state()
+        self.assertIsNone(self.invoke_stop())
+
+    def test_stale_bound_or_unbound_child_still_blocks(self) -> None:
+        for label, kwargs in (("stale", {"age_minutes": 90}), ("unbound", {"bind": False}),
+                              ("child not running", {"child_status": "JOINED"})):
+            with self.subTest(label):
+                self.invoke_prompt()
+                self._waiting_state(**kwargs)
+                guard.reset_stop_budget(self.root)
+                result = self.invoke_stop()
+                self.assertEqual(result and result.get("decision"), "block", label)
+
     def test_external_blocker_requires_receipt_and_named_recheck(self) -> None:
         self.invoke_prompt()
         evidence = self.receipt()
@@ -493,9 +519,8 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.complete_active_request()
         task, observation_path, observation = self.reconciliation_observation()
 
-        blocked = self.invoke_stop()
-        self.assertEqual(blocked and blocked.get("decision"), "block")
-        self.assertIn("has no controller registration receipt", blocked["reason"])
+        # Unregistered = ownerless: deferred to the controller, not charged to this session (f167a70).
+        self.assertIsNone(self.invoke_stop())
 
         finding = self.register_observation(task, observation_path, observation)
         blocked = self.invoke_stop()

@@ -1145,6 +1145,38 @@ def record_terminal_receipt(
     write_json_atomic(receipt_file, {**binding, "recorded_at": now_utc()})
 
 
+# Owner 2026-11-13 («хук стопорнулся на пустом месте»): a task whose live work is delegated
+# to a background child was refused at every Stop, though the child's completion wakes the
+# parent anyway. Waiting is legitimate only while the state says exactly which child owns
+# which RUNNING item and was refreshed recently; a stale or unbound claim blocks as before.
+WAITING_FRESH_SECONDS = 3600  # the 1 h prompt-cache TTL (rules/long-wait-cache-ttl.md)
+
+
+def waiting_on_children(root: Path, request: dict[str, Any]) -> str | None:
+    """Detail when an active task is only waiting on declared running children, else None."""
+    try:
+        state = load_json(state_path(root, nonempty(request.get("task_id"), "request task_id")))
+        if state.get("status") not in ACTIVE_STATUSES:
+            return None
+        running_children = {
+            str(child.get("child_id")) for child in state.get("children") or []
+            if isinstance(child, dict) and child.get("status") == "RUNNING" and child.get("child_id")
+        }
+        bound = [
+            str(item.get("item_id")) for item in state.get("items") or []
+            if isinstance(item, dict) and item.get("status") == "RUNNING"
+            and str(item.get("child_id") or "") in running_children
+        ]
+        if not bound:
+            return None
+        age = dt.datetime.now(dt.timezone.utc) - utc_timestamp(state.get("updated_at"), "state.updated_at")
+        if age.total_seconds() > WAITING_FRESH_SECONDS:
+            return None
+        return f"waiting on child {', '.join(sorted(running_children))} for item {', '.join(bound)}"
+    except ValueError:
+        return None
+
+
 def reset_stop_budget(root: Path) -> None:
     try:
         (root / ".claude" / f".stop-budget-{BUDGET_NAME}").unlink(missing_ok=True)
@@ -1216,6 +1248,10 @@ def stop(event: dict[str, Any], cwd: Path | None = None) -> int:
     unresolved, deferred = assess_reconciliation_observations(root, _raw_session_id(event))
     for request in task_requests(root, session_id(event)):
         outcome, detail = assess_task(root, request, event)
+        waiting = waiting_on_children(root, request) if outcome == "INCOMPLETE" else None
+        if waiting:
+            sys.stderr.write(f"[user-task] {request['task_id']}: {waiting}\n")
+            continue
         if outcome == "INCOMPLETE":
             prompt = " ".join(str(request.get("prompt") or "").split())
             if len(prompt) > 500:
