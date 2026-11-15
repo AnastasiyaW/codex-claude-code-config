@@ -205,6 +205,21 @@ local `PASS` receipt, or is honestly `BLOCKED_EXTERNAL` with its own evidence, b
 For a homogeneous long-running collection, launch or resume one manifest-backed runner rather than
 using chat turns as the queue. The task file is continuation state, not a prose promise.
 
+### Чужое письмо или ТЗ: один пункт инвентаря на одно требование (2026-11-15)
+
+Владелица: «я просила внедрить функционал, который присылает Илюхина, а мы не внедрили — откуда стоп взялся».
+Причина: задача «внедрить письма» была разбита на два пункта — «сервер» и «остальное», и «остальное»
+(интерфейс) было названо работой дизайнера, хотя владелица этого не говорила.
+
+- Просьба внедрить письмо, ТЗ или макет: `state.json.items` содержит по пункту на каждое требование
+  источника (строка таблицы сверки), а не «сделанное» и «остальное».
+- Передать требование другому исполнителю, отложить его или не делать может только владелица. Её слова
+  записываются в пункт в поле `owner_decision`. Собственный вывод агента «это работа дизайнера» — не решение.
+- Механически: `user-task-completion-guard.py` не закрывает пункт `PASS` и задачу `COMPLETE`, если их
+  собственный текст говорит, что работа осталась («designer work», «remaining items», «не внедрено» и др.),
+  и нет `owner_decision`. Тесты: `hooks/tests/test_user_task_completion_guard.py`
+  (`test_pass_item_whose_text_says_work_remains_does_not_close` и два соседних).
+
 ### Long-running completion: supervisor, not observer
 
 If the requested acceptance condition is a finished job, dataset, migration, rollout, or other
