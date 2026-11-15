@@ -87,6 +87,38 @@ class ListFile(unittest.TestCase):
         self.assertFalse(self.ok(rm(r"D:\work\shop.sqlite"), f"удали по списку {db}"))
         self.assertTrue(self.ok(rm(r"D:\work\shop.sqlite"), f"удали по списку {db}\nD:\\work\\shop.sqlite"))
 
+    def test_dataset_pictures_pass_by_her_list(self) -> None:
+        # owner 2026-11-16: 1633 derived .jpg under D:\ювелирка-до-датасет-2048-... were refused by her list
+        pic, pic2 = "D:\\ювелирка-до-датасет-2048\\a.jpg", r"D:\jewelry-dataset\sub\b.PNG"
+        lst = self.write("pics.txt", f"{pic}\n{pic2}\n")
+        self.assertTrue(self.ok(rm(pic, pic2), f"удали по списку {lst}"))
+        self.assertFalse(self.ok(rm(pic), f"удалить по списку {lst}?"))               # a question still refuses
+
+    def test_dataset_word_frees_pictures_only(self) -> None:
+        refused = [r"D:\jewelry-dataset\index.sqlite",        # a database inside a dataset
+                   r"D:\jewelry-dataset\labels.json",         # not a picture
+                   r"D:\jewelry-dataset\sub",                 # a folder
+                   r"D:\jewelry-dataset",                     # the dataset itself
+                   r"D:\backup\a.jpg",                        # a backup path is not freed by the picture name
+                   r"D:\jewelry-dataset\backup-old\a.jpg",
+                   r"D:\jewelry-dataset\a.jpg.bak"]
+        for line in refused:
+            lst = self.write("one.txt", line + "\n")
+            ok, why = self.go(rm(line), f"удали по списку {lst}")
+            self.assertFalse(ok, line)
+            self.assertIn("irreplaceable", why, line)
+
+    def test_dataset_picture_must_not_be_a_database_or_folder(self) -> None:
+        ds = self.work / "jewelry-dataset"
+        (ds / "dir.jpg").mkdir(parents=True)
+        (ds / "real.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"0" * 64)
+        (ds / "fake.jpg").write_bytes(b"SQLite format 3\x00" + b"0" * 100)
+        lst = self.write("local.txt", "".join(f"{ds / n}\n" for n in ("dir.jpg", "real.jpg", "fake.jpg")))
+        now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+        out, why = hcg.expand_owner_list_files(f"удали по списку {lst}", now)
+        self.assertEqual(out.splitlines()[1:], [str(ds / "real.jpg")])
+        self.assertIn("irreplaceable", why)
+
 
 if __name__ == "__main__":
     unittest.main()

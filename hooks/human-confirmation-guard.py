@@ -1238,9 +1238,9 @@ _DB_FILE_RE = (
     r"(?:\.(?:gz|bz2|xz|zst|7z|zip|tar|tgz))?$|-journal$|"
     # server data directories recognised by their marker files (review R5)
     r"(?:^|/)(?:PG_VERSION|pg_wal|pg_xlog|ibdata\d*|dump\.rdb|appendonly\.aof|WiredTiger[^/]*)(?:/|$)")
-_DB_WORD_RE = (
-    r"(?:^|/)[^/]*(?:backup|бэкап|бекап|snapshot|pgdata|postgres|mysql|mariadb|mongo|redis|"
-    r"dataset|датасет)[^/]*(?:/|$)")
+_DB_WORDS = r"backup|бэкап|бекап|snapshot|pgdata|postgres|mysql|mariadb|mongo|redis"
+_WORD_RE = r"(?:^|/)[^/]*(?:%s)[^/]*(?:/|$)"
+_DB_WORD_RE = _WORD_RE % (_DB_WORDS + "|dataset|датасет")
 # DB_FILE: the file itself is a database. IRREPLACEABLE adds names that suggest one (owner path only).
 DB_FILE = re.compile(_DB_FILE_RE, re.IGNORECASE)
 IRREPLACEABLE = re.compile(_DB_FILE_RE + "|" + _DB_WORD_RE, re.IGNORECASE)
@@ -1874,12 +1874,27 @@ OWNER_LIST_MAX_BYTES = 1 << 20
 OWNER_LIST_MTIME_SLACK_S = 2.0  # host timestamp and file mtime come from two clocks of one machine
 
 
+LIST_PICTURE = re.compile(r"\.(?:jpe?g|png|webp|tiff?|bmp)$", re.IGNORECASE)
+NOT_ONLY_DATASET = re.compile(_DB_FILE_RE + "|" + _WORD_RE % _DB_WORDS, re.IGNORECASE)
+
+
+def _dataset_picture(line: str) -> bool:
+    """Owner 2026-11-16 («Поправь хук»: 1633 derived .jpg under D:\\ювелирка-до-датасет-2048 were refused
+    by the list she named): a picture is irreplaceable only by the word dataset in its path, and she
+    named the list herself. A database, backup, other file type, folder or link there stays refused."""
+    t = _norm(line).rstrip("/")
+    if not LIST_PICTURE.search(t) or NOT_ONLY_DATASET.search(t):
+        return False
+    kind = _kind(Path(t))
+    return kind == "missing" or (kind == "file" and _sqlite_header(Path(t)) is False)
+
+
 def expand_owner_list_files(prompt: str, ts: str) -> tuple[str, str]:
     """Owner 2026-11-08 («поправь хук, чтобы ему можно было дать текстовый файл со ссылками на
     удаление»): a request to delete that names a .txt file counts as pasting its lines. The file must
     exist and be unchanged since her message (mtime not after its timestamp), so a list edited after
     she pointed at it names nothing. Only absolute paths are taken; a database or backup in the file still
-    needs her own typed words. The mtime check catches an accidental edit, not deliberate forgery (the
+    needs her own typed words (a picture in a dataset folder does not, see _dataset_picture). The mtime check catches an accidental edit, not deliberate forgery (the
     boundary stated in rules/deletion-confirm-and-verify.md). Returns (prompt with the lines appended,
     why a named file or line was not used); the caller feeds that only to the path-deletion branches."""
     # «удали C:\x\notes.txt» deletes that file; only «по списку / из файла» reads it as a list
@@ -1910,7 +1925,7 @@ def expand_owner_list_files(prompt: str, ts: str) -> tuple[str, str]:
                 if not OWNER_LIST_PATH_LINE.fullmatch(ln):
                     why = f"{name}: {ln[:80]!r} is not an absolute path - lines of a list are paths only"
                     continue
-                if irreplaceable_reason(ln, True):
+                if irreplaceable_reason(ln, True) and not _dataset_picture(ln):
                     why = f"{ln}: irreplaceable - name it in the chat, not in a list file"
                     continue
                 extra.append(ln)
