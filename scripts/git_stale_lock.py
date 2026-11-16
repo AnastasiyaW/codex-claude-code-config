@@ -22,6 +22,10 @@ removed only if ALL hold:
    (OWNER_NAME_HINTS) or whose name / start time cannot be read, started before
    the lock's mtime. A process that started after the lock existed could not
    have created it; mtime >= creation, so "started <= mtime" is conservative.
+   A git CLI process (git.exe, git-remote-https.exe ...) is not an owner when its
+   cwd, -C options and GIT_* environment all resolve to git dirs disjoint from
+   this repository's (owner 2026-11-16: a hung `git diff` of the desktop app in
+   another repo blocked the hub for an hour). Anything unreadable stays an owner.
 
 A repo on a disk exposed by a Windows share (e.g. D:\\ shared to a VM) is not
 refused for that alone (owner 2026-10-15): its processes are invisible here, so
@@ -47,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -234,19 +239,118 @@ def load_trust() -> bool:
         return False
 
 
-def live_git_processes() -> list[tuple[int, str, float]]:
+# Only the git CLI and its helpers take a repository from cwd / -C / GIT_* env; GUI clients and
+# libgit2 hosts do not, so they stay possible owners whatever their cwd.
+GIT_CLI = re.compile(r"^git(-[a-z0-9-]+)?(\.exe)?$")
+# Env that relocates what git locks: the index file and the dirs holding HEAD, refs and objects.
+GIT_LOCK_ENV = ("GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY")
+
+
+def _norm(path) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _inside(a: str, b: str) -> bool:
+    return a == b or a.startswith(b.rstrip("\\/") + os.sep)
+
+
+def _with_common(gdir: Path) -> list[str] | None:
+    """A git dir plus the common dir its `commondir` file names (linked worktrees)."""
+    out = [_norm(gdir)]
+    try:
+        common = (gdir / "commondir").read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return out
+    except OSError:
+        return None
+    out.append(_norm(Path(common) if Path(common).is_absolute() else gdir / common))
+    return out
+
+
+def _discover(start: Path) -> list[str] | None:
+    """Git dirs of the nearest repository at or above `start`, as git's discovery finds it."""
+    d = start
+    while True:
+        dot = d / ".git"
+        if dot.is_dir():
+            return _with_common(dot)
+        if dot.is_file():
+            try:
+                line = dot.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                return None
+            if not line.startswith("gitdir:"):
+                return None
+            g = Path(line[len("gitdir:"):].strip())
+            return _with_common(g if g.is_absolute() else d / g)
+        if d.parent == d:
+            return None
+        d = d.parent
+
+
+def process_git_dirs(cwd: str, cmdline: list[str], env: dict) -> list[str] | None:
+    """Every git dir a git CLI process can take a lock in, or None when that cannot be proven."""
+    base = Path(cwd)
+    args, i = cmdline[1:], 0
+    while i < len(args):  # global options come before the subcommand; -C is cumulative
+        a = args[i]
+        if a == "-C" and i + 1 < len(args):
+            base, i = base / args[i + 1], i + 2
+        elif a == "-c" and i + 1 < len(args):
+            i += 2
+        elif a.startswith(("--git-dir", "--work-tree")):
+            return None
+        elif a.startswith("-"):
+            i += 1
+        else:
+            break
+    gd = env.get("GIT_DIR")
+    if gd:
+        found = _with_common(Path(gd) if Path(gd).is_absolute() else base / gd)
+    else:
+        found = _discover(base)
+    if found is None:
+        return None
+    for key in GIT_LOCK_ENV:
+        v = env.get(key)
+        if v:
+            p = Path(v) if Path(v).is_absolute() else base / v
+            found.append(_norm(p.parent if key == "GIT_INDEX_FILE" else p))
+    return found
+
+
+def is_foreign(proc_dirs: list[str] | None, repo_dirs: list[str]) -> bool:
+    """True only when the process provably works in another repository."""
+    if not proc_dirs:
+        return False
+    return not any(_inside(p, r) or _inside(r, p) for p in proc_dirs for r in repo_dirs)
+
+
+def live_git_processes(repo_dirs=None, foreign=None) -> list[tuple[int, str, float]]:
     """(pid, name, create_time) of every process that could own a git lock.
 
     psutil puts None for a field it may not read (AccessDenied) instead of
     raising. Unreadable must not look like absent: such a process counts as a
     possible owner, with start time 0.0 = older than any lock.
+    With `repo_dirs`, a git CLI process proven to work in another repository is
+    left out and, if `foreign` is a list, recorded there as (pid, name, its git dir).
     """
     import psutil
+    wanted = [_norm(d) for d in repo_dirs] if repo_dirs else None
     out = []
     for p in psutil.process_iter(["pid", "name", "create_time"]):
         name = p.info.get("name")
         ct = p.info.get("create_time")
         if name is None or any(h in name.lower() for h in OWNER_NAME_HINTS):
+            if wanted and name and GIT_CLI.match(name.lower()):
+                try:
+                    dirs = process_git_dirs(p.cwd(), p.cmdline(), p.environ())
+                except (psutil.Error, OSError):
+                    dirs = None
+                if is_foreign(dirs, wanted):
+                    if foreign is not None:
+                        foreign.append((p.info["pid"], name.lower(), dirs[0]))
+                    continue
             out.append((p.info["pid"], (name or "<unreadable>").lower(), float(ct) if ct else 0.0))
     return out
 
@@ -305,7 +409,7 @@ def _real_hidden(dirs: list[Path]) -> list[str]:
     return [h for d in dirs for h in invisible_owner_hosts(d, trust_admin_shares=trust)]
 
 
-def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
+def run(repo: Path, remove: bool, min_age: float, procs_fn=None,
         hidden_fn=_real_hidden) -> int:
     dirs = git_dirs(repo)
     if not dirs:
@@ -336,11 +440,14 @@ def run(repo: Path, remove: bool, min_age: float, procs_fn=live_git_processes,
     if hidden:
         min_age = max(min_age, SHARE_MIN_AGE)
         print(f"NOTE: {hidden} - a remote owner is not visible here; age margin {min_age:.0f}s")
+    foreign: list = []
     try:
-        procs = procs_fn()
+        procs = procs_fn() if procs_fn else live_git_processes(repo_dirs=dirs, foreign=foreign)
     except Exception as exc:  # cannot prove absence of an owner -> not green
         print(f"UNKNOWN: cannot enumerate processes: {exc!r}")
         return 2
+    if foreign:
+        print(f"NOTE: git processes working in other repositories, not owners: {foreign[:5]}")
 
     now = time.time()
     verdict = 0
@@ -473,6 +580,60 @@ def self_test() -> int:
             raise Unverifiable("registry denied")
         if run(repo, True, 600, no_procs, cannot_enumerate) != 2 or not lock.exists():
             failures.append("share enumeration failure was not UNKNOWN")
+
+        # which repository a git process works in (the hub keeps other repos under repos/)
+        lock.unlink()
+        rdirs = [_norm(d) for d in git_dirs(repo)]
+        other = repo / "repos" / "x"
+        other.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+        wt = Path(td) / "wt"
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(wt)], check=True)
+        norepo = Path(td) / "norepo"
+        norepo.mkdir()
+        shadow = Path(td) / "shadow"  # an admin dir outside the repo whose commondir names it
+        shadow.mkdir()
+        (shadow / "commondir").write_text(str(repo / ".git"), encoding="utf-8")
+        g = ["git.exe"]
+        attribution = [  # (cwd, cmdline, env, foreign expected, case)
+            (other, g + ["status"], {}, True, "cwd in a nested repo"),
+            (other / "deep" / "dir", g + ["diff"], {}, True, "cwd below a nested repo"),
+            (repo, g + ["status"], {}, False, "cwd in the lock's repo"),
+            (wt, g + ["status"], {}, False, "cwd in a linked worktree of the lock's repo"),
+            (other, g + ["-C", str(repo), "status"], {}, False, "-C into the lock's repo"),
+            (other, g + ["--git-dir=" + str(repo / ".git"), "status"], {}, False, "--git-dir is not followed"),
+            (other, g + ["status"], {"GIT_DIR": str(repo / ".git")}, False, "GIT_DIR into the lock's repo"),
+            (other, g + ["status"], {"GIT_INDEX_FILE": str(repo / ".git" / "index")}, False,
+             "GIT_INDEX_FILE into the lock's repo"),
+            (other, g + ["status"], {"GIT_COMMON_DIR": str(repo / ".git")}, False,
+             "GIT_COMMON_DIR into the lock's repo"),
+            (norepo, g + ["status"], {}, False, "no repository found"),
+            (other, g + ["status"], {"GIT_DIR": str(shadow)}, False,
+             "GIT_DIR outside whose commondir is the lock's repo"),
+        ]
+        for cwd_, cmd_, env_, want, case in attribution:
+            if is_foreign(process_git_dirs(str(cwd_), cmd_, env_), rdirs) != want:
+                failures.append(f"attribution wrong: {case}")
+
+        import psutil
+        here = subprocess.Popen(["git", "hash-object", "--stdin"], cwd=other,
+                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+        there = subprocess.Popen(["git", "-C", str(repo), "hash-object", "--stdin"], cwd=other,
+                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+        try:
+            psutil.Process(here.pid).cwd()  # both are up before the scan
+            psutil.Process(there.pid).cwd()
+            seen: list = []
+            owners = {pid for pid, _, _ in live_git_processes(repo_dirs=git_dirs(repo), foreign=seen)}
+            if here.pid in owners or here.pid not in {pid for pid, _, _ in seen}:
+                failures.append("a live git in another repo was counted as an owner")
+            if there.pid not in owners:
+                failures.append("a live git with -C into the lock's repo was not counted as an owner")
+        finally:
+            for p in (here, there):
+                p.communicate(b"", timeout=60)
 
     if not _covers("D:\\", "D:/x/y") or _covers("C:\\HomeShare", "C:/HomeShareX/y"):
         failures.append("share prefix match wrong (drive root / sibling name)")
