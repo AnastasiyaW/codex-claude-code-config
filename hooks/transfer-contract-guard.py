@@ -42,6 +42,17 @@ except ImportError as error:  # pragma: no cover - deployment fault, not logic
           f"quoted and commented mentions.", file=sys.stderr)
     _executable_text = None
 
+# The backup swap is recognized by the same function human-confirmation-guard uses. With a private
+# copy here the two disagreed: this guard wanted a contract marker after the swap, that guard
+# allows nothing after it, and no form of the swap passed both (2026-11-16). Missing module:
+# announced, and every swap needs a contract again (the strict side).
+try:
+    from backup_swap import backed_up_moves as _backed_up_moves  # noqa: E402
+except ImportError as error:  # pragma: no cover - deployment fault, not logic
+    print(f"[transfer-contract-guard] backup_swap is missing ({error}); "
+          f"a backup swap will need a transfer contract.", file=sys.stderr)
+    _backed_up_moves = None
+
 
 # Transfer records live in one shared directory, but a Stop gate belongs to one
 # session. Without an owner, session A is blocked by session B's in-flight
@@ -348,6 +359,29 @@ def _local_copy_into_temp(command: str) -> bool:
     return found
 
 
+_QUOTED = re.compile(r"'([^']*)'|\"([^\"\\]*)\"")
+
+
+def _only_backup_swaps(command: str) -> bool:
+    """True when every copy in the command is the backup step of an exact backup swap.
+
+    `cp -p f f.bak` inside `test ! -e f.bak && cp -p f f.bak && mv f.new f` keeps the old content
+    next to the file and moves nothing between places, so it is no transfer. The swap may be the
+    whole command or one quoted argument (`ssh host '<swap>'`, `bash -c '<swap>'`); the rest of the
+    command is judged as before, so a real copy beside the swap still needs a contract."""
+    if _backed_up_moves is None:
+        return False
+    if _backed_up_moves(command):
+        return True
+    rest, found = command, False
+    for match in _QUOTED.finditer(command):
+        body = match.group(1) if match.group(1) is not None else match.group(2)
+        if _backed_up_moves(body):
+            rest = rest.replace(match.group(0), "SWAP", 1)
+            found = True
+    return found and _transfer_kind(rest) is None
+
+
 def _nonempty(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
@@ -459,6 +493,9 @@ def _pre(event: dict[str, Any]) -> None:
     if marker is None and _local_copy_into_temp(command):
         log("INFO", "transfer_contract", "allowed", "local-copy-into-temp", command[:200])
         allow()
+    if marker is None and _only_backup_swaps(command):
+        log("INFO", "transfer_contract", "allowed", "backup-swap", command[:200])
+        allow()
     if marker is None:
         block(
             "Transfer command detected but no durable contract was provided. "
@@ -520,7 +557,8 @@ def _post(event: dict[str, Any]) -> None:
         allow()
     command = _text(_tool_input(event).get("command"))
     detected = _transfer_kind(command)
-    if detected is None or (not TRANSFER_MARKER.search(command) and _local_copy_into_temp(command)):
+    if detected is None or (not TRANSFER_MARKER.search(command)
+                            and (_local_copy_into_temp(command) or _only_backup_swaps(command))):
         allow()
     response = event.get("tool_response") or {}
     if not isinstance(response, dict):
