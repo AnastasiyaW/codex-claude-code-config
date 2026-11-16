@@ -54,9 +54,20 @@ def read_event() -> dict:
     the transfer guard exit 0 without running a single check, and the run read
     as proof that the gate passed. Empty stdin stays silent: several hooks are
     invoked that way on purpose.
+
+    The payload is read as bytes and decoded as UTF-8, never through the text
+    layer of `sys.stdin`: on Windows that layer is the ANSI code page (cp1251
+    on this machine), so an event naming a Cyrillic path arrives as mojibake --
+    `D:\\Проекты\\сайт` became `D:\\Проекты\\СЃР°Р№С‚`, and every guard then judges
+    a directory that does not exist. Measured 2026-11-16: publish-bypass-guard
+    could not resolve the repository behind a push from such a worktree and
+    blocked it as `unknown-repo` (the same stall hit two other worktrees on
+    2026-11-14), so those projects could not be pushed at all.
     """
     try:
-        raw = sys.stdin.read().strip()
+        stream = getattr(sys.stdin, "buffer", None)
+        raw = (stream.read().decode("utf-8", "replace") if stream is not None
+               else sys.stdin.read()).strip()
         if not raw:
             return {}
         raw = raw.lstrip("\ufeff")
