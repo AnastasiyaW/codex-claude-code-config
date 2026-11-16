@@ -40,6 +40,10 @@ class ApprovalLogRead(unittest.TestCase):
             f"tail {LOG} & python x.py",
             f"tail {LOG}; python ~/.claude/claude-code-config/scripts/delete_from_list.py l.txt --sha abc",
             f"tail {LOG}\npython x.py",
+            f"./cat {LOG}",
+            f"/tmp/evil/cat {LOG}",
+            f"C:/Windows/System32/cat {LOG}",
+            f"cat {LOG} | ./wc -l",
         ):
             with self.subTest(cmd=cmd):
                 allowed, hit = hcg.decide(cmd)

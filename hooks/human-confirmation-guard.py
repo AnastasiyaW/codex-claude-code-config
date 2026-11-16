@@ -1652,7 +1652,8 @@ def _read_only_log_view(cmd: str) -> bool:
             argv = shlex.split(segment.replace("\\", "/"), posix=True)
         except ValueError:
             return False
-        if argv and Path(argv[0]).name.lower().removesuffix(".exe") not in LOG_READERS:
+        # A bare name only: `./cat` or `/tmp/x/cat` is whatever program sits there (review 2026-11-16).
+        if argv and argv[0].lower().removesuffix(".exe") not in LOG_READERS:
             return False
     return True
 
