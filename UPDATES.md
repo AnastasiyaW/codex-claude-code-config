@@ -4,6 +4,31 @@ Changelog for codex-claude-code-config. Newest first.
 
 ---
 
+## 2026-11-16 (the push gate works on Cyrillic paths, and Agent B answers in JSON)
+
+- `hooks/safety_common.py` `read_event()` reads stdin as bytes and decodes UTF-8
+  instead of going through the text layer. On Windows that layer is the ANSI code
+  page (cp1251 here), so every event naming a Cyrillic path arrived as mojibake:
+  `D:\Проекты\сайт` → `D:\Проекты\СЃР°Р№С‚`. Each guard then judged a directory that
+  does not exist; publish-bypass-guard could not resolve the repository behind a
+  push from such a worktree and blocked it as `unknown-repo` (2026-11-16, and the
+  same stall on two other worktrees 2026-11-14), which made those projects
+  unpushable.
+- `hooks/pre-push-public-repo-scan.py` sends the answer shape in the review
+  payload (`review_contract`), not only in `--system-prompt`. Measured the same
+  day on one diff, one key, one call: with the contract only in the system prompt
+  the reviewer answered prose (`**Verdict: ALLOW.** …`), `parse_verdict` found no
+  object and the push was refused as "Agent B unavailable" with nothing wrong in
+  the diff; with the contract in the payload it answered the one-line object. The
+  contract is our own field, never the untrusted `git_diff`, so "judge only
+  git_diff" is unchanged. Three checks in `--self-test` pin it.
+- `hooks/tests/test_read_event_encoding.py` pins it: the payload survives a
+  cp1251 text layer (emulated with `PYTHONIOENCODING`, so CI proves the same),
+  empty and malformed stdin stay silent, the BOM is still stripped. In the
+  regression runner; the suite fails against the previous `sys.stdin.read()`.
+
+---
+
 ## 2026-10-28 (plugin ships publish-bypass-guard)
 
 - The `harness` plugin now also registers `hooks/publish-bypass-guard.py`

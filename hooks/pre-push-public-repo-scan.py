@@ -1136,6 +1136,17 @@ def agent_b_review(diff: str) -> tuple[dict | None, str]:
     return agent_b_gemini(diff), "Gemini"
 
 
+# The answer shape lives in the payload as well as in --system-prompt. Measured 2026-11-16 on the
+# same diff, same key, same call: with the contract only in the system prompt Opus 5.5 answered
+# prose ("**Verdict: ALLOW.** ..."), parse_verdict found no object, and the push was refused as
+# "Agent B unavailable" though nothing was wrong with the diff; with the contract repeated here it
+# answered the one-line object both times. It is our own field, never the untrusted `git_diff`, so
+# the "judge only git_diff" rule is untouched.
+OUTPUT_CONTRACT = ('Answer with EXACTLY ONE LINE of JSON and nothing else: '
+                   '{"verdict": "SAFE" | "BLOCK", "reason": "brief one-line"}. '
+                   'No prose, no markdown, no headings.')
+
+
 def _review_prompt(diff: str) -> str | None:
     diff, masked = mask_labelled_hashes(diff)
     if masked:
@@ -1156,7 +1167,8 @@ def _review_prompt(diff: str) -> str | None:
             + ". Internal names appearing in them are the list itself, not a leak. "
               "Still BLOCK on any credential found there.\n"
         )
-    return json.dumps({"review_contract": exempt_note.strip(), "git_diff": diff}, ensure_ascii=False)
+    contract = " ".join(part for part in (OUTPUT_CONTRACT, exempt_note.strip()) if part)
+    return json.dumps({"review_contract": contract, "git_diff": diff}, ensure_ascii=False)
 
 
 # Owner decision 2026-11-11: the main login hit its weekly limit, a second login was logged out and
@@ -1590,6 +1602,14 @@ def self_test() -> int:
         check("unknown verdict is no verdict", parse_verdict('{"verdict": "MAYBE", "reason": "x"}'), None)
         check("empty reason is no verdict", parse_verdict('{"verdict": "SAFE", "reason": ""}'), None)
         check("no JSON is no verdict", parse_verdict("looks fine to me"), None)
+
+        print("review payload:")
+        payload = json.loads(_review_prompt("diff --git a/x b/x\n+print(1)\n"))
+        check("the answer shape travels with the payload, not only in the system prompt",
+              payload["review_contract"].startswith("Answer with EXACTLY ONE LINE of JSON"), True)
+        check("the diff stays its own field", payload["git_diff"].endswith("+print(1)\n"), True)
+        check("the contract is not mixed into the reviewed text",
+              "EXACTLY ONE LINE" in payload["git_diff"], False)
 
         # every login out of quota -> the API-credit keys are tried, without the desktop entrypoint
         global fallback_config_dirs, fallback_api_keys
