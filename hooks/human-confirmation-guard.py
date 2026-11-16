@@ -1505,7 +1505,9 @@ def irreplaceable_reason(target: str, recursive: bool) -> str | None:
 
 LIST_MENTION = re.compile(r"(?<![\w])(?:delete|relocate)_from_list|deletion-approvals", re.IGNORECASE)
 # a .py path built by a glob, a variable or a substitution (review rounds 10-11)
-GLOB_SCRIPT = re.compile(r"\b(?:python3?|py)(?:\.exe)?[\"']?\s+[\"']?[^\s\"']*[*?\[\]$%{}`][^\s\"']*\.py\b",
+# (?<![.\w]): the `.py` ending of the previous argument is not the `py` launcher (owner 2026-11-16: a pytest
+# run over `a.py b_*.py` was refused as a script given by a glob)
+GLOB_SCRIPT = re.compile(r"(?<![.\w])(?:python3?|py)(?:\.exe)?[\"']?\s+[\"']?[^\s\"']*[*?\[\]$%{}`][^\s\"']*\.py\b",
                          re.IGNORECASE)
 GIT_PLAIN = {"add", "diff", "log", "status", "show", "commit", "blame", "restore", "stash"}
 INLINE_PY_DELETE = re.compile(
@@ -1632,8 +1634,34 @@ def _timeout_forced(args: list[str]) -> bool:
     return False
 
 
+LIST_SCRIPT_NAME = re.compile(r"(?<![\w])(?:delete|relocate)_from_list", re.IGNORECASE)
+# Programs that cannot write a file from these arguments (no awk/sed/sort/uniq/tee: each can).
+LOG_READERS = {"cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "cut", "jq", "ls", "stat", "cd", "echo"}
+
+
+def _read_only_log_view(cmd: str) -> bool:
+    """Reading the approval log (`tail ... deletion-approvals.jsonl | cut`) writes nothing, so it is not a
+    list run. Owner 2026-11-16 («проверь хук»): a plain tail of the log was refused as a delete."""
+    raw = cmd.strip()
+    if LIST_SCRIPT_NAME.search(raw) or LIST_SCRIPT_NAME.search(re.sub(r"[\"'`\\]", "", raw)):
+        return False
+    if re.search(r"[`$<>\n\r{}()]", raw) or re.search(r"&(?!&)", raw.replace("&&", "")):
+        return False
+    for segment in re.split(r"\|\||&&|[|;]", raw):
+        try:
+            argv = shlex.split(segment.replace("\\", "/"), posix=True)
+        except ValueError:
+            return False
+        if argv and Path(argv[0]).name.lower().removesuffix(".exe") not in LOG_READERS:
+            return False
+    return True
+
+
 def _benign_list_mention(cmd: str) -> bool:
-    """A strict read-only `python <real script> <list>.txt --show`, or a one-line git command."""
+    """A strict read-only `python <real script> <list>.txt --show`, a one-line git command, or a
+    read-only view of the approval log."""
+    if _read_only_log_view(cmd):
+        return True
     raw = cmd.strip()
     if LIST_CALL_FORBIDDEN.search(raw) or "&" in raw:  # review round 11: `git status & <run>`
         return False
