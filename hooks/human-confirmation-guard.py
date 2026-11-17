@@ -873,9 +873,26 @@ IMAGE_INTENT = re.compile(
 IMAGE_MENTION = re.compile(r"образ|\bimages?\b", re.IGNORECASE)
 IMAGE_REF = r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})"
 # Read-only commands allowed beside an image removal; anything else (sh, tee, python) -> refuse.
-IMAGE_RM_COMPANION = re.compile(
-    r"(?:grep(?:\s+-[A-Za-z]+)*\s+[\w.:-]+|head(?:\s+-n?\s*\d+)?|tail(?:\s+-n?\s*\d+)?|wc\s+-l|"
-    r"df\s+-h(?:\s+/)?|docker\s+(?:images|ps|system\s+df)(?:\s+-a)?)\s*;?")
+# Owner 2026-11-17 ("да, поправь хук"): activity-journal-guard demands the journal call in the same
+# command as the change. The journal scripts named in the local config (`journal_log_scripts`, absolute
+# paths; private, so not in this file) may run beside an image removal as `python3 <script> log <project>
+# "text" ["text"]` with plain quoted text (no $ ` \ inside) and a `|| true` tail. No config -> no such companion.
+JOURNAL_LOG_SCRIPTS = tuple(
+    c for c in (_CFG.get("journal_log_scripts") or []) if isinstance(c, str) and re.fullmatch(r"/[A-Za-z0-9_./-]+", c))
+
+
+def _image_rm_companion(journal_scripts: tuple[str, ...]) -> re.Pattern:
+    journal = ""
+    if journal_scripts:
+        journal = (r"|(?:CLAUDE_SESSION=[A-Za-z0-9_-]{1,64}\s+)?python3\s+(?:"
+                   + "|".join(re.escape(s) for s in journal_scripts)
+                   + r")\s+log\s+[A-Za-z0-9_.-]+(?:\s+\"[^\"$`\\]*\"){1,2}(?:\s+2>/dev/null)?|true")
+    return re.compile(
+        r"(?:grep(?:\s+-[A-Za-z]+)*\s+[\w.:-]+|head(?:\s+-n?\s*\d+)?|tail(?:\s+-n?\s*\d+)?|wc\s+-l|"
+        r"df\s+-h(?:\s+/)?|docker\s+(?:images|ps|system\s+df)(?:\s+-a)?" + journal + r")\s*;?")
+
+
+IMAGE_RM_COMPANION = _image_rm_companion(JOURNAL_LOG_SCRIPTS)
 # A plain `ssh host 'cmd'` / `ssh host "cmd"`: no options, host of safe characters only.
 # Only options that cannot run anything locally are allowed (no ProxyCommand/-F/-J/Include/Match).
 SSH_PLAIN = re.compile(r"ssh\s+(?:-o\s+(?:BatchMode=(?:yes|no)|ConnectTimeout=\d+|ServerAliveInterval=\d+|"
