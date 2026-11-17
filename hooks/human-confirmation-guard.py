@@ -73,6 +73,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+# One recognizer of the backup swap for every guard that judges it (transfer-contract-guard too):
+# two copies disagreed once and no form of the swap passed both guards (2026-11-16).
+from backup_swap import (  # noqa: E402
+    BACKUP_COPY_FLAGS,
+    MOVE_FLAGS,
+    PLAIN_WORD,
+    _norm_name,
+    backed_up_moves,
+    move_overwrite_targets,
+    split_steps,
+)
 from safety_common import (  # noqa: E402
     GIT_FORCE_BRANCH_DELETE_PATTERNS,
     allow,
@@ -461,38 +472,10 @@ def delete_targets(segment: str) -> list[str] | None:
     return targets
 
 
-MOVE_FLAGS = {"-f", "--force", "-T", "--no-target-directory", "-v", "--verbose"}
 
 
-def move_overwrite_targets(segment: str) -> list[str] | None:
-    """Destination of `mv [-f|-T|-v] SRC DST`: the file a replacement overwrites (owner 2026-10-11).
-    None for any other shape (several sources, -t, unknown flags), which stays unapproved."""
-    # simplification: POSIX mv only; a Move-Item replacement still needs an explicit delete request
-    try:
-        toks = [t.strip("'\"") for t in shlex.split(segment, posix=False)]
-    except ValueError:
-        return None
-    if not toks or toks[0].rsplit("/", 1)[-1] != "mv":
-        return None
-    flags = [t for t in toks[1:] if t.startswith("-")]
-    operands = [t for t in toks[1:] if not t.startswith("-")]
-    if any(f not in MOVE_FLAGS for f in flags) or len(operands) != 2:
-        return None
-    return [operands[1]]
 
 
-# Owner 2026-10-12 ("поправь хук, чтобы ты такое делала сама" after a deploy swap was refused):
-# `test ! -e f.bak && cp -p f f.bak && mv f.new f` loses nothing - the old content survives in a
-# backup that provably did not exist before (review 2026-10-12: cp onto an existing file destroys
-# it) - so that mv is not a deletion. && only (each step runs only if the previous succeeded);
-# plain names only (no glob, variable, quote or redirect). The three steps must be adjacent: any
-# step between them (cd, pushd, touch, a redirect) could move or rewrite what the check proved, so
-# none is allowed. Approval is by step position, so an identical second mv later in the command is
-# judged on its own (review 2026-10-12).
-# No -a/-r: a directory (or a symlink to one) is then refused by cp and && stops the chain;
-# `cp -a link` would copy the link, not the files behind it (review 2026-10-12).
-BACKUP_COPY_FLAGS = {"-p", "--preserve"}
-PLAIN_WORD = re.compile(r"[A-Za-z0-9_./~+-]+")
 
 
 # review 2026-10-12: `(mv n f)`, `{ mv n f; }`, `sudo -u root mv`, `sudo -n mv`, `\mv`, `/bin/mv`,
@@ -523,54 +506,6 @@ def command_core(seg: str) -> str:
         else:
             return seg  # the command is something else (`git mv`, `grep mv`)
     return seg
-
-
-def _norm_name(path: str) -> str:
-    return os.path.normpath(path.replace("\\", "/")).replace("\\", "/")
-
-
-def backed_up_moves(text: str) -> set[int]:
-    """Index of the mv step when the WHOLE of text is `[cd DIR &&] test ! -e BAK && cp -p DST BAK
-    && mv NEW DST` (or `[ ! -e BAK ]`), else nothing.
-
-    Whole-command shape, by review 2026-10-12: a step after the mv could clobber BAK without
-    naming it (`> ?`, `> B`, $'\\x62'); a step before the test could redefine `test`/`cp` (a shell
-    function, PATH) so no backup is made. Only a plain `cd` may come first."""
-    steps = [(seg.split(), sep) for seg, sep in split_steps(executable_text(text))]
-    while steps and not steps[-1][0]:
-        steps.pop()
-    mv_index = len(steps) - 1  # index in decide()'s segment list (same split)
-    if len(steps) == 4 and len(steps[0][0]) == 2 and steps[0][0][0] == "cd" \
-            and PLAIN_WORD.fullmatch(steps[0][0][1]) and steps[1][1] == "&&":
-        steps = steps[1:]
-    if len(steps) != 3:
-        return set()
-    (test, _), (cp, cp_sep), (mv, mv_sep) = steps
-    if cp_sep != "&&" or mv_sep != "&&" or not all(PLAIN_WORD.fullmatch(t) for t in cp + mv):
-        return set()  # also rejects > < $ * quotes
-    if test[:3] == ["test", "!", "-e"] and len(test) == 4:
-        bak = test[3]
-    elif test[:3] == ["[", "!", "-e"] and len(test) == 5 and test[4] == "]":
-        bak = test[3]
-    else:
-        return set()
-    cp_ops = [t for t in cp[1:] if not t.startswith("-")]
-    mv_ops = [t for t in mv[1:] if not t.startswith("-")]
-    if cp[0].rsplit("/", 1)[-1] != "cp" or len(cp_ops) != 2 \
-            or any(t not in BACKUP_COPY_FLAGS for t in cp[1:] if t.startswith("-")):
-        return set()
-    dst = move_overwrite_targets(" ".join(mv))  # it already accepts /bin/mv
-    if mv[0].rsplit("/", 1)[-1] != "mv" or not dst or len(mv_ops) != 2:
-        return set()
-    # Equalities that GRANT the exemption compare raw strings: normpath would make `x/../f` equal
-    # `f` although x may be a symlink, and on a case-sensitive disk `B` is not `b`. Differences it
-    # REQUIRES are normalised and case-folded, the cautious direction (review rounds 4-5).
-    src, new = cp_ops[0], mv_ops[0]
-    if cp_ops[1] != bak or dst[0] != src:
-        return set()
-    if _norm_name(new).casefold() in (_norm_name(bak).casefold(), _norm_name(src).casefold()):
-        return set()
-    return {mv_index}
 
 
 def is_ephemeral_docker_rm(segment: str) -> bool:
@@ -756,44 +691,6 @@ def split_segments(text: str) -> list[str]:
     return [seg for seg, _ in split_steps(text)]
 
 
-def split_steps(text: str) -> list[tuple[str, str]]:
-    """split_segments with the separator that preceded each segment ("" for the first)."""
-    out: list[tuple[str, str]] = []
-    buf: list[str] = []
-    sep = ""
-    quote = None
-    i = 0
-    while i < len(text):
-        c = text[i]
-        if c == "\\" and quote != "'" and i + 1 < len(text):
-            buf.append(text[i:i + 2])  # \" \; \<newline> are literal to the shell (review 2026-10-06)
-            i += 2
-            continue
-        if quote:
-            buf.append(c)
-            if c == quote:
-                quote = None
-        elif c in "'\"":
-            quote = c
-            buf.append(c)
-        elif text.startswith(("&&", "||"), i):
-            out.append(("".join(buf), sep))
-            buf, sep = [], text[i:i + 2]
-            i += 2
-            continue
-        elif c in ";|\n" or (c == "&" and text[i - 1:i] not in (">", "<")
-                               and text[i + 1:i + 2] != ">"):
-            # a lone & (background) ends a command too; >& <& &> are redirections (review 2026-10-28:
-            # `ssh h rm F&rm F` ran the second rm locally while it was judged as remote)
-            out.append(("".join(buf), sep))
-            buf, sep = [], c
-        else:
-            buf.append(c)
-        i += 1
-    out.append(("".join(buf), sep))
-    return out
-
-
 def substitutions(text: str) -> list[str]:
     """Bodies of $(...) and `...` outside single quotes: they execute (review 2026-10-06)."""
     out: list[str] = []
@@ -976,9 +873,26 @@ IMAGE_INTENT = re.compile(
 IMAGE_MENTION = re.compile(r"образ|\bimages?\b", re.IGNORECASE)
 IMAGE_REF = r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})"
 # Read-only commands allowed beside an image removal; anything else (sh, tee, python) -> refuse.
-IMAGE_RM_COMPANION = re.compile(
-    r"(?:grep(?:\s+-[A-Za-z]+)*\s+[\w.:-]+|head(?:\s+-n?\s*\d+)?|tail(?:\s+-n?\s*\d+)?|wc\s+-l|"
-    r"df\s+-h(?:\s+/)?|docker\s+(?:images|ps|system\s+df)(?:\s+-a)?)\s*;?")
+# Owner 2026-11-17 ("да, поправь хук"): activity-journal-guard demands the journal call in the same
+# command as the change. The journal scripts named in the local config (`journal_log_scripts`, absolute
+# paths; private, so not in this file) may run beside an image removal as `python3 <script> log <project>
+# "text" ["text"]` with plain quoted text (no $ ` \ inside) and a `|| true` tail. No config -> no such companion.
+JOURNAL_LOG_SCRIPTS = tuple(
+    c for c in (_CFG.get("journal_log_scripts") or []) if isinstance(c, str) and re.fullmatch(r"/[A-Za-z0-9_./-]+", c))
+
+
+def _image_rm_companion(journal_scripts: tuple[str, ...]) -> re.Pattern:
+    journal = ""
+    if journal_scripts:
+        journal = (r"|(?:CLAUDE_SESSION=[A-Za-z0-9_-]{1,64}\s+)?python3\s+(?:"
+                   + "|".join(re.escape(s) for s in journal_scripts)
+                   + r")\s+log\s+[A-Za-z0-9_.-]+(?:\s+\"[^\"$`\\]*\"){1,2}(?:\s+2>/dev/null)?|true")
+    return re.compile(
+        r"(?:grep(?:\s+-[A-Za-z]+)*\s+[\w.:-]+|head(?:\s+-n?\s*\d+)?|tail(?:\s+-n?\s*\d+)?|wc\s+-l|"
+        r"df\s+-h(?:\s+/)?|docker\s+(?:images|ps|system\s+df)(?:\s+-a)?" + journal + r")\s*;?")
+
+
+IMAGE_RM_COMPANION = _image_rm_companion(JOURNAL_LOG_SCRIPTS)
 # A plain `ssh host 'cmd'` / `ssh host "cmd"`: no options, host of safe characters only.
 # Only options that cannot run anything locally are allowed (no ProxyCommand/-F/-J/Include/Match).
 SSH_PLAIN = re.compile(r"ssh\s+(?:-o\s+(?:BatchMode=(?:yes|no)|ConnectTimeout=\d+|ServerAliveInterval=\d+|"
@@ -1238,9 +1152,9 @@ _DB_FILE_RE = (
     r"(?:\.(?:gz|bz2|xz|zst|7z|zip|tar|tgz))?$|-journal$|"
     # server data directories recognised by their marker files (review R5)
     r"(?:^|/)(?:PG_VERSION|pg_wal|pg_xlog|ibdata\d*|dump\.rdb|appendonly\.aof|WiredTiger[^/]*)(?:/|$)")
-_DB_WORD_RE = (
-    r"(?:^|/)[^/]*(?:backup|бэкап|бекап|snapshot|pgdata|postgres|mysql|mariadb|mongo|redis|"
-    r"dataset|датасет)[^/]*(?:/|$)")
+_DB_WORDS = r"backup|бэкап|бекап|snapshot|pgdata|postgres|mysql|mariadb|mongo|redis"
+_WORD_RE = r"(?:^|/)[^/]*(?:%s)[^/]*(?:/|$)"
+_DB_WORD_RE = _WORD_RE % (_DB_WORDS + "|dataset|датасет")
 # DB_FILE: the file itself is a database. IRREPLACEABLE adds names that suggest one (owner path only).
 DB_FILE = re.compile(_DB_FILE_RE, re.IGNORECASE)
 IRREPLACEABLE = re.compile(_DB_FILE_RE + "|" + _DB_WORD_RE, re.IGNORECASE)
@@ -1505,7 +1419,9 @@ def irreplaceable_reason(target: str, recursive: bool) -> str | None:
 
 LIST_MENTION = re.compile(r"(?<![\w])(?:delete|relocate)_from_list|deletion-approvals", re.IGNORECASE)
 # a .py path built by a glob, a variable or a substitution (review rounds 10-11)
-GLOB_SCRIPT = re.compile(r"\b(?:python3?|py)(?:\.exe)?[\"']?\s+[\"']?[^\s\"']*[*?\[\]$%{}`][^\s\"']*\.py\b",
+# (?<![.\w]): the `.py` ending of the previous argument is not the `py` launcher (owner 2026-11-16: a pytest
+# run over `a.py b_*.py` was refused as a script given by a glob)
+GLOB_SCRIPT = re.compile(r"(?<![.\w])(?:python3?|py)(?:\.exe)?[\"']?\s+[\"']?[^\s\"']*[*?\[\]$%{}`][^\s\"']*\.py\b",
                          re.IGNORECASE)
 GIT_PLAIN = {"add", "diff", "log", "status", "show", "commit", "blame", "restore", "stash"}
 INLINE_PY_DELETE = re.compile(
@@ -1632,8 +1548,35 @@ def _timeout_forced(args: list[str]) -> bool:
     return False
 
 
+LIST_SCRIPT_NAME = re.compile(r"(?<![\w])(?:delete|relocate)_from_list", re.IGNORECASE)
+# Programs that cannot write a file from these arguments (no awk/sed/sort/uniq/tee: each can).
+LOG_READERS = {"cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "cut", "jq", "ls", "stat", "cd", "echo"}
+
+
+def _read_only_log_view(cmd: str) -> bool:
+    """Reading the approval log (`tail ... deletion-approvals.jsonl | cut`) writes nothing, so it is not a
+    list run. Owner 2026-11-16 («проверь хук»): a plain tail of the log was refused as a delete."""
+    raw = cmd.strip()
+    if LIST_SCRIPT_NAME.search(raw) or LIST_SCRIPT_NAME.search(re.sub(r"[\"'`\\]", "", raw)):
+        return False
+    if re.search(r"[`$<>\n\r{}()]", raw) or re.search(r"&(?!&)", raw.replace("&&", "")):
+        return False
+    for segment in re.split(r"\|\||&&|[|;]", raw):
+        try:
+            argv = shlex.split(segment.replace("\\", "/"), posix=True)
+        except ValueError:
+            return False
+        # A bare name only: `./cat` or `/tmp/x/cat` is whatever program sits there (review 2026-11-16).
+        if argv and argv[0].lower().removesuffix(".exe") not in LOG_READERS:
+            return False
+    return True
+
+
 def _benign_list_mention(cmd: str) -> bool:
-    """A strict read-only `python <real script> <list>.txt --show`, or a one-line git command."""
+    """A strict read-only `python <real script> <list>.txt --show`, a one-line git command, or a
+    read-only view of the approval log."""
+    if _read_only_log_view(cmd):
+        return True
     raw = cmd.strip()
     if LIST_CALL_FORBIDDEN.search(raw) or "&" in raw:  # review round 11: `git status & <run>`
         return False
@@ -1874,12 +1817,27 @@ OWNER_LIST_MAX_BYTES = 1 << 20
 OWNER_LIST_MTIME_SLACK_S = 2.0  # host timestamp and file mtime come from two clocks of one machine
 
 
+LIST_PICTURE = re.compile(r"\.(?:jpe?g|png|webp|tiff?|bmp)$", re.IGNORECASE)
+NOT_ONLY_DATASET = re.compile(_DB_FILE_RE + "|" + _WORD_RE % _DB_WORDS, re.IGNORECASE)
+
+
+def _dataset_picture(line: str) -> bool:
+    """Owner 2026-11-16 («Поправь хук»: 1633 derived .jpg under D:\\ювелирка-до-датасет-2048 were refused
+    by the list she named): a picture is irreplaceable only by the word dataset in its path, and she
+    named the list herself. A database, backup, other file type, folder or link there stays refused."""
+    t = _norm(line).rstrip("/")
+    if not LIST_PICTURE.search(t) or NOT_ONLY_DATASET.search(t):
+        return False
+    kind = _kind(Path(t))
+    return kind == "missing" or (kind == "file" and _sqlite_header(Path(t)) is False)
+
+
 def expand_owner_list_files(prompt: str, ts: str) -> tuple[str, str]:
     """Owner 2026-11-08 («поправь хук, чтобы ему можно было дать текстовый файл со ссылками на
     удаление»): a request to delete that names a .txt file counts as pasting its lines. The file must
     exist and be unchanged since her message (mtime not after its timestamp), so a list edited after
     she pointed at it names nothing. Only absolute paths are taken; a database or backup in the file still
-    needs her own typed words. The mtime check catches an accidental edit, not deliberate forgery (the
+    needs her own typed words (a picture in a dataset folder does not, see _dataset_picture). The mtime check catches an accidental edit, not deliberate forgery (the
     boundary stated in rules/deletion-confirm-and-verify.md). Returns (prompt with the lines appended,
     why a named file or line was not used); the caller feeds that only to the path-deletion branches."""
     # «удали C:\x\notes.txt» deletes that file; only «по списку / из файла» reads it as a list
@@ -1910,7 +1868,7 @@ def expand_owner_list_files(prompt: str, ts: str) -> tuple[str, str]:
                 if not OWNER_LIST_PATH_LINE.fullmatch(ln):
                     why = f"{name}: {ln[:80]!r} is not an absolute path - lines of a list are paths only"
                     continue
-                if irreplaceable_reason(ln, True):
+                if irreplaceable_reason(ln, True) and not _dataset_picture(ln):
                     why = f"{ln}: irreplaceable - name it in the chat, not in a list file"
                     continue
                 extra.append(ln)

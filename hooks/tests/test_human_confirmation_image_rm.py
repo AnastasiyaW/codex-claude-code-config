@@ -19,6 +19,36 @@ class ImageRmShape(unittest.TestCase):
         self.assertTrue(hcg.image_rm_only(f"ssh host1 'docker rmi {TAG} {DIGEST} 2>&1 | grep -c Deleted; df -h /'"))
         self.assertTrue(hcg.image_rm_only(f"docker image rm {TAG}"))
 
+    def _with_journal(self, scripts: tuple[str, ...]) -> None:
+        saved = hcg.IMAGE_RM_COMPANION
+        self.addCleanup(setattr, hcg, "IMAGE_RM_COMPANION", saved)
+        hcg.IMAGE_RM_COMPANION = hcg._image_rm_companion(scripts)
+
+    def test_configured_journal_log_beside_rmi_is_image_only(self) -> None:
+        self._with_journal(("/srv/ops/journal.py",))
+        j = ('CLAUDE_SESSION=0a1b2c3d python3 /srv/ops/journal.py log host1-disk '
+             '"unused images" "by owner request" 2>/dev/null || true')
+        self.assertTrue(hcg.image_rm_only(f"ssh host1 '{j}; docker rmi {TAG} {DIGEST} | grep -c Untagged'"))
+        self.assertTrue(hcg.image_rm_only(f"ssh host1 'python3 /srv/ops/journal.py log p \"a\"; docker rmi {TAG}'"))
+
+    def test_journal_lookalikes_are_not_image_only(self) -> None:
+        self._with_journal(("/srv/ops/journal.py",))
+        for j in ('python3 /srv/ops/journal.py log p "$(id)"', 'python3 /srv/ops/journal.py log p "`id`"',
+                  'python3 /tmp/journal.py log p "a"', 'python3 /srv/ops/journal.py purge p "a"',
+                  'python3 /srv/ops/journal.py log p "a" > /etc/passwd',
+                  'python3 -c "import os" /srv/ops/journal.py log p "a"',
+                  'X=1 python3 /srv/ops/journal.py log p "a"', 'python3 /srv/ops/journal.py log p "a" "b" "c"',
+                  'python3 /srv/ops/journal.py log p a', 'python3 /srv/ops/journalXpy log p "a"',
+                  'true; sh', 'true sh'):
+            self.assertFalse(hcg.image_rm_only(f"ssh host1 '{j}; docker rmi {TAG}'"), j)
+        self.assertFalse(hcg.image_rm_only("ssh host1 'python3 /srv/ops/journal.py log p \"a\" || true'"))
+
+    def test_journal_log_without_local_config_is_refused(self) -> None:
+        self._with_journal(())
+        self.assertFalse(hcg.image_rm_only(f"ssh host1 'python3 /srv/ops/journal.py log p \"a\"; docker rmi {TAG}'"))
+        self.assertFalse(hcg.image_rm_only(f"ssh host1 'true; docker rmi {TAG}'"))
+        self.assertTrue(hcg.image_rm_only(f"ssh host1 'docker rmi {TAG} | grep -c Untagged'"))
+
     def test_other_shapes_are_not_image_only(self) -> None:
         for cmd in (f"docker rmi -f {TAG}", "docker rmi 3c78e161c588", "docker rmi redis",
                     "docker system prune -af", f"docker rmi {TAG}; docker rm db",
