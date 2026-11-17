@@ -439,6 +439,40 @@ class UserTaskCompletionGuardTests(unittest.TestCase):
         self.assertEqual(blocked and blocked.get("decision"), "block")
         self.assertIn("1/2 collection items terminal", blocked["reason"])
 
+    def test_pass_item_whose_text_says_work_remains_does_not_close(self) -> None:
+        event = {"prompt": "check all checkpoints", "session_id": "session-a"}
+        self.invoke_prompt(event)
+        first = self.receipt("evidence/250.txt")
+        second = self.receipt("evidence/500.txt")
+        self.write_state(status="COMPLETE", result="done", items=[
+            {"item_id": "250", "status": "PASS", "evidence": [first]},
+            {"item_id": "rest", "status": "PASS", "evidence": [second],
+             "note": "remaining items are designer work, tracked in gap-analysis.md"},
+        ])
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("rest", blocked["reason"])
+        self.assertIn("says work remains", blocked["reason"])
+
+    def test_pass_item_with_the_owner_decision_quoted_closes(self) -> None:
+        event = {"prompt": "check all checkpoints", "session_id": "session-a"}
+        self.invoke_prompt(event)
+        first = self.receipt("evidence/250.txt")
+        self.write_state(status="COMPLETE", result="done", items=[
+            {"item_id": "rest", "status": "PASS", "evidence": [first],
+             "note": "not implemented", "owner_decision": "owner 2026-11-15: do not build this"},
+        ])
+        self.assertIsNone(self.invoke_stop())
+
+    def test_complete_result_that_says_work_remains_does_not_close(self) -> None:
+        self.invoke_prompt({"prompt": "implement the letters", "session_id": "session-a"})
+        first = self.receipt("evidence/a.txt")
+        self.write_state(status="COMPLETE", evidence=[first],
+                         result="backend done; the rest is designer work and will be done later")
+        blocked = self.invoke_stop()
+        self.assertEqual(blocked and blocked.get("decision"), "block")
+        self.assertIn("says work remains", blocked["reason"])
+
     def test_supplied_items_are_authoritative_even_for_a_non_collection_prompt(self) -> None:
         self.invoke_prompt()
         first = self.receipt("evidence/review.txt")

@@ -60,6 +60,26 @@ REQUIRED_PROOF_ORDER = ["focused_test", "runtime_proof", "independent_review"]
 ACTIVE_STATUSES = {"OPEN", "IN_PROGRESS"}
 TERMINAL_STATUSES = {"COMPLETE", "BLOCKED_EXTERNAL"}
 ITEM_STATUSES = {"PENDING", "RUNNING", "PASS", "BLOCKED_EXTERNAL"}
+# A terminal record whose own words say the work is unfinished is not terminal. Owner 2026-11-15:
+# letters were about to close while their interface half was relabelled "designer work".
+WORK_REMAINS = re.compile(
+    r"designer work|работ\w* дизайнер|дизайнерск\w* работ|"
+    r"remaining (?:items|work|part)|the rest (?:is|will)|not (?:yet )?(?:implemented|done|deployed)|"
+    r"will be done|to be done|не (?:внедрен|сделан|выложен|доделан)|остал\w+ (?:пункт|работ|част)",
+    re.IGNORECASE,
+)
+
+
+def says_work_remains(record: dict[str, Any]) -> str | None:
+    """The phrase that admits unfinished work, unless the owner's own decision is quoted."""
+    if isinstance(record.get("owner_decision"), str) and record["owner_decision"].strip():
+        return None
+    for field in ("result", "note", "title", "detail"):
+        text = record.get(field)
+        hit = WORK_REMAINS.search(text) if isinstance(text, str) else None
+        if hit:
+            return hit.group(0)
+    return None
 STOP_CONTINUATION_SCHEMA = "agent-stop-continuation/v1"
 STOP_CONTINUATION_DIR = Path(
     os.environ.get(
@@ -1025,6 +1045,11 @@ def assess_items(task_dir: Path, state: dict[str, Any]) -> tuple[str, str]:
             evidence_files(task_dir, raw.get("evidence"), f"{item_id}.evidence")
         except ValueError as exc:
             errors.append(str(exc))
+        if status == "PASS":
+            hit = says_work_remains(raw)
+            if hit:
+                errors.append(f"{item_id}: PASS but its text says work remains ({hit!r}); make the remaining "
+                              "work its own PENDING item or quote the owner in owner_decision")
         if status == "BLOCKED_EXTERNAL":
             blocked += 1
             for field in ("blocker", "recheck"):
@@ -1068,6 +1093,11 @@ def assess_task(
         child_defect = assess_children(path.parent, state, expected_children)
         if child_defect:
             return "INCOMPLETE", child_defect
+        if status == "COMPLETE":
+            hit = says_work_remains(state)
+            if hit:
+                return "INCOMPLETE", (f"state.result says work remains ({hit!r}); list the remaining work as "
+                                      "PENDING items or quote the owner in owner_decision")
         # ``requires_inventory`` means an inventory is mandatory. It never means
         # that an explicitly supplied item contract may be ignored. Otherwise a
         # parent COMPLETE/BLOCKED_EXTERNAL can silently hide a child that is still
