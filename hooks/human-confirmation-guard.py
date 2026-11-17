@@ -1384,7 +1384,7 @@ def irreplaceable_info(target: str, recursive: bool,
         inner: list[str] = []
         walk_errors: list[OSError] = []
         n = 0
-        restorable = _git_restorable(p) or set()
+        restorable = _git_restorable(p)
         # review R10: os.walk with onerror, not rglob (which silently skips unreadable subtrees)
         for root, dirs, files in WALK(p, onerror=walk_errors.append, followlinks=False):
             for name in dirs + files:
@@ -1393,10 +1393,14 @@ def irreplaceable_info(target: str, recursive: bool,
                     return "too many entries to inspect", None
                 f = Path(root) / name
                 fk = _kind(f)
-                if fk == "file" and _norm(str(f)).lower() in restorable:
+                if fk == "file" and restorable is not None and _norm(str(f)).lower() in restorable:
                     continue
                 if fk == "error":
                     return f"cannot check {f.as_posix()} (access denied)", None
+                # owner 2026-11-17: in a verified worktree a plain folder holds nothing itself; every file
+                # under it is judged with its full path, so backup*/ alone is not a finding (links still are)
+                if fk == "dir" and restorable is not None:
+                    continue
                 header = _sqlite_header(f) if fk == "file" else False
                 if header is None:
                     return f"cannot read {f.as_posix()} to check it", None

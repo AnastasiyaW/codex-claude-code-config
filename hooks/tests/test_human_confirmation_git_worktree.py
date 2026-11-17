@@ -79,6 +79,26 @@ class GitWorktree(unittest.TestCase):
         git(self.wt, "add", "migrations/00007_step.sql")
         self.assertEqual(self.info(self.wt)[1], ["00007_step.sql"])
 
+    def _commit_folder_named_backup(self) -> None:
+        folder = self.wt / "backup-notes"
+        folder.mkdir()
+        (folder / "readme.txt").write_text("kept in git\n", encoding="utf-8")
+        git(self.wt, "add", "backup-notes")
+        git(self.wt, "commit", "-q", "-m", "folder with a backup name")
+        git(self.wt, "push", "-q", "origin", "HEAD:refs/heads/side")
+        git(self.wt, "fetch", "-q", "origin")
+
+    def test_tracked_folder_with_backup_name_is_restorable(self) -> None:
+        # owner 2026-11-17: a pushed worktree was refused for folders named backup*/ *dataset*,
+        # although every file under them was tracked and unchanged
+        self._commit_folder_named_backup()
+        self.assertEqual(self.info(self.wt), (None, []))
+
+    def test_untracked_file_in_backup_folder_is_named(self) -> None:
+        self._commit_folder_named_backup()
+        (self.wt / "backup-notes" / "new.txt").write_text("only here\n", encoding="utf-8")
+        self.assertEqual(self.info(self.wt)[1], ["new.txt"])
+
     def test_subfolder_of_worktree_is_not_exempt(self) -> None:
         self.assertEqual(self.info(self.wt / "migrations"), ("too many databases/backups inside", None))
 
