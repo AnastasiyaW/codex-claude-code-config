@@ -20,6 +20,7 @@ Bypass: CLAUDE_ALLOW_INJECTION=1.
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -66,6 +67,53 @@ DESTRUCTIVE_VERBS = re.compile(
 )
 
 
+# Read-only filters allowed as stages of a pipeline inside $(...), e.g.
+# $(grep -h KEY file | cut -d= -f2). Owner 2026-11-17: such reads were refused.
+# sed/awk stay out: both can run shell commands (sed `e`, awk system()).
+READONLY_PIPE_CMDS = {
+    "cat", "head", "tail", "tr", "cut", "wc", "sort", "uniq", "echo", "printf",
+    "grep", "egrep", "fgrep", "rg", "jq", "ls", "stat", "basename", "dirname",
+    "realpath", "readlink", "sha256sum", "sha1sum", "md5sum", "base64", "find",
+}
+FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
+SEPARATORS = {"|", "&&", "||", ";"}
+
+
+def _readonly_pipeline(body: str) -> bool:
+    """True if body is only read-only filters joined by | && || ; with no output redirect."""
+    lex = shlex.shlex(body, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        tokens = list(lex)
+    except ValueError:
+        return False
+    stages: list[list[str]] = [[]]
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t in SEPARATORS:
+            stages.append([])
+        elif t == ">&" and stages[-1][-1:] == ["2"] and tokens[i + 1:i + 2] == ["1"]:
+            stages[-1].pop()
+            i += 1
+        elif t == ">" and stages[-1][-1:] == ["2"] and tokens[i + 1:i + 2] == ["/dev/null"]:
+            stages[-1].pop()
+            i += 1
+        elif t == "<" and i + 1 < len(tokens) and tokens[i + 1] not in SEPARATORS:
+            i += 1
+        elif t and set(t) <= set("|&;<>()"):
+            return False
+        else:
+            stages[-1].append(t)
+        i += 1
+    for words in stages:
+        if not words or words[0].lstrip("\\") not in READONLY_PIPE_CMDS:
+            return False
+        if words[0] == "find" and FIND_ACTIONS & set(words):
+            return False
+    return True
+
+
 def is_trivial(subst_body: str) -> bool:
     """Check if the substitution body is a safe utility with safe args."""
     body = subst_body.strip()
@@ -78,15 +126,9 @@ def is_trivial(subst_body: str) -> bool:
     # First word determines the utility
     first = body.split(maxsplit=1)[0]
     first = first.lstrip("\\")  # strip leading escape
-    if first not in TRIVIAL_CMDS:
-        return False
-    # Extra check: even trivial cmd with shell metacharacters in args is suspect.
-    # But <<- and << are heredoc markers, not pipes/redirects - allow.
-    if re.search(r"[;&|](?!\|)", body):  # ; & | (but not ||)
-        return False
-    if re.search(r"[<>](?!<)", body):  # < or > but not << (heredoc)
-        return False
-    return True
+    if first in TRIVIAL_CMDS and not re.search(r"[;&|](?!\|)", body) and not re.search(r"[<>](?!<)", body):
+        return True
+    return _readonly_pipeline(body)
 
 
 def find_substitutions(cmd: str) -> list[tuple[str, str]]:
