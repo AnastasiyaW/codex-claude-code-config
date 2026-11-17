@@ -552,6 +552,23 @@ def _probe_cmd(toks: list[str], i: int) -> str | None:
 
 
 PS_SPACED_PATH = re.compile(r"[A-Za-z]:[\\/][^;|&`$()<>'\"\n]* [^;|&`$()<>'\"\n]*")
+# owner 2026-11-17: `cmd /c rmdir <junction>` is the one form that removes an NTFS junction and keeps its
+# target (PowerShell 5.1 Remove-Item throws on a junction, or empties the target with -Recurse). The body is
+# taken from the raw text, because posix shlex would eat the backslashes of an unquoted Windows path.
+CMD_C = re.compile(r"\s*(?:\S*[\\/])?cmd(?:\.exe)?(?:\s+/(?![ck]\b)[a-z](?::\w+)?)*\s+/c\s+(.+?)\s*",
+                   re.IGNORECASE | re.DOTALL)
+
+
+def _cmd_c_body(segment: str) -> str | None:
+    """The command `cmd [/d /q ...] /c BODY` runs, UNPARSED when BODY uses cmd expansion or escapes
+    (%VAR%, ^, !VAR!) that this parser cannot follow, None when the segment is not cmd /c."""
+    m = CMD_C.fullmatch(segment)
+    if not m:
+        return None
+    body = m.group(1)
+    if len(body) > 1 and body[0] == body[-1] == '"' and '"' not in body[1:-1]:
+        body = body[1:-1].strip()
+    return UNPARSED if re.search(r"[%^!]", body) else body
 
 
 def remote_command(segment: str) -> str | None:
@@ -561,6 +578,9 @@ def remote_command(segment: str) -> str | None:
     `ssh host 'rm /data/x'` passing untouched because the segment's command word is ssh.
     Returns None when the segment is not ssh, UNPARSED when it is ssh we cannot read.
     """
+    body = _cmd_c_body(segment)
+    if body is not None:
+        return body
     try:
         toks = shlex.split(segment, posix=True)
     except ValueError:
