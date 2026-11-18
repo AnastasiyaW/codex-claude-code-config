@@ -990,6 +990,10 @@ def span_declined(line: str, span: str) -> bool:
 _DIS_V = r"(?:убери(?:те)?|убрать|выключи(?:те)?|отключи(?:те)?|сними(?:те)?)"
 _DIS_NOUN = r"(?:(?:юнит|сервис|службу)\s+)?"
 _DIS_FROM = r"из\s+автозапуска"
+# owner 2026-11-18 («убери <unit> из автозапуска на большом сервере» was refused): a trailing host
+# place is allowed; at most two filler words, never a negation, ending in a host noun or a Latin host alias
+_DIS_WHERE = (r"(?:\s+на\s+(?:(?!(?:не|ни|кроме)\b)[\w-]+\s+){0,2}(?:сервере|машине|хосте|компьютере|виртуалке)"
+              r"|\s+на\s+[A-Za-z][\w.\-]*|\s+on\s+(?:the\s+)?[A-Za-z][\w.\-]*(?:\s+(?:server|host|machine))?)?")
 # fourth review 2026-10-15: cancellations anywhere, numbered options and "could" voids a proposal or a request
 CANCEL_WORDS = re.compile(r"\bотбой\b|\bотмен|\bхотя\s+нет\b|\bстоп\b|\bне\s+дела|\bcancel|\babort\b|\bnever\s*mind\b",
                           re.IGNORECASE)
@@ -1002,7 +1006,7 @@ def unit_disable_requested(prompt: str, unit: str) -> bool:
     request is a fixed grammar, matched against the entire message; anything else is refused)."""
     # simplification: the host is not compared with the one the owner names; same residual risk as every
     # stop/delete approval here (a per-host check needs the ssh alias resolved against her words).
-    u = re.escape(unit) + r"(?:\.service)?"
+    u = re.escape(re.sub(r"\.service$", "", unit, flags=re.IGNORECASE)) + r"(?:\.service)?"
     body = (
         r"(?:(?:останови(?:те)?\s+" + u + r"\s+и\s+)?" + _DIS_V + r"\s+(?:е[её]\s+|его\s+)?" + _DIS_FROM + r"|"
         + _DIS_V + r"\s+" + _DIS_NOUN + u + r"\s+" + _DIS_FROM + r"|"
@@ -1012,7 +1016,7 @@ def unit_disable_requested(prompt: str, unit: str) -> bool:
         r"remove\s+" + u + r"\s+from\s+(?:the\s+)?autostart)"
     )
     # the first form names the unit only in its stop clause: that clause is then required
-    if re.fullmatch(r"\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?" + body
+    if re.fullmatch(r"\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?" + body + _DIS_WHERE
                     + r"(?:[\s,]+(?:please|пожалуйста))?\s*[.!]*\s*", prompt, re.IGNORECASE) is None:
         return False
     return re.search(r"(?<![\w.\-/@])" + u + r"(?![\w\-/@.])", prompt, re.IGNORECASE) is not None
@@ -2363,7 +2367,8 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
                              r"(?!\s*(?:час|мин|сек|ч\b|h\b|m\b|s\b|hours?|min|sec))",
                              prompt, re.IGNORECASE) is not None
         name = re.escape(t)
-        if t in units:   # owner 2026-10-29: a unit is named with or without .service on either side
+        # owner 2026-10-29: a unit is named with or without .service on either side (2026-11-18: disable too)
+        if t in units or t in disabled:
             name = re.escape(t.removesuffix(".service")) + r"(?:\.service)?"
         return re.search(r"(?<![\w.\-/~:])" + name + r"(?![\w\-/]|\.\w)", prompt) is not None
     # third review 2026-10-12: when the owner names operands herself ("останови процесс 4242"), my proposal
@@ -4100,6 +4105,10 @@ def self_test() -> int:
          transcript("да", "Уберу worker из автозапуска: `sudo systemctl disable worker`")),
         ("stop then disable in english", "ssh h 'sudo systemctl disable worker'",
          transcript("stop worker, then disable worker")),
+        ("disable with a host place", "ssh big-host 'sudo -n systemctl disable vision-model-8061.service'",
+         transcript("убери vision-model-8061 из автозапуска на большом сервере")),
+        ("disable with a host alias", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker из автозапуска на big-host")),
         # third review 2026-10-15: proposals with an unrelated negation earlier in the line still count
         ("negation in an earlier clause", "kill 4242",
          transcript("да", "Воркер не отвечает, останавливаю: `kill 4242`")),
@@ -4209,6 +4218,18 @@ def self_test() -> int:
         ("disable of the access daemon", "ssh h 'sudo systemctl disable sshd'", transcript("убери sshd из автозапуска")),
         ("disable of an unnamed unit", "ssh h 'sudo systemctl disable worker2'", transcript("убери worker из автозапуска")),
         ("disable negated", "ssh h 'sudo systemctl disable worker'", transcript("не убирай worker из автозапуска")),
+        ("host place: other unit", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker2 из автозапуска на большом сервере")),
+        ("host place: question", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker из автозапуска на большом сервере?")),
+        ("host place: negation inside", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker из автозапуска не на большом сервере")),
+        ("host place: negated filler", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker из автозапуска на не большом сервере")),
+        ("host place: extra clause after", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker из автозапуска на большом сервере и потом запусти worker2")),
+        ("host place: add to autostart", "ssh h 'sudo systemctl disable worker'",
+         transcript("добавь worker в автозапуск на большом сервере")),
         ("autostart words do not approve a kill", "kill 4242", transcript("убери процесс 4242 из автозапуска")),
         # review 2026-10-15 REJECT findings, each must stay refused
         ("add to autostart", "ssh h 'sudo systemctl disable worker'", transcript("добавь worker в автозапуск")),
