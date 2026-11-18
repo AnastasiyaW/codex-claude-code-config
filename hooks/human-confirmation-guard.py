@@ -991,9 +991,10 @@ _DIS_V = r"(?:убери(?:те)?|убрать|выключи(?:те)?|откл�
 _DIS_NOUN = r"(?:(?:юнит|сервис|службу)\s+)?"
 _DIS_FROM = r"из\s+автозапуска"
 # owner 2026-11-18 («убери <unit> из автозапуска на большом сервере» was refused): a trailing host
-# place is allowed; at most two filler words, never a negation, ending in a host noun or a Latin host alias
-_DIS_WHERE = (r"(?:\s+на\s+(?:(?!(?:не|ни|кроме)\b)[\w-]+\s+){0,2}(?:сервере|машине|хосте|компьютере|виртуалке)"
-              r"|\s+на\s+[A-Za-z][\w.\-]*|\s+on\s+(?:the\s+)?[A-Za-z][\w.\-]*(?:\s+(?:server|host|machine))?)?")
+# place is allowed; at most two filler words, never a negation, ending in a host noun. No Latin alias form:
+# the host is not compared with the ssh target (see unit_disable_requested), so an alias would claim a scope
+# the check does not enforce, and an alias equal to a unit name would name the unit outside the request
+_DIS_WHERE = r"(?:\s+на\s+(?:(?!(?:не|ни|кроме)\b)[\w-]+\s+){0,2}(?:сервере|машине|хосте|компьютере|виртуалке))?"
 # fourth review 2026-10-15: cancellations anywhere, numbered options and "could" voids a proposal or a request
 CANCEL_WORDS = re.compile(r"\bотбой\b|\bотмен|\bхотя\s+нет\b|\bстоп\b|\bне\s+дела|\bcancel|\babort\b|\bnever\s*mind\b",
                           re.IGNORECASE)
@@ -1016,10 +1017,12 @@ def unit_disable_requested(prompt: str, unit: str) -> bool:
         r"remove\s+" + u + r"\s+from\s+(?:the\s+)?autostart)"
     )
     # the first form names the unit only in its stop clause: that clause is then required
-    if re.fullmatch(r"\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?" + body + _DIS_WHERE
-                    + r"(?:[\s,]+(?:please|пожалуйста))?\s*[.!]*\s*", prompt, re.IGNORECASE) is None:
+    m = re.fullmatch(r"\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?(?P<req>" + body + r")" + _DIS_WHERE
+                     + r"(?:[\s,]+(?:please|пожалуйста))?\s*[.!]*\s*", prompt, re.IGNORECASE)
+    if m is None:
         return False
-    return re.search(r"(?<![\w.\-/@])" + u + r"(?![\w\-/@.])", prompt, re.IGNORECASE) is not None
+    # the unit must be named inside the request itself, not in the place tail or a politeness word
+    return re.search(r"(?<![\w.\-/@])" + u + r"(?![\w\-/@.])", m.group("req"), re.IGNORECASE) is not None
 
 
 DISABLE_SPAN = re.compile(r"\bsystemctl\s+disable\s+([A-Za-z][\w@.\-]{2,})(?=\s*$|\s*;)", re.IGNORECASE)
@@ -4107,8 +4110,6 @@ def self_test() -> int:
          transcript("stop worker, then disable worker")),
         ("disable with a host place", "ssh big-host 'sudo -n systemctl disable vision-model-8061.service'",
          transcript("убери vision-model-8061 из автозапуска на большом сервере")),
-        ("disable with a host alias", "ssh h 'sudo systemctl disable worker'",
-         transcript("убери worker из автозапуска на big-host")),
         # third review 2026-10-15: proposals with an unrelated negation earlier in the line still count
         ("negation in an earlier clause", "kill 4242",
          transcript("да", "Воркер не отвечает, останавливаю: `kill 4242`")),
@@ -4228,6 +4229,12 @@ def self_test() -> int:
          transcript("убери worker из автозапуска на не большом сервере")),
         ("host place: extra clause after", "ssh h 'sudo systemctl disable worker'",
          transcript("убери worker из автозапуска на большом сервере и потом запусти worker2")),
+        ("host place: unit named only as the place", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери из автозапуска на worker")),
+        ("host place: unit named only as a host word", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери из автозапуска на worker сервере")),
+        ("host place: latin alias", "ssh h 'sudo systemctl disable worker'",
+         transcript("убери worker из автозапуска на big-host")),
         ("host place: add to autostart", "ssh h 'sudo systemctl disable worker'",
          transcript("добавь worker в автозапуск на большом сервере")),
         ("autostart words do not approve a kill", "kill 4242", transcript("убери процесс 4242 из автозапуска")),
