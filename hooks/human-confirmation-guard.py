@@ -2205,13 +2205,19 @@ def stop_only(cmd: str) -> bool:
     except ValueError:
         return False
     # residual risk (documented): a pid is checked only for being named, not resolved to its process here
-    if not targets or any(STOP_PROTECTED.search(t) for t in targets):
+    if not targets:
         return False
     # review 2026-10-29: a unit is a service, by name or with .service; every other unit type (target,
     # slice, scope, socket, mount, timer ...) is refused instead of listing the dangerous ones
     try:
         units = disable_units(cmd, "stop") + disable_units(cmd)
     except ValueError:
+        return False
+    # owner 2026-11-18 («останови службы jobs-tunnel@a1 и …» was refused): inside a unit name the
+    # word "tunnel" alone does not protect it; access tunnels are caught by their own names (ssh, autossh,
+    # cloudflared, frpc ...), a bare "tunnel" unit and pkill patterns stay protected
+    if any(STOP_PROTECTED.search(t) if t not in units or t.removesuffix(".service").lower() == "tunnel"
+           else any(m.group(0).lower() != "tunnel" for m in STOP_PROTECTED.finditer(t)) for t in targets):
         return False
     if any("." in u.removesuffix(".service") for u in units):
         return False
