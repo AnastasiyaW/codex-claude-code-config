@@ -1003,7 +1003,28 @@ CANCEL_WORDS = re.compile(r"\bотбой\b|\bотмен|\bхотя\s+нет\b|\b
 OPTION_LIST = re.compile(r"(?m)^\s*\d+[.)]\s|\s\d\)\s|\bpick\s+one\b|\bвыбира|\bкакой\b|\bwhich\b", re.IGNORECASE)
 
 
-def unit_disable_requested(prompt: str, unit: str) -> bool:
+def ssh_target_hosts(cmd: str) -> set[str]:
+    """Hosts (user@ stripped, lower case) the command's `ssh host '...'` / `tailscale ssh host '...'` segments reach."""
+    out: set[str] = set()
+    for seg in (s.strip() for s in split_segments(executable_text(cmd))):
+        try:
+            toks = shlex.split(seg, posix=True)
+        except ValueError:
+            continue
+        if toks[:2] == ["tailscale", "ssh"]:
+            toks = toks[1:]
+        if len(toks) >= 3 and toks[0] == "ssh" and not toks[1].startswith("-"):
+            out.add(toks[1].rsplit("@", 1)[-1].lower())
+    return out
+
+
+_DIS_UNIT = r"[A-Za-z][\w@.\-]{2,}"
+# owner 2026-11-18 («убери из автозапуска A и B на <vm>» was refused): one message may list several
+# units; each disabled unit must still be one of them (checked on the request span below)
+_DIS_UNITS = r"(?:" + _DIS_UNIT + r"(?:\s*,\s*|\s+(?:и|and)\s+))*" + _DIS_UNIT
+
+
+def unit_disable_requested(prompt: str, unit: str, hosts: set[str] | None = None) -> bool:
     """The owner's WHOLE message is one request to remove THIS unit from autostart (sixth review 2026-10-15:
     every free-text heuristic leaked - a negation after the command, reported speech across lines - so the
     request is a fixed grammar, matched against the entire message; anything else is refused)."""
@@ -1012,16 +1033,20 @@ def unit_disable_requested(prompt: str, unit: str) -> bool:
     u = re.escape(re.sub(r"\.service$", "", unit, flags=re.IGNORECASE)) + r"(?:\.service)?"
     body = (
         r"(?:(?:останови(?:те)?\s+" + u + r"\s+и\s+)?" + _DIS_V + r"\s+(?:е[её]\s+|его\s+)?" + _DIS_FROM + r"|"
-        + _DIS_V + r"\s+" + _DIS_NOUN + u + r"\s+" + _DIS_FROM + r"|"
-        + _DIS_V + r"\s+" + _DIS_FROM + r"\s+" + _DIS_NOUN + u + r"|"
-        + _DIS_V + r"\s+автозапуск\s+" + _DIS_NOUN + u + r"|"
+        + _DIS_V + r"\s+" + _DIS_NOUN + _DIS_UNITS + r"\s+" + _DIS_FROM + r"|"
+        + _DIS_V + r"\s+" + _DIS_FROM + r"\s+" + _DIS_NOUN + _DIS_UNITS + r"|"
+        + _DIS_V + r"\s+автозапуск\s+" + _DIS_NOUN + _DIS_UNITS + r"|"
         r"(?:stop\s+" + u + r",?\s+(?:then|and)\s+)?disable\s+" + u + r"|"
         r"remove\s+" + u + r"\s+from\s+(?:the\s+)?autostart)"
     )
+    # a host alias («на <vm>») must be the host the command actually reaches
+    where = r"(?:\s+на\s+(?P<host>[A-Za-z][\w.\-]*[A-Za-z0-9])|" + _DIS_WHERE + r")"
     # the first form names the unit only in its stop clause: that clause is then required
-    m = re.fullmatch(r"\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?(?P<req>" + body + r")" + _DIS_WHERE
+    m = re.fullmatch(r"\s*(?:да[\s,]+)?(?:(?:please|пожалуйста)[\s,]+)?(?P<req>" + body + r")" + where
                      + r"(?:[\s,]+(?:please|пожалуйста))?\s*[.!]*\s*", prompt, re.IGNORECASE)
     if m is None:
+        return False
+    if m.group("host") and m.group("host").lower() not in (hosts or set()):
         return False
     # the unit must be named inside the request itself, not in the place tail or a politeness word
     return re.search(r"(?<![\w.\-/@])" + u + r"(?![\w\-/@.])", m.group("req"), re.IGNORECASE) is not None
@@ -2356,7 +2381,8 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
         elif not DISABLE_INTENT.search(prompt) or NOT_A_DISABLE_GO.search(prompt) or CANCEL_WORDS.search(prompt):
             return False, "systemctl disable needs a request to remove the unit from autostart"
         else:
-            unasked = [u for u in disabled if not unit_disable_requested(prompt, u)]
+            hosts = ssh_target_hosts(cmd)
+            unasked = [u for u in disabled if not unit_disable_requested(prompt, u, hosts)]
             if unasked:
                 return False, f"the request does not remove these units from autostart: {', '.join(unasked)}"
     # /T kills the whole tree: only when my proposal itself wrote taskkill with /T (review 2026-10-13)
