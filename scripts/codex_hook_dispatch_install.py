@@ -17,6 +17,8 @@ import sys
 import time
 from pathlib import Path
 
+PYTHON_CMD = "python" if shutil.which("python") or not shutil.which("python3") else "python3"
+
 CODEX = Path.home() / ".codex"
 HOOKS, FULL = CODEX / "hooks.json", CODEX / "hooks.dispatch.json"
 DISPATCHER = Path(__file__).resolve().parent.parent / "hooks" / "codex_hook_dispatch.py"
@@ -47,7 +49,7 @@ def main() -> int:
     slim["hooks"] = {}
     for ev, groups in full["hooks"].items():
         timeout = sum(int(h.get("timeout") or 60) for g in groups for h in g.get("hooks", []))
-        slim["hooks"][ev] = [{"hooks": [{"type": "command", "command": f'python "{DISPATCHER.as_posix()}" {ev}',
+        slim["hooks"][ev] = [{"hooks": [{"type": "command", "command": f'{PYTHON_CMD} "{DISPATCHER.as_posix()}" {ev}',
                                           "timeout": min(timeout, 1800),
                                           "statusMessage": f"Running {n[ev]} {ev} guards..."}]}]
     HOOKS.write_text(json.dumps(slim, indent=2, ensure_ascii=False), encoding="utf-8")
