@@ -42,14 +42,25 @@ class NamedTunnelUnitTests(unittest.TestCase):
 
     def test_named_tunnel_units_are_stopped(self) -> None:
         for cmd in ("ssh gpu-host 'sudo -n systemctl stop jobs-tunnel-a1.service'",
-                    "ssh gpu-host 'sudo -n systemctl stop jobs-tunnel@a2'"):
+                    "ssh gpu-host 'sudo -n systemctl stop jobs-tunnel@a2'",
+                    "tailscale ssh ws@gpu-host 'sudo -n systemctl stop jobs-tunnel-a1.service'"):
             with self.subTest(cmd=cmd):
                 ok, why = self.decide(cmd)
                 self.assertTrue(ok, why)
 
     def test_unit_not_named_is_refused(self) -> None:
-        ok, _ = self.decide("ssh gpu-host 'sudo -n systemctl stop jobs-tunnel-b1.service'")
-        self.assertFalse(ok)
+        for cmd in ("ssh gpu-host 'sudo -n systemctl stop jobs-tunnel-b1.service'",
+                    "tailscale ssh ws@gpu-host 'sudo -n systemctl stop jobs-tunnel-b1.service'"):
+            with self.subTest(cmd=cmd):
+                ok, _ = self.decide(cmd)
+                self.assertFalse(ok)
+
+    def test_tailscale_ssh_with_options_or_unquoted_is_refused(self) -> None:
+        for cmd in ("tailscale ssh -o ProxyCommand=x ws@gpu-host 'sudo -n systemctl stop jobs-tunnel@a2'",
+                    "tailscale ssh ws@gpu-host sudo -n systemctl stop jobs-tunnel@a2"):
+            with self.subTest(cmd=cmd):
+                ok, _ = self.decide(cmd)
+                self.assertFalse(ok)
 
     def test_access_tunnels_stay_protected_when_named(self) -> None:
         for unit in ("autossh-tunnel", "ssh-tunnel-prod", "cloudflared-tunnel", "frpc-tunnel"):

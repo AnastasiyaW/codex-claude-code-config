@@ -915,7 +915,9 @@ def _image_rm_companion(journal_scripts: tuple[str, ...]) -> re.Pattern:
 IMAGE_RM_COMPANION = _image_rm_companion(JOURNAL_LOG_SCRIPTS)
 # A plain `ssh host 'cmd'` / `ssh host "cmd"`: no options, host of safe characters only.
 # Only options that cannot run anything locally are allowed (no ProxyCommand/-F/-J/Include/Match).
-SSH_PLAIN = re.compile(r"ssh\s+(?:-o\s+(?:BatchMode=(?:yes|no)|ConnectTimeout=\d+|ServerAliveInterval=\d+|"
+# `tailscale ssh` is the route ssh-connection-guard requires for our VMs (owner 2026-11-18: a named stop on a VM
+# was refused because only `ssh` counted as plain)
+SSH_PLAIN = re.compile(r"(?:tailscale\s+)?ssh\s+(?:-o\s+(?:BatchMode=(?:yes|no)|ConnectTimeout=\d+|ServerAliveInterval=\d+|"
                        r"ServerAliveCountMax=\d+)\s+)*[A-Za-z0-9][A-Za-z0-9_.@-]*\s+(?:'[^']*'|\"[^\"]*\")\s*")
 IMAGE_RM_SEGMENT = re.compile(
     r"(?:sudo\s+)?docker\s+(?:rmi|image\s+rm)(?:\s+" + IMAGE_REF + r")+(?:\s+2>&1)?\s*;?")
