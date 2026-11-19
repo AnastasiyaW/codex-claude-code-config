@@ -728,6 +728,33 @@ _PATH_SHAPE = re.compile(
     r"^(?:[a-z]:[/\\]|[/~.]|[^/\\]*://)|[/\\].*[/\\]|[/\\][^/\\]*\.\w+$",
     re.IGNORECASE,
 )
+# A deletion proposal is a plain fence of absolute paths, one per line (rule
+# deletion-confirm-and-verify, «Единый формат предложения удаления»): "launch" in
+# "….launch.txt" and "user" in "…\user-tasks\…" are words of a path, not a verb or
+# an addressee (measured 2026-11-19). A shell-labelled fence, a path with an
+# argument, a URL, a chain or any other line keeps the block's own words.
+_PLAIN_FENCE_INFO = re.compile(r"(?i)(?:te?xt|plaintext)?")
+_ABSOLUTE_PATH = re.compile(
+    r"(?i)(?:(?:[\w.-]+@)?(?!(?:https?|s?ftp|file|wss?):)[\w.-]+:/(?!/)|[a-z]:\\|/)[^\s`;&|<>]*"
+)
+
+
+def _lists_paths_only(block: str) -> bool:
+    """True for a fenced block whose every non-empty line is one absolute path.
+
+    The shape scan may close a fence at a mid-line ``` ("/opt/x```") while
+    Markdown closes it at a later line-start fence, so such a block keeps its words.
+    """
+    head, _, body = block.partition("\n")
+    inner = body.rpartition("```")[0]
+    paths = [line.strip() for line in inner.splitlines() if line.strip()]
+    return (
+        bool(paths)
+        and inner.rstrip(" \t").endswith("\n")
+        and bool(_PLAIN_FENCE_INFO.fullmatch(head[3:].strip()))
+        and all(_ABSOLUTE_PATH.fullmatch(line) for line in paths)
+    )
+
 # Measured 2026-09-24: requiring a listed verb or addressee (9c6e170) let an
 # instruction through whenever its verb was unlisted ("Feed curl -X POST ...")
 # or its addressee was a third party ("ask the release engineer to feed ..."),
@@ -1013,9 +1040,10 @@ def shape_is_instruction(message: str, start: int, end: int) -> bool:
         return _clause_assigns(base, start, end)
     left, right = max(0, start - 180), min(len(message), end + 80)
     masked = base
-    if fenced:
+    if fenced and not _lists_paths_only(shape):
         # A fenced block judged as the shape keeps its own words; a block the
-        # agent ran and shows as evidence is cleared by agent_owns_phrase.
+        # agent ran and shows as evidence is cleared by agent_owns_phrase. A
+        # list of paths stays blank: only the prose around it can hand it over.
         masked = masked[:start] + shape + masked[end:]
     window = masked[left:right]
     verbs = list(_INSTRUCTION_VERB.finditer(masked, left, right))
