@@ -2506,6 +2506,74 @@ def _db_drop_approval(names: list[str], cmd: str, prompt: str, event: dict) -> t
     return True, "database drop"
 
 
+# Owner 2026-11-19 («Да, поправь хук»: «удали тестовую группу, учётку и черновик» was refused, a row delete
+# never passed). A row is removed only by its id, every (table, id) named: in her own message, or in the
+# «Удаление» block of my answer she said a bare yes to. Only one shape, one row per -c:
+# `[docker exec [-i] C] psql [opts] [-1] -c "DELETE FROM table WHERE id = N" [-c ...]`. The backup before it
+# stays the agent's step (deletion-confirm-and-verify): the hook cannot see a remote dump.
+ROW_TABLE = r"[A-Za-z_][A-Za-z0-9_]{0,62}"
+ROW_DELETE_SQL = r"DELETE\s+FROM\s+(" + ROW_TABLE + r")\s+WHERE\s+id\s*=\s*(\d{1,18})\s*;?"
+ROW_DELETE_C = r"-c\s+(?:\"" + ROW_DELETE_SQL + r"\"|'" + ROW_DELETE_SQL + r"')"
+ROW_DELETE_SEGMENT = re.compile(
+    r"(?:docker\s+exec\s+(?:-i\s+)?[\w.-]+\s+)?psql"
+    r"(?:\s+(?:-U\s*[\w-]+|-p\s*\d+|-X|-q|-1|-v\s+ON_ERROR_STOP=1|-P\s+pager=off))*"
+    r"\s+-d\s*(" + DB_NAME + r")"
+    r"(?:\s+(?:-U\s*[\w-]+|-p\s*\d+|-X|-q|-1|-v\s+ON_ERROR_STOP=1|-P\s+pager=off))*"
+    r"(?:\s+" + ROW_DELETE_C + r")+(?:\s+2>&1)?\s*;?", re.IGNORECASE)
+# review 2026-11-19: no -h (the host is the ssh target) and -d is required and must be named too, so a named
+# `t 1` cannot be removed from another database; «сохрани/keep» next to a row also voids the request
+ROW_KEEP = re.compile(r"\bсохран|\bне\s+трог", re.IGNORECASE)
+
+
+def row_delete_targets(cmd: str) -> list[tuple[str, str]] | None:
+    """(table, id) pairs, plus ("database", name) for each -d, when every destructive part of cmd (ssh
+    unwrapped) is a psql -d DB -c "DELETE FROM t WHERE id = N"."""
+    cmd = re.sub(r"\s+#\s*claude-bypass\s*:\s*destructive\s*$", "", cmd, flags=re.IGNORECASE)
+    if not _only_segments(cmd, ROW_DELETE_SEGMENT, DB_DROP_COMPANION):
+        return None
+    text = executable_text(cmd)
+    rows = [(a or c, b or d) for a, b, c, d in re.findall(ROW_DELETE_C, text, re.IGNORECASE)]
+    dbs = sorted(set(re.findall(r"\bpsql\b[^\n]*?\s-d\s*(" + DB_NAME + r")", text)))
+    return (rows + [("database", n) for n in dbs]) if rows and dbs else None
+
+
+def _row_named(text: str, table: str, row: str) -> bool:
+    if table == "database":
+        return re.search(r"(?<![\w])" + re.escape(row) + r"(?![\w])", text) is not None
+    return re.search(r"(?<![\w])" + re.escape(table) + r"\s+(?:id\s*=?\s*)?" + row + r"(?!\d)", text,
+                     re.IGNORECASE) is not None
+
+
+def _row_delete_approval(rows: list[tuple[str, str]], cmd: str, prompt: str, answer: str,
+                         event: dict) -> tuple[bool, str]:
+    if CONFIRM_ONLY.fullmatch(prompt):
+        named_in = delete_block(answer)
+        if named_in is None:
+            return False, "a bare 'yes' approves rows only when my answer lists them in an «Удаление» block"
+    elif NOT_A_GO.search(prompt) or ROW_KEEP.search(prompt):
+        return False, "the request negates, hesitates or asks a question"
+    elif not DB_DROP_INTENT.search(prompt):
+        return False, "the latest request does not ask to delete"
+    else:
+        named_in = prompt
+    # simplification: a parent row's ON DELETE CASCADE children are not seen here (no schema access); the
+    # agent lists them in the «Удаление» block next to the row
+    unnamed = [f"{t} {i}" for t, i in rows if not _row_named(named_in, t, i)]
+    if unnamed:
+        return False, f"rows not named as `table id`: {', '.join(unnamed)}"
+    try:
+        APPROVAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with APPROVAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+                                 "session": event.get("session_id"), "action": "row-delete",
+                                 "rows": [f"{t} {i}" for t, i in rows],
+                                 "request": prompt[:300], "command": cmd[:500]},
+                                ensure_ascii=False) + "\n")
+    except OSError:
+        return False, "cannot write the approval audit record"
+    return True, "row delete"
+
+
 # Owner 2026-10-31 («исправь хук, это мешает работе»: «удаляй» five old branches was refused): a remote
 # branch is removed on her request when every branch is named, in her words or in my answer she said a bare yes to.
 # Only `[cd DIR &&] git push [-q] <remote> --delete|-d b...` or `<remote> :b...`, read-only ls-remote beside it.
@@ -3097,6 +3165,9 @@ def _approved_by_owner(cmd: str, event: dict, prompt: str, answer: str, paths_pr
     databases = db_drop_targets(cmd)
     if databases:
         return _db_drop_approval(databases, cmd, prompt, event)
+    rows = row_delete_targets(cmd)
+    if rows:
+        return _row_delete_approval(rows, cmd, prompt, answer, event)
     branches = branch_rm_targets(cmd)
     if branches:
         return _branch_rm_approval(branches, cmd, prompt, answer, event)
