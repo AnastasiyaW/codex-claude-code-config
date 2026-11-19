@@ -8,6 +8,11 @@ could not show its pending deletion list. Words inside a path are not
 verbs or addressees; a real command in a fence, and a path block that the prose
 around it hands over, still block.
 
+Accepted limit (independent review 2026-11-19): a fence holding only a bare
+script path under a neutral lead-in ("Дальше:" + `/opt/app/install.sh`) passes,
+like `/opt/app/deploy.sh` already did; before, such a block was caught only when
+a listed verb happened to be part of the file name.
+
 Runs the hook as the Stop event does: a transcript with the owner's action
 request and the final answer, the verdict read from the hook's stdout.
 """
@@ -111,6 +116,13 @@ class CommandsStillBlock(unittest.TestCase):
 
     def test_url_is_not_a_path(self) -> None:
         self.assertTrue(blocks(proposal("https://example.invalid/login")))
+
+    def test_url_with_one_slash_is_not_a_path(self) -> None:
+        self.assertTrue(blocks(proposal("https:/example.invalid/login")))
+
+    def test_fence_closed_mid_line_keeps_the_command_after_it(self) -> None:
+        answer = f"Осталось:\n{FENCE}\n/opt/run{FENCE}\nclaude auth login --claudeai\n{FENCE}\n"
+        self.assertTrue(blocks(answer))
 
 
 if __name__ == "__main__":

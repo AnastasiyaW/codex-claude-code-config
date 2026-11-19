@@ -734,16 +734,23 @@ _PATH_SHAPE = re.compile(
 # an addressee (measured 2026-11-19). A shell-labelled fence, a path with an
 # argument, a URL, a chain or any other line keeps the block's own words.
 _PLAIN_FENCE_INFO = re.compile(r"(?i)(?:te?xt|plaintext)?")
-_ABSOLUTE_PATH = re.compile(r"(?i)(?:(?:[\w.-]+@)?[\w.-]+:/(?!/)|[a-z]:\\|/)[^\s`;&|<>]*")
+_ABSOLUTE_PATH = re.compile(
+    r"(?i)(?:(?:[\w.-]+@)?(?!(?:https?|s?ftp|file|wss?):)[\w.-]+:/(?!/)|[a-z]:\\|/)[^\s`;&|<>]*"
+)
 
 
 def _lists_paths_only(block: str) -> bool:
-    """True for a fenced block whose every non-empty line is one absolute path."""
+    """True for a fenced block whose every non-empty line is one absolute path.
+
+    The shape scan may close a fence at a mid-line ``` ("/opt/x```") while
+    Markdown closes it at a later line-start fence, so such a block keeps its words.
+    """
     head, _, body = block.partition("\n")
-    lines = [line.strip() for line in body.rpartition("```")[0].splitlines()]
-    paths = [line for line in lines if line]
+    inner = body.rpartition("```")[0]
+    paths = [line.strip() for line in inner.splitlines() if line.strip()]
     return (
         bool(paths)
+        and inner.rstrip(" \t").endswith("\n")
         and bool(_PLAIN_FENCE_INFO.fullmatch(head[3:].strip()))
         and all(_ABSOLUTE_PATH.fullmatch(line) for line in paths)
     )
