@@ -33,9 +33,19 @@ has to recognise a merge or a protected push typed anywhere in an agent command.
 deliberately no bypass marker and no env override: an emergency merge is done by the owner
 in her own terminal or in the GitHub UI, where agent hooks do not apply.
 
-Residual risk, stated plainly: a script FILE written first and run later (bash merge.sh,
-python merge.py) is not opened; a GraphQL query read from a file (-F query=@q.graphql) is
-not read; programs that merge without gh/git/curl (a custom HTTP client, hub, git town) are
+Script FILES a shell runs are opened and scanned like the command itself (incident 2026-11-19:
+`ssh_mux.py run box --script f` pushed to main from inside f): ssh_mux.py run --script FILE
+and ssh_mux.py run -- <command> (both read as running on the remote host), `ssh host [bash -s]
+< FILE`, `cat|type|Get-Content FILE | ssh host|bash`, `x < FILE | bash`, `bash|sh FILE`. Only
+local files up to SCRIPT_MAX_BYTES, only when a shell (not python/node) runs them, and only as a
+shell parses them, so a comment or echo that mentions a push does not block. A local script
+that cannot be read (missing, unresolved $path, relative with no cwd, over the size limit)
+leaves its verdict unknown: verdict() raises ScriptUnreadable and decide() applies the
+analysis-error policy below (block if the command text mentions merge/push, else allow and log).
+
+Residual risk, stated plainly: python merge.py / node x.js files are not opened; a file on the
+remote host (ssh h bash /opt/x.sh) is out of reach; a GraphQL query read from a file
+(-F query=@q.graphql) is not read; programs that merge without gh/git/curl (a custom HTTP client, hub, git town) are
 not recognised; pushes made by a process the agent started earlier in the background are
 invisible. The hook catches accidents and the habitual one-liner, not deliberate evasion.
 An analysis error on a command that mentions merge or push blocks (fail-closed); any other
@@ -62,7 +72,8 @@ SAFE_MERGE_HINT = "python ~/.claude/claude-code-config/scripts/safe_merge.py <ow
 
 # A command mentioning none of these cannot merge or push; skip it cheaply.
 PREFILTER = re.compile(r"merge|push|refs|updateref|enqueue|createcommit|graphql|contents|"
-                       r"default_branch|sync|\bgh\b|\bgit\b|gh\.exe|git\.exe|@", re.I)
+                       r"default_branch|sync|\bgh\b|\bgit\b|gh\.exe|git\.exe|@|"
+                       r"ssh_mux|<|\||\b(?:bash|sh|zsh|dash|ksh|source)\b", re.I)
 FAILCLOSED = re.compile(r"merge|push|refs/heads|updateref|enqueue|createcommit", re.I)
 GRAPHQL_MUTATIONS = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest"
                                r"|createCommitOnBranch|mergeBranch|updateRefs?)\b", re.I)
@@ -109,6 +120,14 @@ GIT_KNOWN = {"add", "commit", "status", "log", "diff", "fetch", "pull", "merge",
              "shortlog", "update-index", "merge-base", "hash-object", "count-objects", "help"}
 PUSH_FLAGS_WITH_VALUE = {"--repo", "-o", "--push-option", "--receive-pack", "--exec",
                          "--signed", "--recurse-submodules"}
+# script files a shell runs: read up to this size; a larger one is unreadable (see verdict)
+SCRIPT_MAX_BYTES = 1 << 20
+SCRIPT_SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "source"}
+SSH_MUX = {"ssh_mux.py", "ssh_mux"}
+SSH_VALUE_FLAGS = set("bcDEeFIiJLlmOopQRSWw")
+FILE_PRINTERS = {"cat", "type", "get-content", "gc"}
+PRINTER_FLAGS_WITH_VALUE = {"-encoding", "-totalcount", "-tail", "-head", "-first", "-delimiter",
+                            "-readcount"}
 VAR_REF = re.compile(r"\$\{(\w+)\}|\$env:(\w+)|\$(\w+)|@(\w+)", re.I)
 
 
@@ -335,10 +354,12 @@ class Ctx:
         self.vars: dict[str, str] = dict(variables or {})
         self.head_moved = False  # a checkout/switch earlier in the command: HEAD on disk is stale
         self.branch: str | None = None  # ... unless it named the branch it switched to
+        self.unreadable: list[str] = []  # local script files a shell runs that could not be read
 
     def child(self, **kw) -> "Ctx":
         c = Ctx(self.cwd, self.remote, self.depth + 1, self.powershell, self.vars)
         c.head_moved, c.branch = self.head_moved, self.branch
+        c.unreadable = self.unreadable  # shared: verdict() raises once the whole command is scanned
         for k, v in kw.items():
             setattr(c, k, v)
         return c
@@ -832,7 +853,161 @@ def _feeds_a_shell(segments: list[dict], idx: int) -> bool:
     return False
 
 
-def _segment_finding(seg: dict, ctx: Ctx, piped_into_shell: bool) -> str | None:
+# ---------------------------------------------------------------------------
+# Script FILES a shell runs (incident 2026-11-19: `ssh_mux.py run box --script f` pushed to
+# main from inside f). Only shells count: a file fed to python/node is data more often than code,
+# and its prose would block on every mention of a push.
+# ---------------------------------------------------------------------------
+
+def _split_redirects(tokens: list[str]) -> tuple[list[str], list[str]]:
+    """(tokens without redirections, the files redirected INTO stdin)."""
+    clean: list[str] = []
+    inputs: list[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "<" and i + 1 < len(tokens):
+            inputs.append(tokens[i + 1])
+            i += 2
+            continue
+        if tok.startswith("<") and not tok.startswith(("<<", "<(")) and len(tok) > 1:
+            inputs.append(tok[1:])
+        elif re.fullmatch(r"\d*>>?|&>>?", tok):
+            i += 2
+            continue
+        elif not re.match(r"^(?:\d*>>?|&>>?)\S|^\d*>&\d+$", tok):
+            clean.append(tok)
+        i += 1
+    return clean, inputs
+
+
+def _ssh_remote_command(args: list[str]) -> list[str]:
+    """ssh arguments -> the remote command words (after options and the host)."""
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        a = args[i]
+        i += 2 if len(a) == 2 and a[1] in SSH_VALUE_FLAGS else 1
+    return [w for t in args[i + 1:] for w in t.split()]
+
+
+def _shell_flags(args: list[str]) -> tuple[list[str], list[str]]:
+    k = next((k for k, a in enumerate(args) if not a.startswith("-")), len(args))
+    return args[:k], args[k:]
+
+
+def _runs_stdin(tokens: list[str], p: int, depth: int = 0) -> bool:
+    """Does the program at tokens[p] execute what arrives on its stdin as a script?"""
+    prog = _base(tokens[p])
+    args = _split_redirects(tokens[p + 1:])[0]
+    if prog == "ssh" and depth < MAX_DEPTH:
+        remote = _ssh_remote_command(args)
+        q = _primary_index(remote)
+        return not remote or (q < len(remote) and _runs_stdin(remote, q, depth + 1))
+    if prog in ("pwsh", "powershell"):
+        return not args or args[-1] == "-"
+    if prog in SCRIPT_SHELLS:
+        flags, positional = _shell_flags(args)
+        if any(re.fullmatch(r"-\w*c\w*", f) for f in flags):
+            return False
+        return not positional or any(re.fullmatch(r"-\w*s\w*", f) for f in flags)
+    return False
+
+
+def _stdin_target(segments: list[dict], idx: int) -> str:
+    """The shell (or ssh) later in the pipeline of segments[idx] that RUNS what flows into it, or ''."""
+    j = idx
+    while j + 1 < len(segments) and segments[j]["sep"] == "|":
+        tokens = segments[j + 1]["tokens"]
+        p = _primary_index(tokens)
+        if p < len(tokens) and _base(tokens[p]) in SCRIPT_SHELLS | {"ssh", "pwsh", "powershell"}:
+            return _base(tokens[p]) if _runs_stdin(tokens, p) else ""
+        j += 1
+    return ""
+
+
+def _read_script(token: str, ctx: Ctx) -> str | None:
+    """Text of a LOCAL script file a shell is about to run. None for a file on a remote host (out of
+    reach, as before). A local file that cannot be read is recorded in ctx.unreadable."""
+    if ctx.remote:
+        return None
+    value, resolved = expand(token, ctx)
+    if not resolved or not value:
+        ctx.unreadable.append(f"{token} (path cannot be resolved)")
+        return None
+    path = Path(_native_path(os.path.expanduser(value.replace("\\", "/") if ctx.powershell else value)))
+    if not path.is_absolute():
+        if ctx.cwd is None:
+            ctx.unreadable.append(f"{value} (relative, working directory unknown)")
+            return None
+        path = ctx.cwd / path
+    try:
+        if path.stat().st_size > SCRIPT_MAX_BYTES:
+            ctx.unreadable.append(f"{path} (larger than {SCRIPT_MAX_BYTES} bytes)")
+            return None
+        return path.read_bytes().decode("utf-8", "replace")
+    except OSError as exc:
+        ctx.unreadable.append(f"{path} ({exc.__class__.__name__})")
+        return None
+
+
+def _ssh_mux_run(tokens: list[str], p: int) -> tuple[list[str], str | None] | None:
+    """`[python] ssh_mux.py run <alias> [--script FILE] [--] <command...>`: (remote command tokens,
+    script path) or None when the segment is not an ssh_mux run."""
+    for i in range(p, len(tokens) - 1):
+        if _base(tokens[i]) in SSH_MUX and tokens[i + 1] == "run":
+            rest = tokens[i + 3:]  # after `run <alias>`
+            script = None
+            if rest[:1] == ["--script"]:
+                script = rest[1] if len(rest) > 1 else ""
+                rest = rest[2:]
+            return (rest[1:] if rest[:1] == ["--"] else rest), script
+    return None
+
+
+def _fed_scripts(tokens: list[str], p: int, prog: str, target: str) -> list[tuple[str, str, str]]:
+    """Local files whose text a shell runs: (how it is fed, path token, the shell that runs it).
+    `shell < file` / `ssh host [bash -s] < file`, `x < file | shell`, `cat|type|Get-Content file |
+    shell`, `bash|sh file` (no -c/-s). target: the shell later in the pipe that runs stdin, or ''."""
+    clean, inputs = _split_redirects(tokens[p:])
+    fed: list[tuple[str, str, str]] = []
+    if prog in SCRIPT_SHELLS | {"ssh", "pwsh", "powershell"} and _runs_stdin(clean, 0):
+        fed += [(f"{prog} < file", f, prog) for f in inputs]
+    elif target:
+        fed += [(f"< file | {target}", f, target) for f in inputs]
+    if prog in FILE_PRINTERS and target:
+        skip = False
+        for tok in clean[1:]:
+            if skip:
+                skip = False
+            elif tok.lower() in PRINTER_FLAGS_WITH_VALUE:
+                skip = True
+            elif not tok.startswith("-"):
+                fed.append((f"{prog} file | {target}", tok, target))
+    if prog in SCRIPT_SHELLS:
+        flags, positional = _shell_flags(clean[1:])
+        if positional and not any(re.fullmatch(r"-\w*[cs]\w*", f) for f in flags):
+            fed.append((f"{prog} file", positional[0], prog))
+    return fed
+
+
+def _script_finding(label: str, path_token: str, ctx: Ctx, runner: str) -> str | None:
+    """Scan a local script file as the program `runner` will read it (ssh: a remote shell)."""
+    if ctx.depth >= MAX_DEPTH:
+        return None
+    body = _read_script(path_token, ctx)
+    if body is None:
+        return None
+    remote = ctx.remote or runner == "ssh"
+    inner = ctx.child(remote=remote, powershell=runner in ("pwsh", "powershell"))
+    if remote:
+        inner.cwd = None
+    # scan_text only: it parses the script as a shell does (comments, echo), where the loose
+    # word scan of code strings would block on a comment that mentions a push
+    found = scan_text(body.replace("\r\n", "\n"), inner)
+    return f"script file fed to {label} ({path_token}): {found}" if found else None
+
+
+def _segment_finding(seg: dict, ctx: Ctx, piped_into_shell: bool, target: str = "") -> str | None:
     tokens = seg["tokens"]
     found = _substitution_finding(tokens, ctx)
     if found:
@@ -841,10 +1016,27 @@ def _segment_finding(seg: dict, ctx: Ctx, piped_into_shell: bool) -> str | None:
     prog = _base(expand(tokens[p], ctx)[0]) if p < len(tokens) else ""
     if seg["heredocs"] and (prog in SHELLS or piped_into_shell) and ctx.depth < MAX_DEPTH:
         for body in seg["heredocs"]:
-            inner = ctx.child(remote=ctx.remote or prog == "ssh")
+            inner = ctx.child(remote=ctx.remote or prog == "ssh" or target == "ssh")
             found = scan_text(body, inner) or _loose(body, inner)
             if found:
                 return f"heredoc fed to {prog}: {found}"
+    if p < len(tokens) and prog not in READERS:
+        for label, path_token, runner in _fed_scripts(tokens, p, prog, target):
+            found = _script_finding(label, path_token, ctx, runner)
+            if found:
+                return found
+        mux = _ssh_mux_run(tokens, p)
+        if mux is not None:
+            command, script = mux
+            # ssh_mux joins the words with spaces and the remote shell splits them again
+            words = [w for t in command for w in t.split()]
+            q = _primary_index(words)
+            if script is not None and (not words or (q < len(words) and _runs_stdin(words, q))):
+                found = _script_finding("ssh_mux run --script", script, ctx, "ssh")
+                if found:
+                    return found
+            found = _scan_tokens(command, ctx.child(remote=True))
+            return f"over ssh_mux: {found}" if found else None
     if p >= len(tokens) or prog in READERS:
         return None
     if prog in ECHOES and not piped_into_shell:
@@ -946,7 +1138,7 @@ def scan_text(text: str, ctx: Ctx) -> str | None:
                 return found
             continue
         before = (ctx.branch, ctx.head_moved)
-        found = _segment_finding(seg, ctx, _feeds_a_shell(segments, idx))
+        found = _segment_finding(seg, ctx, _feeds_a_shell(segments, idx), _stdin_target(segments, idx))
         if found:
             return found
         if (ctx.branch, ctx.head_moved) != before and seg["sep"] in ("||", "&", "|"):
@@ -955,11 +1147,22 @@ def scan_text(text: str, ctx: Ctx) -> str | None:
     return None
 
 
+class ScriptUnreadable(Exception):
+    """A local script file a shell runs could not be read; decide() applies the analysis-error policy."""
+
+
 def verdict(command: str, cwd: Path | None, powershell: bool = False) -> str | None:
-    """A finding string when the command must be blocked, else None."""
+    """A finding string when the command must be blocked, else None.
+
+    Raises ScriptUnreadable when nothing was found but a script file the command feeds to a shell
+    could not be read: the verdict on that file is unknown, not clean."""
     if not PREFILTER.search(command or ""):
         return None
-    return scan_text(command, Ctx(cwd, powershell=powershell))
+    ctx = Ctx(cwd, powershell=powershell)
+    found = scan_text(command, ctx)
+    if found is None and ctx.unreadable:
+        raise ScriptUnreadable("script file not inspected: " + "; ".join(ctx.unreadable))
+    return found
 
 
 def _reason(finding: str, command: str) -> str:
@@ -1025,6 +1228,13 @@ def decide(event: dict) -> str | None:
     cwd = event.get("cwd")  # absent: a refspec-less push cannot be resolved and blocks
     try:
         found = verdict(command, Path(cwd) if cwd else None, powershell=tool.lower() == "powershell")
+    except ScriptUnreadable as exc:
+        if FAILCLOSED.search(command):
+            sc.log("WARN", HOOK, "block", "script-unreadable", command)
+            return (f"merge-gate: команда упоминает merge/push, а скрипт, который она запускает, "
+                    f"не прочитан ({exc}). Дайте путь к существующему локальному файлу.")
+        sc.log("WARN", HOOK, "allow", "script-unreadable", command)
+        return None
     except Exception as exc:  # noqa: BLE001
         if FAILCLOSED.search(command):
             sc.log("WARN", HOOK, "block", "analysis-error", command)

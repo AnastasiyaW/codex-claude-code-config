@@ -767,6 +767,165 @@ def unit(failures: list[str]) -> None:
     eq("analysis error allows unrelated text", r2, None)
 
 
+SCRIPT_CASES = 0
+
+
+def script_files(failures: list[str]) -> None:
+    """Script FILES a shell runs. Incident 2026-11-19: `ssh_mux.py run box --script f` ran
+    `git push` on main in /opt/app; the hook saw only the command text."""
+    global SCRIPT_CASES
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+
+        def put(name: str, text: str) -> str:
+            (d / name).write_bytes(text.encode("utf-8"))
+            return (d / name).as_posix()
+
+        incident = put("deploy.sh", "cd /opt/app\n"
+                                    "git add a.txt && git commit -m 'x' && git push\n")
+        to_main = put("to-main.sh", "set -e\n# deploy\ngit push origin main\n")
+        feature = put("feature.sh", "cd /opt/x\ngit checkout -b feat/x\ngit push -u origin feat/x\n")
+        nogit = put("nogit.sh", "echo hi\nls -la /opt\n")
+        mux = "python ~/.claude/scripts/ssh_mux.py run box"
+        cases = [  # (command, powershell, must_block)
+            (f"{mux} --script {incident}", False, True),
+            (f"{mux} --script {to_main}", False, True),
+            (f"{mux} --script deploy.sh", False, True),  # relative to the hook's cwd
+            (f"f={incident}; {mux} --script \"$f\"", False, True),
+            (f"ssh box bash -s < {incident}", False, True),
+            (f"ssh box 'bash -s' <{incident}", False, True),
+            (f"cat {incident} | ssh box bash -s", False, True),
+            (f"cat {incident} | ssh box", False, True),
+            (f"bash -s < {to_main}", False, True),
+            (f"bash {to_main}", False, True),
+            (f"{mux} --script {str(d / 'deploy.sh')}", True, True),
+            (f"Get-Content {str(d / 'deploy.sh')} | ssh box bash -s", True, True),
+            (f"{mux} -- 'cd /opt/x && git push'", False, True),
+            (f"{mux} -- git push origin main", False, True),
+            (f"{mux} --script {incident} -- 'bash -s'", False, True),
+            (f"{mux} --script {incident} -- \"sudo bash -s\"", False, True),
+            (f"{mux} --script {incident} -- bash -s", False, True),
+            (f"{mux} --script {incident} -- cat", False, False),
+            (f"{mux} --script {incident} -- 'bash -c true'", False, False),
+            (f"{mux} --script {feature}", False, False),
+            (f"{mux} --script {nogit}", False, False),
+            (f"ssh box bash -s < {feature}", False, False),
+            (f"cat {nogit} | ssh box", False, False),
+            (f"cat {incident} | grep push", False, False),
+            (f"cat {incident}", False, False),
+            (f"{mux} -- 'cd /opt/x && git push origin feat/x'", False, False),
+            ("bash -lc 'echo hi'", False, False),
+        ]
+        for cmd, ps, want in cases:
+            got = mg.verdict(cmd, d, ps)
+            if (got is not None) != want:
+                failures.append(f"script file: must {'BLOCK' if want else 'ALLOW'} (ps={ps}): {cmd} -> {got}")
+        # unreadable script: the hook's analysis-error policy (block only if the command text
+        # itself mentions merge/push); verdict raises so decide() applies that policy
+        def raises(cmd: str, ps: bool = False) -> bool:
+            try:
+                mg.verdict(cmd, d, ps)
+                return False
+            except mg.ScriptUnreadable:
+                return True
+
+        for cmd in (f"{mux} --script {(d / 'missing.sh').as_posix()}",
+                    f"{mux} --script {(d / 'missing-push.sh').as_posix()}",
+                    f"{mux} --script"):
+            if not raises(cmd):
+                failures.append(f"unreadable script must raise ScriptUnreadable from verdict: {cmd}")
+        # files a shell does NOT run, and spellings that are not an ssh_mux run: clean, no raise
+        for cmd, ps in ((f"bash -c true < {to_main}", False),
+                        (f"Get-Content -Encoding utf8 {str(d / 'nogit.sh')} | ssh box bash -s", True),
+                        (f"python other.py run box --script {to_main}", False),
+                        ("python ~/.claude/scripts/ssh_mux.py", False),
+                        (f"{mux} --script {nogit} -- cat", False)):
+            try:
+                got = mg.verdict(cmd, d, ps)
+            except Exception as exc:  # noqa: BLE001
+                got = f"raised {exc!r}"
+            if got is not None:
+                failures.append(f"script file: must ALLOW without error (ps={ps}): {cmd} -> {got}")
+        for cmd, ps in ((f"Get-Content -Encoding utf8 {str(d / 'deploy.sh')} | ssh box bash -s", True),
+                        (f"cat {to_main} | grep -v x | bash", False),
+                        (f"{mux} --script {nogit} git push origin main", False)):
+            if mg.verdict(cmd, d, ps) is None:
+                failures.append(f"script file: must BLOCK (ps={ps}): {cmd}")
+        # a bash script is read as bash: its own variable decides the branch
+        var_feature = put("var-feature.sh", "b=feat/x\ngit push origin $b\n")
+        var_main = put("var-main.sh", "b=main\ngit push origin $b\n")
+        if mg.verdict(f"bash {var_feature}", d, False) is not None or mg.verdict(f"bash {var_main}", d, False) is None:
+            failures.append("bash script variables must decide the pushed branch")
+        # a script is parsed as the shell that runs it: in bash a backtick is a substitution
+        backtick = put("backtick.sh", "echo `git push origin main`\n")
+        if mg.verdict(f"bash {backtick}", d, False) is None:
+            failures.append("bash script: backtick substitution must be read as bash")
+        # an unresolved $path is unreadable even when a file of that literal name exists
+        put("$nope", "echo hi\n")
+        if not raises(f"{mux} --script $nope"):
+            failures.append("unresolved script path must raise ScriptUnreadable")
+        # a script fed through ssh runs on the remote host, where HEAD is unknown; run locally,
+        # HEAD is the feature branch of the working directory
+        head = put("head.sh", "git push origin HEAD\n")
+        world, real_git = FakeGit(), mg._git
+        mg._git = world
+        try:
+            feature_cwd = world.root("feature")
+            if mg.verdict(f"bash {head}", feature_cwd, False) is not None:
+                failures.append("local bash script: git push origin HEAD on a feature branch must ALLOW")
+            for cmd in (f"ssh box bash -s < {head}", f"{mux} --script {head}"):
+                if mg.verdict(cmd, feature_cwd, False) is None:
+                    failures.append(f"remote script: git push origin HEAD must BLOCK: {cmd}")
+        finally:
+            mg._git = real_git
+        if mg.verdict(f"cat {to_main} | bash | cat", d, False) is None:
+            failures.append(f"script file: must BLOCK: cat {to_main} | bash | cat")
+        # parsing helpers, exact outputs
+        sr = mg._split_redirects
+        rc = mg._ssh_remote_command
+        rs = mg._runs_stdin
+        helper_cases = [
+            (sr(["bash", "-s", "<", "f", "x"]), (["bash", "-s", "x"], ["f"])),
+            (sr(["bash", "<f"]), (["bash"], ["f"])),
+            (sr(["x", "<"]), (["x", "<"], [])),
+            (sr(["x", "<<EOF", "<(y)"]), (["x", "<<EOF", "<(y)"], [])),
+            (sr(["x", ">", "out", "y", ">>", "o2", "z"]), (["x", "y", "z"], [])),
+            (sr(["x", "2>/dev/null", "2>&1", "y"]), (["x", "y"], [])),
+            (rc(["-p", "22", "h", "bash", "-s"]), ["bash", "-s"]),
+            (rc(["-i", "k", "-o", "X=1", "h", "sudo bash -s"]), ["sudo", "bash", "-s"]),
+            (rc(["-T", "h", "cat"]), ["cat"]),
+            (rc(["-oX=1", "h", "ls"]), ["ls"]),
+            (rc(["-T"]), []),
+            (rc(["h"]), []),
+            (rs(["bash"], 0), True), (rs(["bash", "-s"], 0), True), (rs(["bash", "-l"], 0), True),
+            (rs(["bash", "-s", "f"], 0), True), (rs(["bash", "f"], 0), False),
+            (rs(["bash", "-c", "x"], 0), False), (rs(["bash", "-lc", "x"], 0), False),
+            (rs(["bash", "<", "f"], 0), True),
+            (rs(["x", "bash"], 1), True), (rs(["x", "bash", "-c", "y"], 1), False),
+            (rs(["pwsh"], 0), True), (rs(["pwsh", "-"], 0), True), (rs(["pwsh", "-Command", "-"], 0), True),
+            (rs(["pwsh", "-File", "x"], 0), False),
+            (rs(["ssh", "h"], 0), True), (rs(["ssh", "h", "bash", "-s"], 0), True),
+            (rs(["ssh", "-p", "22", "h", "bash -s"], 0), True),
+            (rs(["ssh", "h", "cat"], 0), False), (rs(["ssh", "h", "bash", "-c", "x"], 0), False),
+            (rs(["ssh", "h"] * mg.MAX_DEPTH, 0), True),
+            (rs(["ssh", "h"] * (mg.MAX_DEPTH + 1), 0), False),
+            (rs(["python"], 0), False),
+        ]
+        for k, (got, want) in enumerate(helper_cases):
+            if got != want:
+                failures.append(f"parsing helper case {k}: {got!r} != {want!r}")
+        allow = mg.decide({"tool_name": "Bash", "cwd": tmp,
+                           "tool_input": {"command": f"{mux} --script {(d / 'missing.sh').as_posix()}"}})
+        block = mg.decide({"tool_name": "Bash", "cwd": tmp,
+                           "tool_input": {"command": f"{mux} --script {(d / 'missing-push.sh').as_posix()}"}})
+        if allow is not None or not block:
+            failures.append(f"unreadable script policy: missing.sh -> {allow!r}, missing-push.sh -> {block!r}")
+        big = put("big.sh", "git push origin main\n" + "#" * (mg.SCRIPT_MAX_BYTES + 1))
+        if not raises(f"{mux} --script {big}"):
+            failures.append("oversized script must raise ScriptUnreadable from verdict")
+        SCRIPT_CASES = len(cases) + len(helper_cases) + 20
+
+
 def fast() -> int:
     """MERGE_GATE_FAST=1: every case against an in-memory copy of the test repositories, plus
     the unit battery, so not one git process starts (the mutation probe runs this hundreds of
@@ -797,6 +956,7 @@ def fast() -> int:
     finally:
         mg._git = real_git
     unit(failures)
+    script_files(failures)
     for f in failures:
         print("FAIL", f)
     print(f"SCANNED: fast cases={len(BLOCK) + len(ALLOW)} failures={len(failures)}")
@@ -915,7 +1075,8 @@ def main() -> int:
         for w in ("feature", "tracking", "matching"):
             subprocess.run(["git", "-C", str(repos["repo"]), "worktree", "remove", "--force",
                             str(repos[w])], capture_output=True)
-    total = len(BLOCK) + len(ALLOW) + 13
+    script_files(failures)
+    total = len(BLOCK) + len(ALLOW) + 13 + SCRIPT_CASES
     for f in failures:
         print("FAIL", f)
     print(f"SCANNED: cases={total} failures={len(failures)}")
