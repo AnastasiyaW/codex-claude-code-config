@@ -930,7 +930,9 @@ IMAGE_RM_SEGMENT = re.compile(
 STOP_INTENT = re.compile(
     r"\b(?:останови(?:те)?|остановить|остановим|останавливай(?:те)?|убей(?:те)?|убить|убьём|убивай(?:те)?|"
     r"прибей(?:те)?|прибивай(?:те)?|заверши(?:те)?|завершить|стопни(?:те)?|тормозни(?:те)?)\b|"
-    r"(?:^|[.!;:\n])\s*(?:please\s+)?(?:kill|stop|terminate)\b", re.IGNORECASE)
+    r"(?:^|[.!;:\n])\s*(?:please\s+)?(?:kill|stop|terminate)\b|"
+    # owner 2026-11-21: her own pasted `taskkill //PID …` line (alone or after «удали») is the request
+    r"(?:^|[.!;:\n])\s*(?:удали(?:те)?\s+)?taskkill\s+/{1,2}PID\b", re.IGNORECASE)
 STOP_MENTION = re.compile(r"останов|убить|убей|прибей|заверш|стопн|kill|stop|terminat", re.IGNORECASE)
 # owner 2026-10-15 («останови <unit> и убери из автозапуска» was refused): `systemctl disable`
 # rides the stop path only on a removal imperative tied to autostart; a stop verb alone never disables.
@@ -1085,7 +1087,7 @@ def proposed_disable_units(answer: str) -> set[str]:
             out.add(m.group(2))
     return out
 NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|приб|стоп|тормоз|"
-                           r"заверш|трог)|"
+                           r"заверш|трог|taskkill|kill)|"
                            r"\bпочему\b|\bзачем\b|\bwhy\b|\bhow\b|"
                            # exclusions make the target list ambiguous (re-review 2026-10-12, finding 1)
                            r"\bкроме\b|\bбез\b|\bно\s+не\b|\bа\s+не\b|\bexcept\b|\bbut\b|\bnot\b|\bexcluding\b|"
