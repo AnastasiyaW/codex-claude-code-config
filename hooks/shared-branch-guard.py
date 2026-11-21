@@ -20,6 +20,7 @@ gets switched off, and then it protects nothing. Drop `.claude/shared-branch` in
 root of a repo that several workers share.
 
   blocked : git reset (any form) on a shared repo
+            git checkout -B / switch -C / branch -f|-M|-C (force-move a branch)
             git commit with no pathspec and no --only/-o
   allowed : git commit -- <paths>, git commit --only <path>, git commit --amend
             with an explicit pathspec, and everything outside a marked repo
@@ -110,6 +111,14 @@ def verdict(command: str) -> tuple[str, str] | None:
         if sub == "reset":
             return ("reset", " ".join(args))
 
+        # Force-(re)creating a branch moves an existing one like reset does; 2026-11-21
+        # `checkout -B` rebuilt a branch in a clone where another session was working.
+        if sub in ("checkout", "switch") and any(
+                t in ("-B", "-C", "--force-create") for t in rest):
+            return ("recreate", " ".join(args))
+        if sub == "branch" and any(t in ("-f", "--force", "-M", "-C") for t in rest):
+            return ("recreate", " ".join(args))
+
         if sub == "commit":
             if "--only" in rest or "-o" in rest:
                 continue
@@ -155,6 +164,16 @@ _REASONS = {
         "  свои правки убрать   -> git stash push -- <свои пути>\n"
         "  свой коммит отменить -> git revert <sha>  (добавляет, а не переписывает)\n"
         "  чужое сбросить       -> не сбрасывать; спросить владельца\n"
+    ),
+    "recreate": (
+        "Принудительное пересоздание ветки (`checkout -B`, `switch -C`, `branch -f/-M/-C`)\n"
+        "в ОБЩЕМ чекауте.\n\n"
+        "Оно переставляет существующую ветку на другой коммит так же, как reset: чужие\n"
+        "незапушенные коммиты этой ветки уходят в недостижимые объекты. 21.11.2026 так\n"
+        "пересоздали ветку в клоне, где параллельно работала другая сессия.\n\n"
+        "Что делать вместо:\n"
+        "  своя работа  -> git worktree add .claude/worktrees/<имя> -b <ветка> origin/main\n"
+        "  новая ветка  -> git checkout -b <новое-имя>  (без -B: упадёт, если имя занято)\n"
     ),
     "commit": (
         "`git commit` БЕЗ явных путей в общем чекауте.\n\n"
@@ -217,6 +236,11 @@ def _self_test() -> int:
     check("second command in a chain",
           kind("echo hi && git commit -m 'x'"), "commit")
     check("wrapped in timeout", kind("timeout 60 git reset --keep"), "reset")
+    check("checkout -B", kind("git checkout -q -B registry/x origin/main"), "recreate")
+    check("switch -C", kind("git switch -C feat/x origin/main"), "recreate")
+    check("switch --force-create", kind("git switch --force-create feat/x"), "recreate")
+    check("branch -f", kind("git branch -f main origin/main"), "recreate")
+    check("branch -M via -C dir", kind("git -C /repo branch -M old new"), "recreate")
 
     # --- allowed ---
     check("commit --only", kind("git commit --only app/x.py -m 'x'"), None)
@@ -227,6 +251,11 @@ def _self_test() -> int:
     check("not git at all", kind("reset the thing"), None)
     check("git status", kind("git status --short"), None)
     check("git add", kind("git add app/x.py"), None)
+    check("checkout -b", kind("git checkout -b feat/new origin/main"), None)
+    check("switch to a branch", kind("git switch main"), None)
+    check("checkout a path", kind("git checkout -- app/x.py"), None)
+    check("branch -d", kind("git branch -d old"), None)
+    check("worktree add -b", kind("git worktree add .claude/worktrees/x -b x origin/main"), None)
     check("a word containing reset", kind("git log --grep=reset"), None)
 
     # --- marker scoping ---
