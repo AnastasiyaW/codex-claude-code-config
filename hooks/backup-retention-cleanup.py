@@ -62,6 +62,13 @@ def list_local_branches(cwd: str) -> list[tuple[str, int]]:
         return []
 
 
+def stash_index(ref: str) -> int:
+    """stash@{12} -> 12. Refs must be dropped highest index first, and as strings
+    stash@{9} sorts above stash@{12}: dropping {9} first shifts {12} to {11}, so the
+    next drop hits a different (possibly user) stash."""
+    return int(ref[ref.index("{") + 1:ref.index("}")])
+
+
 def list_stashes(cwd: str) -> list[tuple[str, int]]:
     """Return [(ref, unix_ts), ...] for claude-pre-clean-* stashes."""
     try:
@@ -128,7 +135,7 @@ def main() -> None:
                 log("INFO", "cleanup_backup", "branch_deleted", name, cwd)
 
     # Stashes need descending ref order: dropping stash@{0} shifts stash@{1} to {0}.
-    for ref, ts in sorted(list_stashes(cwd), key=lambda x: x[0], reverse=True):
+    for ref, ts in sorted(list_stashes(cwd), key=lambda x: stash_index(x[0]), reverse=True):
         if now - ts > RETENTION_SECONDS:
             if drop_stash(cwd, ref):
                 dropped_stashes.append(ref)
