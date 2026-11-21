@@ -2221,7 +2221,9 @@ def stop_forced(cmd: str) -> set[str]:
 
 # the owner asks for a forced kill in words (else her "останови" approves only what a SIGTERM would do)
 FORCE_WORDS = re.compile(r"\b(?:убей(?:те)?|убить|убьём|убивай(?:те)?|прибей(?:те)?|прибивай(?:те)?|принудительно|насильно|force|sigkill)\b|"
-                         r"(?:^|[.!;:\n])\s*(?:please\s+)?kill\b|\s-9\b", re.IGNORECASE)
+                         r"(?:^|[.!;:\n])\s*(?:please\s+)?kill\b|\s-9\b|"
+                         # owner 2026-11-21: her own pasted `taskkill //F //PID ...` line is the forced ask itself
+                         r"\btaskkill\b[^\n]*\s(?:/{1,2}|-)F\b", re.IGNORECASE)
 
 
 def stop_only(cmd: str) -> bool:
