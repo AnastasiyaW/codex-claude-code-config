@@ -55,6 +55,7 @@ Self-test: python merge-gate-guard.py --self-test
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -1208,12 +1209,99 @@ def _owner_asks_to_merge(transcript_path: str) -> bool:
     return False
 
 
+# Owner 2026-11-21: a reviewed release script that pushes one snapshot commit to a public repository's
+# main by design (a PR merge commit would carry a private name its leak guard refuses) passes, but only
+# when it is listed in the local config RELEASES_CONFIG and runs in exactly this form: optional
+# `cd <absolute checkout> &&`, optional TAG=later|only, DRY_RUN=1, GATES=full and plain git identity
+# assignments, then `bash <script> <remote> <x.y.z>`. The checkout must be clean and equal to the
+# listed reviewed ref, origin and the remote must point at the listed repositories, and the owner's
+# latest message must ask to release or merge. The script itself runs its gates and tags only after
+# the public CI is green; TAG=now (push and tag without CI) never passes.
+RELEASES_CONFIG = Path(os.environ.get("MERGE_GATE_RELEASES")
+                       or Path.home() / ".claude" / "local" / "merge-gate-releases.json")
+RELEASE_ENV = (r"(?:(?:TAG=(?:later|only)|DRY_RUN=1|GATES=full"
+               r"|GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)=[A-Za-z0-9@._-]+)\s+)*")
+RELEASE_CD = r"\s*(?:cd\s+(?P<dir>\"[^\"]+\"|'[^']+'|[^\s;&|<>`$\"']+)\s*&&\s*)?"
+RELEASE_ASK = re.compile(r"выпуска\w*|выпусти\w*|выпустить|\brelease\w*|\bpublish\w*", re.I)
+
+
+def _releases() -> list[dict]:
+    try:
+        data = json.loads(RELEASES_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    keys = ("script", "remote", "origin", "public", "reviewed_ref")
+    return [r for r in data.get("releases", []) if isinstance(r, dict)
+            and all(isinstance(r.get(k), str) and r[k] for k in keys)]
+
+
+def _url_is(url: str | None, repo: str) -> bool:
+    return bool(url) and re.search(r"github\.com[/:]" + re.escape(repo) + r"(?:\.git)?/?$", url, re.I) is not None
+
+
+def _owner_asks_to_release(transcript_path: str) -> bool:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "human_confirmation_guard", Path(__file__).resolve().parent / "human-confirmation-guard.py")
+    hcg = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hcg)
+    req = hcg.owner_request(transcript_path or "")
+    if not req:
+        return False
+    for sentence in re.findall(r"[^.!?\n]+[.!?]?", req[0]):
+        m = RELEASE_ASK.search(sentence) or MERGE_ASK.search(sentence)
+        if m and not sentence.rstrip().endswith("?") and not NEGATION.search(sentence[:m.start()] + " "):
+            return True
+    return False
+
+
+def release_script(command: str, cwd: Path | None, transcript_path: str) -> str | None:
+    """None when the command is no listed release; "ok" when it may run; else the refusal."""
+    for rel in _releases():
+        m = re.fullmatch(RELEASE_CD + RELEASE_ENV + r"bash\s+" + re.escape(rel["script"]) + r"\s+"
+                         + re.escape(rel["remote"]) + r"\s+\d+\.\d+\.\d+\s*", command)
+        if not m:
+            continue
+        where = m.group("dir")
+        root = Path(_native_path(where.strip("\"'"))) if where else cwd
+        if root is None or not root.is_absolute():
+            return "the release needs an absolute checkout (cd <absolute path> && ...)"
+        if not (root / rel["script"]).is_file():
+            return f"{root} has no {rel['script']}"
+        if not _url_is(_git(root, "remote", "get-url", "origin"), rel["origin"]):
+            return f"origin of {root} is not {rel['origin']}"
+        if not _url_is(_git(root, "remote", "get-url", rel["remote"]), rel["public"]):
+            return f"the remote `{rel['remote']}` is not {rel['public']}"
+        status = _git(root, "status", "--porcelain")
+        head, reviewed = _git(root, "rev-parse", "HEAD"), _git(root, "rev-parse", rel["reviewed_ref"])
+        if status is None or status.strip() or not head or head != reviewed:
+            return f"the checkout must be clean and exactly {rel['reviewed_ref']} (the reviewed script)"
+        try:
+            asked = _owner_asks_to_release(transcript_path)
+        except Exception as exc:  # noqa: BLE001 - cannot read the approval: fail closed
+            return f"the owner's request was not read ({exc})"
+        if not asked:
+            return "the owner's latest message does not ask to release (выпускай / влей)"
+        return "ok"
+    return None
+
+
 def decide(event: dict) -> str | None:
     """The block reason for a PreToolUse event, or None to allow."""
     tool = str(event.get("tool_name") or "")
     command = sc.bash_command(event.get("tool_input") or {})
     if not command:
         return None
+    if tool.lower() != "powershell":
+        cwd0 = event.get("cwd")
+        release = release_script(command, Path(cwd0) if cwd0 else None,
+                                    str(event.get("transcript_path") or ""))
+        if release == "ok":
+            sc.log("ALLOW", HOOK, "release-script", "owner asked to release", command)
+            return None
+        if release is not None:
+            sc.log("BLOCK", HOOK, "block", "release-script-refused", command)
+            return f"merge-gate: скрипт выпуска не пропущен: {release}."
     if OWNER_FLAG in command:
         try:
             approved = _owner_asks_to_merge(str(event.get("transcript_path") or ""))
