@@ -934,6 +934,10 @@ STOP_INTENT = re.compile(
     # owner 2026-11-21: her own pasted `taskkill //PID …` line (alone or after «удали») is the request
     r"(?:^|[.!;:\n])\s*(?:удали(?:те)?\s+)?taskkill\s+/{1,2}PID\b", re.IGNORECASE)
 STOP_MENTION = re.compile(r"останов|убить|убей|прибей|заверш|стопн|kill|stop|terminat", re.IGNORECASE)
+# a whole line that is nothing but her stop command: «останови taskkill //F //PID 143536»
+PASTED_STOP_LINE = re.compile(
+    r"^[ \t]*(?:(?:останови(?:те)?|убей(?:те)?|удали(?:те)?)[ \t]+)?"
+    r"taskkill(?:[ \t]+(?:/{1,2}|-)(?:F|T|PID[ \t]+\d+))+[ \t]*$", re.IGNORECASE | re.MULTILINE)
 # owner 2026-10-15 («останови <unit> и убери из автозапуска» was refused): `systemctl disable`
 # rides the stop path only on a removal imperative tied to autostart; a stop verb alone never disables.
 #   review 2026-10-15 (REJECT, fixed): a bare autostart noun passed "добавь в автозапуск", "пусть останется",
@@ -1796,7 +1800,17 @@ def _tail_entries(path: Path):
                     yield e
 
 
+# owner 2026-11-21: her pasted stop line came with fullwidth slashes (U+FF0F, `／／F ／／PID n`) and was
+# refused; fullwidth ASCII forms in her words are read as plain ASCII.
+FULLWIDTH_ASCII = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
+
+
 def _human_text(e) -> str | None:
+    text = _human_text_raw(e)
+    return text.translate(FULLWIDTH_ASCII) if text is not None else None
+
+
+def _human_text_raw(e) -> str | None:
     """Text of an owner message: a typed turn, or a message the owner sent while I was working
     (host-written `queued_command` attachment, origin.kind=human). Task notifications and
     cross-session messages carry another origin or isMeta and never count (owner 2026-10-11)."""
@@ -2353,9 +2367,18 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
     if CONFIRM_ONLY.fullmatch(prompt):
         if not STOP_MENTION.search(answer) and not proposed_disable_units(answer):
             return False, "a bare 'yes' to an answer that proposed no stop"
+    elif pasted := PASTED_STOP_LINE.findall(prompt):
+        # owner 2026-11-21 («хук поправить может надо? на что он там жалуется?» + her stop line was refused):
+        # her own pasted stop line is the request; a question on another line is about something else,
+        # but a stop negation or condition anywhere still refuses.
+        rest = PASTED_STOP_LINE.sub("", prompt)
+        if NOT_A_STOP_GO.search(rest) or re.search(r"\bне\b|\bнет\b|\bпогоди|\bподожди|\bоставь|\bdon'?t\b|\bno\b",
+                                                   rest, re.IGNORECASE):
+            return False, "the request negates, hesitates or asks a question"
+        prompt = "\n".join(pasted)
     elif NOT_A_GO.search(prompt) or NOT_A_STOP_GO.search(prompt):
         return False, "the request negates, hesitates or asks a question"
-    elif not STOP_INTENT.search(prompt) and not (
+    if not CONFIRM_ONLY.fullmatch(prompt) and not STOP_INTENT.search(prompt) and not (
             DISABLE_INTENT.search(prompt)
             and not re.search(r"\b(?:kill|pkill|killall|taskkill|systemctl\s+stop)\b", cmd, re.IGNORECASE)):
         return False, "the latest request does not ask to stop a process"
