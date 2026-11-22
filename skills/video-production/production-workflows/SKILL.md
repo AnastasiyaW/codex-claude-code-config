@@ -43,7 +43,7 @@ in the docs and must be checked in the app before you rely on it.
 
 ## Checking motion: scripts/flicker_check.py
 
-`python scripts/flicker_check.py <video> [--region x,y,w,h] [--k 6]` reads per-frame luma with FFmpeg `signalstats` and
+`python "${CLAUDE_SKILL_DIR}/scripts/flicker_check.py" <video> [--region x,y,w,h] [--k 6]` reads per-frame luma with FFmpeg `signalstats` and
 flags frames whose brightness jump is far above the shot's own typical jump (a patch popping, a fill flickering).
 Exit 0 none flagged, 1 frames flagged (listed with time), 2 not checked (no FFmpeg, unreadable file). Point `--region` at
 the cleaned area. It finds sudden jumps, not slow drift or wrong texture: still watch the shot. `--self-test` builds a
