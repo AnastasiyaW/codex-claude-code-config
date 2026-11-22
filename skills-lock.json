@@ -1,8 +1,8 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-10-31T08:04:36+00:00",
-  "skill_count": 59,
-  "aggregate_hash": "sha256:a7c35919131df20b29a725adc1edcb0e67ebe2061e057bf2063a59ab4140c2c1",
+  "generated_at": "2026-11-22T18:51:54+00:00",
+  "skill_count": 60,
+  "aggregate_hash": "sha256:2f7e51271d1bfa94e7816861f6752289d2a926bf704f38a520babaaa7bfdbd1d",
   "skills": {
     "agent-harness-design": {
       "content_hash": "sha256:35fa835bbe2a1451c89874d7db0f6e82f5695c84590efa967103e83c76b91b2d",
@@ -638,6 +638,19 @@
       "file_count": 1,
       "files": [
         "SKILL.md"
+      ]
+    },
+    "video-production/production-workflows": {
+      "content_hash": "sha256:d63fb70a010846333a84b41b137c7a9de0428e2ce7554bea2bea3a42315f68b3",
+      "size_bytes": 26138,
+      "file_count": 6,
+      "files": [
+        "SKILL.md",
+        "references/adobe.md",
+        "references/blender.md",
+        "references/resolve-touchdesigner.md",
+        "references/sources.md",
+        "scripts/flicker_check.py"
       ]
     },
     "video-production/remotion-production-guide": {
