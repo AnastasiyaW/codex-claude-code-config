@@ -61,7 +61,7 @@ def main() -> int:
         stale = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"python {target} --session-start"}]}]}}
         assert MODULE._merge_hook(stale, "SessionStart", target, None) == "repaired"
         repaired = stale["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        assert repaired == f'python "{target.as_posix()}" --session-start'
+        assert repaired == f'{MODULE.PYTHON_CMD} "{target.as_posix()}" --session-start'
         router = canonical_repo / "hooks" / "keyword-skill-router.py"
         duplicate = {"hooks": {"UserPromptSubmit": [
             {"hooks": [{"type": "command", "command": f'python "{router.as_posix()}"',

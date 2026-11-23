@@ -98,6 +98,22 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _python_launcher() -> str:
+    """Interpreter word for hook commands: `python` where it exists, else `python3`.
+
+    macOS and many Linux distributions ship only `python3`. A `python "<hook>"`
+    command there fails with `python: command not found`, which Claude Code records
+    only as a non-blocking hook error, so every registered guard silently stops
+    running. Windows and most virtualenvs keep `python`.
+    """
+    if shutil.which("python") or not shutil.which("python3"):
+        return "python"
+    return "python3"
+
+
+PYTHON_CMD = _python_launcher()
+
 # Safe-defaults: hooks that should be on in any project. Each entry:
 #   (script filename in hooks/, hook event, optional "matcher" for fine-grained events)
 SAFE_DEFAULTS: list[tuple[str, str, str | None]] = [
@@ -324,7 +340,7 @@ def _command_for(script_path: Path, event: str, client_profile: str | None = Non
     if script_path.name == "keyword-skill-router.py" and event == "UserPromptSubmit":
         profile = client_profile if client_profile in {"claude", "codex"} else "shared"
         suffix = f" --profile {profile}"
-    return f'python "{script_path.as_posix()}"{suffix}'
+    return f'{PYTHON_CMD} "{script_path.as_posix()}"{suffix}'
 
 
 def _merge_hook(settings: dict, event: str, script_path: Path,
