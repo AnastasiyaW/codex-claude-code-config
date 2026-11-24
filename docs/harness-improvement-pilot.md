@@ -112,6 +112,20 @@ Reading the verdict, as an edit table:
 
 Exit codes are unchanged: `0` ACCEPT, `1` REJECT or CONFOUNDED, `2` input error.
 
+## pass@k, pass^k and regression cases
+
+Two rules follow Anthropic's [Demystifying evals for AI agents](https://www.anthropic.com/research/demystifying-evals-for-ai-agents).
+
+- Every report carries `pass_at_k_rate` (share of cases with at least one passing run) and
+  `pass_hat_k_rate` (share of cases where every run passed). The majority rule above can hide a
+  case that fails one run in three; `pass_hat_k_rate` shows it. It is also a supported objective
+  (`higher`); a gain that rests on a case with fewer than three runs is `CONFOUNDED`.
+- A case may carry `"kind": "regression"` or `"kind": "capability"`. A regression case in the
+  candidate must pass every run, or the verdict is `REJECT`. A capability case is judged by the
+  majority rule. Cases without `kind` keep the old majority rule.
+
+The hook eval suite produces the same numbers: `python evals/hooks/run_hook_evals.py --trials 3`.
+
 ## Candidate: evidence-backed visual workflow
 
 Assessed 2026-10-25 from [OpenVLHarness](https://github.com/uclanlp/OpenVLHarness).

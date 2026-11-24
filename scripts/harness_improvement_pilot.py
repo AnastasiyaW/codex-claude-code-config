@@ -8,6 +8,11 @@ when the same frozen suite improved without losing safety or held-out coverage.
 Three rules come from Google's Harness2 method, adapted to frozen receipts:
 one change per candidate, a case judged on repeated runs (a defect seen in one of
 k runs is noise), and a lesson ledger that records one lesson or NO_ENTRY per run.
+
+Two rules come from Anthropic's "Demystifying evals for AI agents": a suite reports
+pass@k (some run passed) and pass^k (every run passed, the stability measure), and a
+case marked "kind": "regression" must pass in every run of the candidate, because a
+regression suite guards behaviour that already worked.
 """
 from __future__ import annotations
 
@@ -22,10 +27,12 @@ from typing import Any
 SCHEMA = "harness-improvement-pilot/v1"
 OBJECTIVES = {
     "outcome_pass_rate": "higher",
+    "pass_hat_k_rate": "higher",
     "mean_tool_calls": "lower",
     "mean_elapsed_ms": "lower",
 }
 PARTITIONS = {"development", "held_out"}
+KINDS = {"capability", "regression"}
 COMPONENTS = frozenset({
     "prompt", "rule", "skill", "hook", "script", "memory", "tool-guidance", "subagent", "plugin",
 })
@@ -58,6 +65,11 @@ def case_outcome(case: dict[str, Any]) -> bool:
     """A case passes when a strict majority of its runs pass."""
     runs = case_runs(case)
     return sum(runs) * 2 > len(runs)
+
+
+def case_stable(case: dict[str, Any]) -> bool:
+    """pass^k for one case: every run passed."""
+    return all(case_runs(case))
 
 
 def validate_receipt(receipt: object) -> dict[str, Any]:
@@ -94,6 +106,8 @@ def validate_receipt(receipt: object) -> dict[str, Any]:
             raise ValueError("case.partition must be development or held_out")
         partitions.add(partition)
         case_runs(case)
+        if "kind" in case and case["kind"] not in KINDS:
+            raise ValueError(f"case {case_id} kind must be one of {sorted(KINDS)}")
         if type(case.get("safety_passed")) is not bool:
             raise ValueError(f"case {case_id} needs boolean safety_passed")
         for metric in ("tool_calls", "elapsed_ms"):
@@ -143,6 +157,8 @@ def metrics(receipt: dict[str, Any]) -> dict[str, float]:
     count = len(cases)
     return {
         "outcome_pass_rate": sum(case_outcome(case) for case in cases) / count,
+        "pass_at_k_rate": sum(any(case_runs(case)) for case in cases) / count,
+        "pass_hat_k_rate": sum(case_stable(case) for case in cases) / count,
         "mean_tool_calls": sum(case["tool_calls"] for case in cases) / count,
         "mean_elapsed_ms": sum(case["elapsed_ms"] for case in cases) / count,
     }
@@ -194,11 +210,18 @@ def compare(baseline: object, candidate: object) -> dict[str, Any]:
     ]
     if held_out_failures:
         reasons.append("candidate failed held-out cases: " + ", ".join(sorted(held_out_failures)))
+    unstable = [
+        case_id for case_id, case in candidate_cases.items()
+        if case.get("kind") == "regression" and not case_stable(case)
+    ]
+    if unstable:
+        reasons.append("candidate regression cases did not pass every run: " + ", ".join(sorted(unstable)))
 
-    if objective == "outcome_pass_rate":
+    per_case = {"outcome_pass_rate": case_outcome, "pass_hat_k_rate": case_stable}.get(objective)
+    if per_case is not None:
         rests_on = [
             case_id for case_id in baseline_cases
-            if case_outcome(baseline_cases[case_id]) != case_outcome(candidate_cases[case_id])
+            if per_case(baseline_cases[case_id]) != per_case(candidate_cases[case_id])
         ]
     else:
         rests_on = list(candidate_cases)

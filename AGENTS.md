@@ -111,7 +111,8 @@ This repository has no application build or deploy step. Its verification suite 
 python scripts/validate_config.py --strict
 python scripts/generate_skills_lock.py --check
 python scripts/generate_skills_catalog.py --check
-python evals/hooks/run_hook_evals.py
+python evals/hooks/run_hook_evals.py --trials 3   # pass@k / pass^k; regression cases must pass every trial
+python evals/hooks/test_run_hook_evals.py
 python scripts/test_lifecycle_hook_contracts.py
 python scripts/test_dependency_provenance_guard.py
 python scripts/dependency-alternatives.py --self-test

@@ -72,7 +72,9 @@ addressable ADD/EDIT only, dedup, preserve nuance (no full-file rewrite). Put it
 (`file-organization-cohesion.md`): a global rule → `~/.claude/rules/`, a project-specific lesson →
 that project's memory/CLAUDE.md. **If the rule is mechanically checkable** (file-name shape,
 forbidden command, tool-call form), note that it should graduate to a hook/validator (deterministic
-tier beats prose — `learn-from-corrections.md`).
+tier beats prose — `learn-from-corrections.md`). When it lands in a hook, add a refuse/act pair to
+`evals/hooks/cases.json` (`"kind": "regression"`, `"source"` = date and the correction) and check it
+with `python evals/hooks/run_hook_evals.py --trials 3`: the real failure becomes a regression case.
 
 ### 6. Mark only reconciled sessions processed
 
