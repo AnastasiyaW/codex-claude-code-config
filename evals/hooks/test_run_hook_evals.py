@@ -82,6 +82,20 @@ class Runner(unittest.TestCase):
         self.assertEqual(report["cases"][0]["trials"], ["UNKNOWN"])
         self.assertEqual(report["summary"]["regression"]["not_run"], 1)
 
+    def test_nonzero_exit_without_traceback_is_not_allow(self) -> None:
+        (self.hooks / "exit1.py").write_text("import sys\nsys.stdin.read()\nsys.exit(1)\n", encoding="utf-8")
+        code, report = self.run_suite([case("act", "exit1.py", "allow")], 1)
+        self.assertEqual((code, report["cases"][0]["trials"]), (2, ["UNKNOWN"]))
+
+    def test_exit_2_is_a_block(self) -> None:
+        (self.hooks / "exit2.py").write_text(
+            "import sys\nsys.stdin.read()\nsys.stderr.write('denied here')\nsys.exit(2)\n", encoding="utf-8")
+        refuse = dict(case("refuse", "exit2.py", "block"), reason_contains="denied here")
+        code, _ = self.run_suite([refuse, case("act", "exit2.py", "allow", "capability")], 1)
+        self.assertEqual(code, 0)
+        _, report = self.run_suite([case("act", "exit2.py", "allow")], 1)
+        self.assertEqual(report["cases"][0]["trials"], ["FAIL"])
+
     def test_missing_hook_is_unknown(self) -> None:
         code, _ = self.run_suite([case("gone", "absent.py", "allow")], 1)
         self.assertEqual(code, 2)

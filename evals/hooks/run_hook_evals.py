@@ -135,7 +135,13 @@ def _judge(case: dict, hook: Path) -> tuple[bool, str]:
         # A crashed hook prints no block, so "allow" would read it as a pass.
         if "Traceback (most recent call last)" in (proc.stderr or ""):
             raise OSError("hook crashed: " + proc.stderr.strip().splitlines()[-1][:200])
+        # Claude hook protocol: exit 2 blocks with the reason on stderr; any other
+        # non-zero exit is an error, not a decision.
+        if proc.returncode not in (0, 2):
+            raise OSError(f"hook exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
         out = proc.stdout or ""
+        if proc.returncode == 2:
+            out = json.dumps({"decision": "block", "reason": (proc.stderr or "").strip()}) + "\n" + out
 
         decision = None
         for line in out.splitlines():

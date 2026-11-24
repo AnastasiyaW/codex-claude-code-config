@@ -210,7 +210,9 @@ class StabilityTests(unittest.TestCase):
     def test_regression_case_failing_one_run_rejects(self) -> None:
         candidate = candidate_receipt(development_pass=True, task_runs=[True, True, False])
         candidate["cases"][1]["kind"] = "regression"
-        report = PILOT.compare(receipt(development_pass=False), candidate)
+        base = receipt(development_pass=False)
+        base["cases"][1]["kind"] = "regression"
+        report = PILOT.compare(base, candidate)
         self.assertEqual(report["decision"], "REJECT")
         self.assertIn("candidate regression cases did not pass every run: known-task-receipt",
                       report["reasons"])
@@ -218,8 +220,20 @@ class StabilityTests(unittest.TestCase):
     def test_capability_case_may_fail_one_run(self) -> None:
         candidate = candidate_receipt(development_pass=True, task_runs=[True, True, False])
         candidate["cases"][1]["kind"] = "capability"
-        report = PILOT.compare(receipt(development_pass=False), candidate)
+        base = receipt(development_pass=False)
+        base["cases"][1]["kind"] = "capability"
+        report = PILOT.compare(base, candidate)
         self.assertEqual(report["decision"], "ACCEPT")
+
+    def test_candidate_cannot_relabel_or_drop_a_regression_kind(self) -> None:
+        for relabel in ("capability", None):
+            base = receipt(development_pass=False)
+            base["cases"][1]["kind"] = "regression"
+            cand = candidate_receipt(development_pass=True, task_runs=[True, True, False])
+            if relabel:
+                cand["cases"][1]["kind"] = relabel
+            with self.assertRaisesRegex(ValueError, "keep each case's kind"):
+                PILOT.compare(base, cand)
 
     def test_unknown_kind_is_an_input_error(self) -> None:
         data = receipt(development_pass=True)

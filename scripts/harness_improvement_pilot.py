@@ -182,6 +182,10 @@ def compare(baseline: object, candidate: object) -> dict[str, Any]:
         for case_id in baseline_cases
     ):
         raise ValueError("baseline and candidate must keep each case in the same partition")
+    # The frozen baseline owns the kind: a candidate may not relabel a regression case.
+    if any(baseline_cases[case_id].get("kind") != candidate_cases[case_id].get("kind")
+           for case_id in baseline_cases):
+        raise ValueError("baseline and candidate must keep each case's kind")
 
     baseline_metrics = metrics(baseline)
     candidate_metrics = metrics(candidate)
