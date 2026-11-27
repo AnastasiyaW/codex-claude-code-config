@@ -48,10 +48,10 @@ PAYLOAD_DIR = Path(__file__).resolve().parent.parent / "references" / "benjamin-
 UPSTREAM = PAYLOAD_DIR / "injected-instruction.md"
 PRECEDENCE = PAYLOAD_DIR / "local-precedence.md"
 
-# Upstream payload as published in its own SHA256SUMS.txt at commit 532771be.
+# Upstream payload as published in its own SHA256SUMS.txt at commit 0f7b2df6.
 # Checked, not enforced: a mismatch is reported to stderr and the payload is
 # still injected, because a stale hash must not silently disable the hook.
-UPSTREAM_SHA256 = "be51fa14d9437840e7282d768f75e1938adb21286e9ef2eb167337daf418b275"
+UPSTREAM_SHA256 = "8d323e74e82ea1ba853cf995ccb5a6b662205ba14e875eaf520157c5def531e8"
 
 
 def opted_out(env: dict[str, str], cwd: Path) -> bool:
