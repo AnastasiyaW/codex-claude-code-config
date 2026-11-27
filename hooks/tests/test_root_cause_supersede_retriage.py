@@ -37,8 +37,12 @@ os.chdir(ROOT)
 subprocess.run(["git", "init", "-q"], cwd=ROOT, check=True)
 
 
+# Stop is held only by the session that owns a case, so the cases need an owner.
+OWNER_SESSION = "supersede-test-session-0001"
+
+
 def make_case(case_id: str, status: str, owners: list[str], attempts: int = 0) -> None:
-    case = guard.default_case(ROOT, case_id, "incident", f"{case_id} summary", "unscoped")
+    case = guard.default_case(ROOT, case_id, "incident", f"{case_id} summary", OWNER_SESSION)
     case["status"] = status
     case["observed"] = {"expected": "pass", "actual": "fail"}
     case["layer"] = {
@@ -108,7 +112,7 @@ results.append((
 ))
 results.append(("supersede records the shared owner path", record.get("shared_owner_paths") == [OWNER]))
 
-open_blocking, _ = guard.unfinished_cases(ROOT, "unscoped")
+open_blocking, _, _ = guard.unfinished_cases(ROOT, OWNER_SESSION)
 open_ids = {case.get("id") for case, _ in open_blocking}
 results.append(("SUPERSEDED case no longer blocks Stop", "dup-a" not in open_ids))
 results.append(("open canonical still blocks Stop after supersede", CANON in open_ids))

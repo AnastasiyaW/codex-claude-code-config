@@ -194,6 +194,116 @@ class RepeatTests(unittest.TestCase):
         self.assertEqual(report["decision"], "ACCEPT")
 
 
+class StabilityTests(unittest.TestCase):
+    """pass@k / pass^k and regression cases (Anthropic, Demystifying evals for AI agents)."""
+
+    def test_pass_at_k_and_pass_hat_k_differ_on_a_flaky_case(self) -> None:
+        metrics = PILOT.metrics(receipt(development_pass=False, dev_runs=[True, False, True]))
+        self.assertEqual(metrics["outcome_pass_rate"], 1.0)
+        self.assertEqual(metrics["pass_at_k_rate"], 1.0)
+        self.assertEqual(metrics["pass_hat_k_rate"], 2 / 3)
+
+    def test_pass_at_k_counts_a_case_with_no_passing_run_as_failed(self) -> None:
+        metrics = PILOT.metrics(receipt(development_pass=False, dev_runs=[False, False, False]))
+        self.assertEqual(metrics["pass_at_k_rate"], 2 / 3)
+
+    def test_regression_case_failing_one_run_rejects(self) -> None:
+        candidate = candidate_receipt(development_pass=True, task_runs=[True, True, False])
+        candidate["cases"][1]["kind"] = "regression"
+        base = receipt(development_pass=False)
+        base["cases"][1]["kind"] = "regression"
+        report = PILOT.compare(base, candidate)
+        self.assertEqual(report["decision"], "REJECT")
+        self.assertIn("candidate regression cases did not pass every run: known-task-receipt",
+                      report["reasons"])
+
+    def test_capability_case_may_fail_one_run(self) -> None:
+        candidate = candidate_receipt(development_pass=True, task_runs=[True, True, False])
+        candidate["cases"][1]["kind"] = "capability"
+        base = receipt(development_pass=False)
+        base["cases"][1]["kind"] = "capability"
+        report = PILOT.compare(base, candidate)
+        self.assertEqual(report["decision"], "ACCEPT")
+
+    def test_candidate_cannot_relabel_or_drop_a_regression_kind(self) -> None:
+        for relabel in ("capability", None):
+            base = receipt(development_pass=False)
+            base["cases"][1]["kind"] = "regression"
+            cand = candidate_receipt(development_pass=True, task_runs=[True, True, False])
+            if relabel:
+                cand["cases"][1]["kind"] = relabel
+            with self.assertRaisesRegex(ValueError, "keep each case's kind"):
+                PILOT.compare(base, cand)
+
+    def test_unknown_kind_is_an_input_error(self) -> None:
+        data = receipt(development_pass=True)
+        data["cases"][0]["kind"] = "smoke"
+        with self.assertRaisesRegex(ValueError, "kind must be one of"):
+            PILOT.validate_receipt(data)
+
+    def test_pass_hat_k_objective_accepts_a_stabilised_case(self) -> None:
+        base = receipt(development_pass=True, dev_runs=[True, False, True])
+        cand = candidate_receipt(development_pass=True)
+        for data in (base, cand):
+            data["objective"] = {"name": "pass_hat_k_rate", "direction": "higher"}
+        report = PILOT.compare(base, cand)
+        self.assertEqual(report["decision"], "ACCEPT")
+        self.assertEqual(report["baseline"]["pass_hat_k_rate"], 2 / 3)
+
+    def test_pass_hat_k_gain_on_thin_runs_is_confounded(self) -> None:
+        base = receipt(development_pass=True, dev_runs=[True, False])
+        cand = candidate_receipt(development_pass=True, dev_runs=[True, True])
+        for data in (base, cand):
+            data["objective"] = {"name": "pass_hat_k_rate", "direction": "higher"}
+        report = PILOT.compare(base, cand)
+        self.assertEqual(report["verdict"], "CONFOUNDED")
+
+    def test_pass_hat_k_objective_does_not_rest_on_unchanged_thin_case(self) -> None:
+        base = receipt(development_pass=True, dev_runs=[True, False, True], task_runs=[True])
+        cand = candidate_receipt(development_pass=True, task_runs=[True])
+        for data in (base, cand):
+            data["objective"] = {"name": "pass_hat_k_rate", "direction": "higher"}
+        self.assertEqual(PILOT.compare(base, cand)["verdict"], "ACCEPT")
+
+
+class LowerObjectiveAndInputTests(unittest.TestCase):
+    def numeric(self, base_calls: int, cand_calls: int) -> dict:
+        base = receipt(development_pass=True, tool_calls=base_calls)
+        cand = candidate_receipt(development_pass=True, tool_calls=cand_calls)
+        for data in (base, cand):
+            data["objective"] = {"name": "mean_tool_calls", "direction": "lower"}
+        return PILOT.compare(base, cand)
+
+    def test_fewer_tool_calls_is_accepted(self) -> None:
+        report = self.numeric(5, 4)
+        self.assertEqual(report["decision"], "ACCEPT")
+        self.assertEqual(report["baseline"]["mean_tool_calls"], 5.0)
+        self.assertEqual(report["baseline"]["mean_elapsed_ms"], 100.0)
+
+    def test_equal_tool_calls_is_not_an_improvement(self) -> None:
+        self.assertEqual(self.numeric(5, 5)["decision"], "REJECT")
+
+    def bad(self, mutate, message: str) -> None:
+        data = receipt(development_pass=True)
+        mutate(data)
+        with self.assertRaisesRegex(ValueError, message):
+            PILOT.validate_receipt(data)
+
+    def test_suite_needs_both_fields(self) -> None:
+        self.bad(lambda d: d["suite"].pop("input_digest"), "input_digest")
+        self.bad(lambda d: d["suite"].update(id="  "), "input_digest")
+
+    def test_objective_direction_is_fixed(self) -> None:
+        self.bad(lambda d: d["objective"].update(direction="lower"), "fixed direction")
+
+    def test_suite_needs_three_cases(self) -> None:
+        self.bad(lambda d: d["cases"].pop(), "at least three")
+
+    def test_case_ids_must_be_unique_and_non_empty(self) -> None:
+        self.bad(lambda d: d["cases"][1].update(id=d["cases"][0]["id"]), "unique")
+        self.bad(lambda d: d["cases"][1].update(id=" "), "unique")
+
+
 class LessonLedgerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

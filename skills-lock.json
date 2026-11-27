@@ -1,12 +1,12 @@
 {
   "lockfile_version": 2,
-  "generated_at": "2026-10-31T08:04:36+00:00",
-  "skill_count": 59,
-  "aggregate_hash": "sha256:a7c35919131df20b29a725adc1edcb0e67ebe2061e057bf2063a59ab4140c2c1",
+  "generated_at": "2026-11-24T15:36:59+00:00",
+  "skill_count": 60,
+  "aggregate_hash": "sha256:f0462dc681113dc301820530c78d95fb1f9933788632194667115568853b8141",
   "skills": {
     "agent-harness-design": {
-      "content_hash": "sha256:35fa835bbe2a1451c89874d7db0f6e82f5695c84590efa967103e83c76b91b2d",
-      "size_bytes": 102606,
+      "content_hash": "sha256:cfd4aaf33edb057442c681fd09dcc808ff9baa6b2717930724413dda595738e3",
+      "size_bytes": 104412,
       "file_count": 12,
       "files": [
         "SKILL.md",
@@ -331,8 +331,8 @@
       ]
     },
     "development/distill-feedback": {
-      "content_hash": "sha256:6405d693394e635b5d1569d9a464a65a20f7ea0827dbd98e8aede4ad99fd31fc",
-      "size_bytes": 14658,
+      "content_hash": "sha256:3a20ed0b6f3c24449f06b3cd2984b3aad9e89a6b0eb4a844a5d5cba94a516dfd",
+      "size_bytes": 14909,
       "file_count": 2,
       "files": [
         "SKILL.md",
@@ -638,6 +638,19 @@
       "file_count": 1,
       "files": [
         "SKILL.md"
+      ]
+    },
+    "video-production/production-workflows": {
+      "content_hash": "sha256:17ec7e0e2f0a50919d26996152aa24ababce7b541143684dc846ef49e50ab44b",
+      "size_bytes": 26160,
+      "file_count": 6,
+      "files": [
+        "SKILL.md",
+        "references/adobe.md",
+        "references/blender.md",
+        "references/resolve-touchdesigner.md",
+        "references/sources.md",
+        "scripts/flicker_check.py"
       ]
     },
     "video-production/remotion-production-guide": {

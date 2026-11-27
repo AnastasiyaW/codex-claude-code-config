@@ -82,6 +82,29 @@ Eval — это **harness test**, не model test. Проверяем не «м�
 
 Эти вопросы — для **periodic spot-check** (не каждого run), но регулярно. Score распределение — input для harness improvements.
 
+## Trials, stability and the two suites (Anthropic, «Demystifying evals for AI agents»)
+
+- **Trial = one run of a case.** Report both **pass@k** (some of k trials passed) and **pass^k**
+  (all k passed). At 80% per trial pass@3 = 99.2% and pass^3 = 51.2%: a guard or agent that
+  must hold every time is judged by pass^k. `evals/hooks/run_hook_evals.py --trials k` and the
+  pilot (`pass_at_k_rate`, `pass_hat_k_rate`) report both.
+- **Capability vs regression.** `"kind": "capability"` measures a skill still being built; a low
+  pass rate is normal and does not fail the run. `"kind": "regression"` guards what already
+  worked; one failing trial is a failure. When every capability case passes all trials the set
+  is saturated: move the cases to regression and write harder capability cases.
+- **Refuse and act in balance.** Every guard gets both: a case where the agent must refuse
+  (`block`) and a nearby case where it must act (`allow`). Without the act case an over-strict
+  guard looks perfect.
+- **Check the grader, not only the agent.** A crashed hook prints no block, so a naive `allow`
+  check reads a crash as a pass; the runner counts it as not run (exit 2). Before fixing a red
+  case, read its output: was the agent wrong, or the expectation stale? (2026-11-24: the
+  native-cpp-memory case had been stale since 23b3071 opened that skill to Codex.)
+- **Model graders are calibrated on human labels.** An LLM grader is adopted only after a
+  held-out comparison with human labels (example: `rules/learn-from-corrections.md`, keyword
+  detector F1 0.42 vs LLM 0.97 on held-out). Critical categories stay mechanical.
+- **Real failures feed the regression suite.** A correction that graduates to a hook adds a
+  refuse/act pair with a `source` (`rules/learn-from-corrections.md`, step 4).
+
 ## Anti-patterns
 
 - ❌ «Eval set добавлю когда найдём первый баг» — production incidents с rollback дороже чем пара дней на eval up-front

@@ -3010,7 +3010,9 @@ def target_hard_limit(target: str, recursive: bool = False, server: bool = False
 # the owner names it herself in her own message (full path or its exact name) - never by a general
 # yes. Hidden folders (.ssh, .config, ...) and the standard user folders stay a hard limit.
 HOME_SYSTEM = {"desktop", "documents", "downloads", "pictures", "music", "videos", "appdata",
-               "onedrive", "snap", "bin", "lib", "go", "public"}
+               "onedrive", "snap", "bin", "lib", "public"}
+# owner 2026-11-27 («поправь хук, чтобы go удалялась»): ~/go is the Go toolchain's GOPATH (module cache,
+# build output), restored by `go mod download`; it follows the ordinary named home-child rules.
 
 
 def _home_child(target: str) -> bool:
