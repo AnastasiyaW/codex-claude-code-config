@@ -930,8 +930,14 @@ IMAGE_RM_SEGMENT = re.compile(
 STOP_INTENT = re.compile(
     r"\b(?:останови(?:те)?|остановить|остановим|останавливай(?:те)?|убей(?:те)?|убить|убьём|убивай(?:те)?|"
     r"прибей(?:те)?|прибивай(?:те)?|заверши(?:те)?|завершить|стопни(?:те)?|тормозни(?:те)?)\b|"
-    r"(?:^|[.!;:\n])\s*(?:please\s+)?(?:kill|stop|terminate)\b", re.IGNORECASE)
+    r"(?:^|[.!;:\n])\s*(?:please\s+)?(?:kill|stop|terminate)\b|"
+    # owner 2026-11-21: her own pasted `taskkill //PID …` line (alone or after «удали») is the request
+    r"(?:^|[.!;:\n])\s*(?:удали(?:те)?\s+)?taskkill\s+/{1,2}PID\b", re.IGNORECASE)
 STOP_MENTION = re.compile(r"останов|убить|убей|прибей|заверш|стопн|kill|stop|terminat", re.IGNORECASE)
+# a whole line that is nothing but her stop command: «останови taskkill //F //PID 143536»
+PASTED_STOP_LINE = re.compile(
+    r"^[ \t]*(?:(?:останови(?:те)?|убей(?:те)?|удали(?:те)?)[ \t]+)?"
+    r"taskkill(?:[ \t]+(?:/{1,2}|-)(?:F|T|PID[ \t]+\d+))+[ \t]*$", re.IGNORECASE | re.MULTILINE)
 # owner 2026-10-15 («останови <unit> и убери из автозапуска» was refused): `systemctl disable`
 # rides the stop path only on a removal imperative tied to autostart; a stop verb alone never disables.
 #   review 2026-10-15 (REJECT, fixed): a bare autostart noun passed "добавь в автозапуск", "пусть останется",
@@ -1085,7 +1091,7 @@ def proposed_disable_units(answer: str) -> set[str]:
             out.add(m.group(2))
     return out
 NOT_A_STOP_GO = re.compile(r"\bне\s+(?:надо\s+|нужно\s+|стоит\s+|смей\s+)?(?:останав|остан|уб[иь]|приб|стоп|тормоз|"
-                           r"заверш|трог)|"
+                           r"заверш|трог|taskkill|kill)|"
                            r"\bпочему\b|\bзачем\b|\bwhy\b|\bhow\b|"
                            # exclusions make the target list ambiguous (re-review 2026-10-12, finding 1)
                            r"\bкроме\b|\bбез\b|\bно\s+не\b|\bа\s+не\b|\bexcept\b|\bbut\b|\bnot\b|\bexcluding\b|"
@@ -1794,7 +1800,17 @@ def _tail_entries(path: Path):
                     yield e
 
 
+# owner 2026-11-21: her pasted stop line came with fullwidth slashes (U+FF0F, `／／F ／／PID n`) and was
+# refused; fullwidth ASCII forms in her words are read as plain ASCII.
+FULLWIDTH_ASCII = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
+
+
 def _human_text(e) -> str | None:
+    text = _human_text_raw(e)
+    return text.translate(FULLWIDTH_ASCII) if text is not None else None
+
+
+def _human_text_raw(e) -> str | None:
     """Text of an owner message: a typed turn, or a message the owner sent while I was working
     (host-written `queued_command` attachment, origin.kind=human). Task notifications and
     cross-session messages carry another origin or isMeta and never count (owner 2026-10-11)."""
@@ -2219,7 +2235,9 @@ def stop_forced(cmd: str) -> set[str]:
 
 # the owner asks for a forced kill in words (else her "останови" approves only what a SIGTERM would do)
 FORCE_WORDS = re.compile(r"\b(?:убей(?:те)?|убить|убьём|убивай(?:те)?|прибей(?:те)?|прибивай(?:те)?|принудительно|насильно|force|sigkill)\b|"
-                         r"(?:^|[.!;:\n])\s*(?:please\s+)?kill\b|\s-9\b", re.IGNORECASE)
+                         r"(?:^|[.!;:\n])\s*(?:please\s+)?kill\b|\s-9\b|"
+                         # owner 2026-11-21: her own pasted `taskkill //F //PID ...` line is the forced ask itself
+                         r"\btaskkill\b[^\n]*\s(?:/{1,2}|-)F\b", re.IGNORECASE)
 
 
 def stop_only(cmd: str) -> bool:
@@ -2349,9 +2367,18 @@ def _stop_approval(cmd: str, prompt: str, answer: str, event: dict) -> tuple[boo
     if CONFIRM_ONLY.fullmatch(prompt):
         if not STOP_MENTION.search(answer) and not proposed_disable_units(answer):
             return False, "a bare 'yes' to an answer that proposed no stop"
+    elif pasted := PASTED_STOP_LINE.findall(prompt):
+        # owner 2026-11-21 («хук поправить может надо? на что он там жалуется?» + her stop line was refused):
+        # her own pasted stop line is the request; a question on another line is about something else,
+        # but a stop negation or condition anywhere still refuses.
+        rest = PASTED_STOP_LINE.sub("", prompt)
+        if NOT_A_STOP_GO.search(rest) or re.search(r"\bне\b|\bнет\b|\bпогоди|\bподожди|\bоставь|\bdon'?t\b|\bno\b",
+                                                   rest, re.IGNORECASE):
+            return False, "the request negates, hesitates or asks a question"
+        prompt = "\n".join(pasted)
     elif NOT_A_GO.search(prompt) or NOT_A_STOP_GO.search(prompt):
         return False, "the request negates, hesitates or asks a question"
-    elif not STOP_INTENT.search(prompt) and not (
+    if not CONFIRM_ONLY.fullmatch(prompt) and not STOP_INTENT.search(prompt) and not (
             DISABLE_INTENT.search(prompt)
             and not re.search(r"\b(?:kill|pkill|killall|taskkill|systemctl\s+stop)\b", cmd, re.IGNORECASE)):
         return False, "the latest request does not ask to stop a process"
@@ -2983,7 +3010,9 @@ def target_hard_limit(target: str, recursive: bool = False, server: bool = False
 # the owner names it herself in her own message (full path or its exact name) - never by a general
 # yes. Hidden folders (.ssh, .config, ...) and the standard user folders stay a hard limit.
 HOME_SYSTEM = {"desktop", "documents", "downloads", "pictures", "music", "videos", "appdata",
-               "onedrive", "snap", "bin", "lib", "go", "public"}
+               "onedrive", "snap", "bin", "lib", "public"}
+# owner 2026-11-27 («поправь хук, чтобы go удалялась»): ~/go is the Go toolchain's GOPATH (module cache,
+# build output), restored by `go mod download`; it follows the ordinary named home-child rules.
 
 
 def _home_child(target: str) -> bool:
