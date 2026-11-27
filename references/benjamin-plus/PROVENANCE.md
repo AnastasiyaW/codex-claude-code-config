@@ -4,14 +4,17 @@ Upstream: https://github.com/JetBrains/benjamin-plus-skill — MIT, © 2026
 benjamin-plus contributors. CODEOWNER `@DenisSergeevitch`, the same author as the
 `agents-best-practices` skill this machine already uses.
 
-Fetched 2026-08-19 at commit `532771be5687566b12a9f62e17fbe7ad3591518c`.
+Fetched 2026-08-19 at commit `532771be5687566b12a9f62e17fbe7ad3591518c`; updated 2026-11-27 to
+`0f7b2df6887d` (upstream #6: rule 3's probe now lists every missing module via
+`importlib.util.find_spec`, since a plain `import x, y, z` stops at the first one).
+The precedence clause does not touch rule 3 and is unchanged.
 
 ## What is vendored here
 
 | file | sha256 (LF bytes) | source |
 |---|---|---|
-| `injected-instruction.md` | `be51fa14d9437840e7282d768f75e1938adb21286e9ef2eb167337daf418b275` | upstream, byte-identical |
-| `RULESET.md` | `a8a8871804f1890c75b15a11d769028ab5d22b2ab8941f9b3f9b24c9539cb58c` | upstream, byte-identical (kept for the skill-form text and its front-matter) |
+| `injected-instruction.md` | `8d323e74e82ea1ba853cf995ccb5a6b662205ba14e875eaf520157c5def531e8` | upstream, byte-identical |
+| `RULESET.md` | `9bd33e1990d9fbc4644ab18bc19705114da69989a056610e0d343d8dcc72eb6f` | upstream, byte-identical (kept for the skill-form text and its front-matter) |
 | `LICENSE` | MIT | upstream |
 | `local-precedence.md` | — | **ours**, not upstream |
 
